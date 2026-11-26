@@ -1,25 +1,25 @@
 {
   "android": {
-    "version": "1.9",
+    "version": "1.10",
     "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-android.apk",
-    "sha256": "738b00eb12891daf8c165f8983f37ed1a71b6d0c7851c078776e42926914a160",
-    "notes": "Import your bank files (OFX, QFX, QIF, CSV). Loans you make to people. Cash flow and Prices menus; sections fold; quick + button."
+    "sha256": "cfd995a9f41a7938e34593f3867998fc6f85330d547a6abb862084e04c8cc9ba",
+    "notes": "One bank file for all your accounts. Select several transactions. Balance checks compared. Clearer dates and headings; Back returns to where you were."
   },
   "linux": {
-    "version": "1.9",
+    "version": "1.10",
     "page": "https://github.com/BibleCorner-KJT/kjt-invest/tree/releases",
-    "notes": "Import your bank files (OFX, QFX, QIF, CSV). Loans you make to people. Cash flow and Prices menus; sections fold; quick + button.",
+    "notes": "One bank file for all your accounts. Select several transactions. Balance checks compared. Clearer dates and headings; Back returns to where you were.",
     "x86_64": {
       "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.flatpak",
-      "sha256": "5a2a031b4b86f9a37e55c2ff74e69eb3112b499bdffe04ed879e47fcee481897"
+      "sha256": "f56c125351746adc7d9fa4cd1e4c9b37c1a84d8f62a9ec66ded701888e2ae5c1"
     },
     "aarch64": {
       "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux-arm.flatpak",
-      "sha256": "c5adfb5c2402df1d19712f23cc8296fa2eb60ff5ec103dcc748e079ae572c92f"
+      "sha256": "03ac3b237903017a4b5ae42da17b56859bc07ce714f828213c8218920cf86ba3"
     },
     "zip": {
       "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.zip",
-      "sha256": "e109fcef2ba1a8fe8985e6801711b3ea90f2e623b913949677ceb136c55ed4eb"
+      "sha256": "8a5ed1fdd1c21c3899ef4204595678d5a523b90df7a67f41223404272511f2fe"
     }
   }
 }
