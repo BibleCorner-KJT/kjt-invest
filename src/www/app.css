@@ -480,3 +480,23 @@ h2.gh .gt { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .txdate { color: var(--brand); font-weight: 750; }
 .sortcta { margin-top: 10px; border: 1px dashed var(--brand); }
 .card .segs + .ysel { margin-top: 8px; }
+
+/* ---------- 1.12: folded cards and sections can show their total ---------- */
+.ocard .phead { display: flex; align-items: center; gap: 10px; }
+.ocard .phead h2 { flex: 1; }
+.ocard .ptot { display: none; font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ocard.folded .ptot { display: inline; }
+.ocard.folded > :not(.phead) { display: none; }
+.ocard.folded .phead { margin-bottom: 0; padding-bottom: 0; border-bottom: 0; }
+.cfold { flex: none; width: 34px; height: 34px; border-radius: 10px; border: 0; background: var(--soft); color: var(--ink); display: grid; place-items: center; cursor: pointer; }
+.cfold svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; transition: transform .18s; }
+.ocard.folded .cfold svg { transform: rotate(-90deg); }
+h2.foldh .ftot { display: none; order: 2; margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 800; color: var(--ink); white-space: nowrap; font-variant-numeric: tabular-nums; }
+h2.foldh.closed .ftot { display: inline; }
+h2.foldh.closed .ftot ~ .chev { margin-left: 8px; }
+h2.foldh.closed:has(.ftot)::after { display: none; }
+.nofoldtot .ocard.folded .ptot, .nofoldtot h2.foldh.closed .ftot { display: none; }
+.nofoldtot h2.foldh.closed::after { display: inline !important; }
+h2.foldh.closed > .sub { display: none; }
+h2.foldh.closed::after { white-space: nowrap; }
+.nofoldtot h2.foldh.closed .ftot ~ .chev { margin-left: auto; }

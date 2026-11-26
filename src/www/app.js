@@ -1,9 +1,9 @@
-/* KJT Finance 1.12 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
+/* KJT Finance 1.13 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
    All data stays in one SQLite file on the device. The only network calls are the
    price updates (metal prices from gold-api.com, exchange rates from the European Central Bank). */
 'use strict';
 
-const APP_VERSION = '1.12';
+const APP_VERSION = '1.13';
 const SCHEMA = 10;
 const OZT_G = 31.1034768;
 const METALS = [
@@ -698,7 +698,7 @@ function renderOverview() {
   setTitle('KJT Finance');
   const t = totals(), H = home();
   const nAll = ['metal_holdings', 'properties', 'accounts', 'other_assets', 'loans'].reduce((n, tb) => n + q(`SELECT COUNT(*) n FROM ${tb}`)[0].n, 0);
-  let h = missingWarn() + `<h2 class="sect">Summary <span class="sub">swipe the box for more</span></h2>` + heroHtml(t);
+  let h = missingWarn() + `<h2 class="sect" data-ftot="${esc(whole(t.total, H))}">Summary <span class="sub">swipe the box for more</span></h2>` + heroHtml(t);
   if (!nAll) {
     h += `<div class="card"><h2>Welcome</h2><p class="sub">Add what you own. Everything stays on this device, in one file you can export at any time.</p>
       <div class="btns"><button class="btn" data-act="add-metal">Add precious metal</button><button class="btn" data-act="add-property">Add property</button><button class="btn" data-act="add-account">Add bank account</button><button class="btn" data-act="add-asset">Add other asset</button></div></div>`;
@@ -706,28 +706,29 @@ function renderOverview() {
   const M = mcur(), mGain = t.metalsM - t.metalsCostM;
   h += remindersCard();
   const cards = {};
-  cards.metals = `<div class="card tap" data-go="metals"><div class="phead"><span class="pbadge">${metalIcon('XAU', 'bar', 28)}</span><h2 style="margin:0">Precious metals${M !== H ? ' (' + M + ')' : ''}</h2></div>
+  cards.metals = `<div class="card tap ocard${cardFolded('metals') ? ' folded' : ''}" data-go="metals"><div class="phead"><span class="pbadge">${metalIcon('XAU', 'bar', 28)}</span><h2 style="margin:0">Precious metals${M !== H ? ' (' + M + ')' : ''}</h2>${foldBits('metals', whole(t.metals, H))}</div>
     <div class="row strong"><span class="k">Value</span><span class="v">${whole(t.metalsM, M)}</span></div>
     <div class="row"><span class="k">Paid (fees included)</span><span class="v">${whole(t.metalsCostM, M)}</span></div>
     <div class="row"><span class="k">Gain</span><span class="v ${signCls(mGain)}">${whole(mGain, M)} ${t.metalsCostM ? '(' + pct(mGain / t.metalsCostM) + ')' : ''}</span></div>
     ${M !== H ? `<div class="row"><span class="k">Value in ${H}</span><span class="v">${whole(t.metals, H)}</span></div>` : ''}</div>`;
   const reGain = t.re - t.reInvested + t.reIncome;
-  cards.property = `<div class="card tap" data-go="property"><div class="phead"><span class="pbadge">${propIcon('house')}</span><h2 style="margin:0">Real estate</h2></div>
+  cards.property = `<div class="card tap ocard${cardFolded('property') ? ' folded' : ''}" data-go="property"><div class="phead"><span class="pbadge">${propIcon('house')}</span><h2 style="margin:0">Real estate</h2>${foldBits('property', whole(t.re, H))}</div>
     <div class="row strong"><span class="k">Value (your estimate)</span><span class="v">${whole(t.re, H)}</span></div>
     <div class="row"><span class="k">Invested</span><span class="v">${whole(t.reInvested, H)}</span></div>
     ${t.reLastYear ? `<div class="row"><span class="k">Net income ${t.reLastYear}</span><span class="v ${signCls(t.reLastNet)}">${whole(t.reLastNet, H)}</span></div>` : ''}
     <div class="row"><span class="k">Total gain (value + income)</span><span class="v ${signCls(reGain)}">${whole(reGain, H)} ${t.reInvested ? '(' + pct(reGain / t.reInvested) + ')' : ''}</span></div></div>`;
-  cards.accounts = `<div class="card tap" data-go="accounts"><div class="phead"><span class="pbadge"><svg class="picon" viewBox="0 0 24 24" width="26" height="26"><path d="M3 7h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM3 7l13-3v3M16 13.5h2"/></svg></span><h2 style="margin:0">Cash & bank accounts</h2></div>
+  cards.accounts = `<div class="card tap ocard${cardFolded('accounts') ? ' folded' : ''}" data-go="accounts"><div class="phead"><span class="pbadge"><svg class="picon" viewBox="0 0 24 24" width="26" height="26"><path d="M3 7h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM3 7l13-3v3M16 13.5h2"/></svg></span><h2 style="margin:0">Cash & bank accounts</h2>${foldBits('accounts', whole(t.cash, H))}</div>
     <div class="row strong"><span class="k">Balance${t.debt > 0.005 ? ' (less credit cards)' : ''}</span><span class="v ${t.cash < 0 ? 'down' : ''}">${whole(t.cash, H)}</span></div>
     ${t.debt > 0.005 ? `<div class="row"><span class="k">Owed on credit cards</span><span class="v down">${whole(t.debt, H)}</span></div>` : ''}</div>`;
-  cards.assets = `<div class="card tap" data-go="assets"><div class="phead"><span class="pbadge">${assetIcon('car')}</span><h2 style="margin:0">Other assets</h2></div>
+  cards.assets = `<div class="card tap ocard${cardFolded('assets') ? ' folded' : ''}" data-go="assets"><div class="phead"><span class="pbadge">${assetIcon('car')}</span><h2 style="margin:0">Other assets</h2>${foldBits('assets', whole(t.other, H))}</div>
     <div class="row strong"><span class="k">Value (your estimate)</span><span class="v">${whole(t.other, H)}</span></div>
     ${t.otherCost ? `<div class="row"><span class="k">Paid</span><span class="v">${whole(t.otherCost, H)}</span></div>` : ''}</div>`;
-  if (q('SELECT COUNT(*) n FROM loans')[0].n) cards.loans = `<div class="card tap" data-go="loans"><div class="phead"><span class="pbadge">${loanIcon()}</span><h2 style="margin:0">Loans you made</h2></div>
+  if (q('SELECT COUNT(*) n FROM loans')[0].n) cards.loans = `<div class="card tap ocard${cardFolded('loans') ? ' folded' : ''}" data-go="loans"><div class="phead"><span class="pbadge">${loanIcon()}</span><h2 style="margin:0">Loans you made</h2>${foldBits('loans', whole(t.loans, H))}</div>
     <div class="row strong"><span class="k">Owed to you</span><span class="v">${whole(t.loans, H)}</span></div></div>`;
   /* in the same order as the Assets menu */
-  h += `<h2 class="sect">What you own</h2>` + ['accounts', 'property', 'metals', 'loans', 'assets'].map(k => cards[k] || '').join('');
-  h += `<h2 class="sect">Income & expenses</h2>` + ieCard();
+  h += `<h2 class="sect" data-ftot="${esc(whole(t.total, H))}">What you own</h2>` + ['accounts', 'property', 'metals', 'loans', 'assets'].map(k => cards[k] || '').join('');
+  const ie12 = ieRange(ieModel(), 'L12');
+  h += `<h2 class="sect" data-ftot="${esc((ie12.net >= 0 ? '+' : '') + whole(ie12.net, H))} net, 12 months">Income & expenses</h2>` + ieCard();
   h += `<h2 class="sect">Current prices <span class="sub">${mcur()} per troy ounce</span></h2><div class="card">${priceStrip()}</div>`;
   if (nAll) h += `<button class="btn wide light" data-act="print-report">Print the report or save it as a PDF</button>`;
   view().innerHTML = h; bindHero(); bindChart();
@@ -1467,7 +1468,9 @@ function renderMore() {
   const PALS = [['purple', 'KJT Purple', '#3e093f', '#f3e2b8', '#f5f1ec'], ['navy', 'Navy & Gold', '#0f2a4a', '#f2d27a', '#f2f5f9'], ['ledger', 'Ledger', '#1b2321', '#0d7a5c', '#f3f5f4'], ['sepia', 'Sepia', '#6b4a2b', '#fbf1d8', '#f3ead5']];
   let h = `<h2 class="sect">Look</h2><div class="card"><div class="pals">${PALS.map(([k, l, a, b, c]) => `<button class="pal${(PREFS.palette || 'purple') === k ? ' on' : ''}" data-pal="${k}"><span class="pv" style="background:${c}"><i style="background:${a}"></i><b style="background:${b}"></b></span>${l}</button>`).join('')}</div>
     <div class="f2"><label class="f"><span>Light or dark</span><select id="set-theme">${[['', 'Same as device'], ['light', 'Light'], ['dark', 'Dark']].map(([v, l]) => `<option value="${v}"${(PREFS.theme || '') === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
-    <label class="f"><span>Text size</span><select id="set-size">${[['', 'Normal'], ['large', 'Large'], ['larger', 'Larger']].map(([v, l]) => `<option value="${v}"${(PREFS.size || '') === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label></div></div>`;
+    <label class="f"><span>Text size</span><select id="set-size">${[['', 'Normal'], ['large', 'Large'], ['larger', 'Larger']].map(([v, l]) => `<option value="${v}"${(PREFS.size || '') === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label></div>
+    <div class="switch"><span>Show the total of a folded section or card</span><input type="checkbox" id="set-ftot"${getSetting('fold_totals', '1') === '1' ? ' checked' : ''}></div>
+    <p class="sub" style="margin:4px 0 0">Tap a heading (or the arrow on an Overview card) to fold it. Turn this off to hide amounts when folded, for privacy.</p></div>`;
   h += `<h2 class="sect">Currencies</h2><div class="card">
     <label class="f"><span>Home currency (for totals)</span><select id="set-home">${curOptions(H)}</select></label>
     <label class="f"><span>Currency for precious metals</span><select id="set-mcur">${curOptions(mcur())}</select></label></div>`;
@@ -1511,6 +1514,7 @@ function renderMore() {
   on('set-auto', e => { setSetting('auto_prices', e.target.checked ? '1' : '0'); save(); });
   on('set-theme', e => { PREFS.theme = e.target.value; applyLook(); savePrefs(); });
   on('set-size', e => { PREFS.size = e.target.value; applyLook(); savePrefs(); });
+  on('set-ftot', e => { setSetting('fold_totals', e.target.checked ? '1' : '0'); save(); });
   on('set-msrc', e => { setSetting('metal_source', e.target.value); applyQuotes(getSetting('prices_updated') || new Date().toISOString()); save(); render(); });
   on('set-fsrc', e => { setSetting('fx_source', e.target.value); applyQuotes(getSetting('prices_updated') || new Date().toISOString()); save(); render(); });
   view().querySelectorAll('[data-pal]').forEach(b => b.onclick = () => { PREFS.palette = b.dataset.pal; applyLook(); savePrefs(); render(); });
@@ -1747,7 +1751,7 @@ function goBack() {
 window.__onBack = () => goBack();
 window.addEventListener('resize', () => { for (const [id, k] of [['heroS', 'hpage'], ['cfS', 'cfPage']]) { const el = document.getElementById(id); if (el) fitSwipe(el, state[k] || 0); } });
 view().addEventListener('click', e => {
-  const el = e.target.closest('[data-act],[data-go],[data-metal],[data-prop],[data-item],[data-pval],[data-cfy],[data-cfp],[data-rent],[data-price],[data-fx],[data-chart],[data-range],[data-acct],[data-bal],[data-asset],[data-aval],[data-hpage],[data-prange],[data-unfav],[data-ie],[data-asec],[data-msec],[data-txm],[data-tx],[data-rec],[data-cat],[data-addsub],[data-addcat],[data-rp],[data-remdo],[data-remskip],[data-loan],[data-lpay],[data-txper],[data-rule]'); if (!el) return;
+  const el = e.target.closest('[data-act],[data-go],[data-metal],[data-prop],[data-item],[data-pval],[data-cfy],[data-cfp],[data-rent],[data-price],[data-fx],[data-chart],[data-range],[data-acct],[data-bal],[data-asset],[data-aval],[data-hpage],[data-prange],[data-unfav],[data-ie],[data-asec],[data-msec],[data-txm],[data-tx],[data-rec],[data-cat],[data-addsub],[data-addcat],[data-rp],[data-remdo],[data-remskip],[data-loan],[data-lpay],[data-txper],[data-rule],[data-cfold]'); if (!el) return;
   const d = el.dataset;
   if (d.chart) { state.chart = d.chart; const st = view().scrollTop; render(); view().scrollTop = st; }
   else if (d.range) { state.range = d.range; const st = view().scrollTop; render(); view().scrollTop = st; }
@@ -1761,6 +1765,7 @@ view().addEventListener('click', e => {
   else if (d.rent) rentForm(state.propertyId, +d.rent);
   else if (d.asec) { state.tab = d.asec; state.propertyId = null; state.accountId = null; state.assetId = null; state.loanId = null; render(); view().scrollTop = 0; }
   else if (d.msec) { state.msec = d.msec; render(); view().scrollTop = 0; }
+  else if (d.cfold) { e.preventDefault(); toggleCard(d.cfold); }
   else if (d.rule) ruleForm(+d.rule);
   else if (d.txper) { state.txPer = d.txper; render(); }
   else if (d.txm) { state.txMonth = d.txm; const st = view().scrollTop; render(); view().scrollTop = st; }
@@ -2196,7 +2201,7 @@ function remindersCard() {
   const loanRows = ls.map(l => { const s = loanStats(l); if (s.owed <= 0.005) return ''; const late = l.due_date < now;
     return `<div class="txn ${late ? 'cost' : 'inc'}" data-go="loans" data-loanid="${l.id}"><div class="txn-top"><span class="txn-date${late ? ' warn-t' : ''}">${late ? 'overdue · ' : ''}${fmtDate(l.due_date)}</span><span class="txn-desc">${esc(l.person)} repays you</span></div>
       <div class="txn-body"><div class="sub">loan of ${money(l.amount, l.currency || home(), { dec: 0 })}</div><div class="r"><div class="strongv">${money(s.owed, l.currency || home())}</div></div></div></div>`; }).join('');
-  return `<h2 class="sect">Coming up <span class="sub">next 14 days</span></h2><div class="card"><div class="txns" style="margin-top:0">` + loanRows + rs.map(r => {
+  return `<h2 class="sect" data-ftot="${rs.length + ls.length} coming">Coming up <span class="sub">next 14 days</span></h2><div class="card"><div class="txns" style="margin-top:0">` + loanRows + rs.map(r => {
     const a = q('SELECT * FROM accounts WHERE id=?', [r.account_id])[0], c = (a && a.currency) || home(), due = r.next_date <= now;
     return `<div class="txn ${r.kind === 'in' ? 'inc' : 'cost'}"><div class="txn-top"><span class="txn-date${due ? ' warn-t' : ''}">${due ? (r.next_date < now ? 'overdue · ' : 'today · ') : ''}${fmtDate(r.next_date)}</span><span class="txn-desc">${esc(r.payee || cats().label(r.category_id))}</span></div>
       <div class="txn-body"><div class="sub">${esc(FREQS[r.freq] || '')} · ${esc(a ? a.name : '')}${r.auto ? ' · added by itself' : ''}</div><div class="r"><div class="strongv">${r.kind === 'in' ? '+' : '−'}${money(r.amount, c)}</div></div></div>
@@ -3085,6 +3090,16 @@ function importReview(parsed, accountId) {
   });
 }
 
+/* ---------------- 1.12: Overview cards fold too; a folded card or section can show its total ---------------- */
+const cardFolded = k => folded().has('overview:card:' + k);
+function foldBits(k, total) {
+  return `<span class="ptot">${total}</span><button class="cfold" data-cfold="${k}" aria-label="Fold or unfold"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>`;
+}
+function toggleCard(k) {
+  const F = folded(), key = 'overview:card:' + k; if (F.has(key)) F.delete(key); else F.add(key);
+  setSetting('folded', JSON.stringify(Array.from(F))); save();
+  const c = view().querySelector(`.ocard[data-go="${k}"]`); if (c) c.classList.toggle('folded', F.has(key));
+}
 /* ---------------- 1.10: several transactions at once ----------------
    "Select several…" (or a long press on a transaction) turns on ticks; the bar at the bottom edits or deletes them. */
 function pickTx(row, id) {
@@ -3170,6 +3185,7 @@ let FOLDED = null;
 function folded() { if (!FOLDED) { try { FOLDED = new Set(JSON.parse(getSetting('folded', '[]'))); } catch (e) { FOLDED = new Set(); } } return FOLDED; }
 const LIST_SHOW = 6;
 function enhanceView() {
+  document.documentElement.classList.toggle('nofoldtot', getSetting('fold_totals', '1') !== '1');
   const v = view(), F = folded(), page = state.tab + (state.msec && state.tab === 'money' ? '/' + state.msec : '');
   /* sections */
   for (const h of Array.from(v.querySelectorAll(':scope > h2.sect'))) {
@@ -3179,6 +3195,7 @@ function enhanceView() {
     while (n && !(n.nodeType === 1 && n.matches('h2.sect'))) { const nx = n.nextSibling; body.appendChild(n); n = nx; }
     h.after(body);
     h.classList.add('foldh'); h.setAttribute('role', 'button'); h.tabIndex = 0;
+    if (h.dataset.ftot) h.insertAdjacentHTML('beforeend', `<span class="ftot">${esc(h.dataset.ftot)}</span>`);
     h.insertAdjacentHTML('beforeend', '<svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>');
     const set = closed => { h.classList.toggle('closed', closed); body.hidden = closed; h.setAttribute('aria-expanded', String(!closed)); };
     set(F.has(key));
