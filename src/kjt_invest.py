@@ -20,7 +20,7 @@ import urllib.request
 import gi
 
 APP_ID = 'today.knowingjesus.Invest'
-VERSION = '1.8'
+VERSION = '1.8.1'
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(os.environ.get('XDG_DATA_HOME') or os.path.expanduser('~/.local/share'), 'kjt-invest')
 OLD_DIR = os.path.join(os.path.expanduser('~/.local/share'), 'investment-tracker')   # where 1.0-1.2 (Investment Tracker) kept the data
@@ -148,9 +148,12 @@ class Tracker:
                     f.write(args.get('json', '{}'))
                 self.reply(msg_id, {'ok': True})
             elif cmd == 'appInfo':
-                self.reply(msg_id, {'platform': 'linux', 'version': VERSION, 'channel': IN_FLATPAK, 'arch': 'aarch64' if platform.machine() in ('aarch64', 'arm64') else 'x86_64'})
+                self.reply(msg_id, {'platform': 'linux', 'version': VERSION, 'channel': IN_FLATPAK, 'kind': 'flatpak' if IN_FLATPAK else 'zip', 'arch': 'aarch64' if platform.machine() in ('aarch64', 'arm64') else 'x86_64'})
             elif cmd == 'installUpdate':
-                threading.Thread(target=self.install_update, args=(msg_id, args.get('url', ''), args.get('sha256', '')), daemon=True).start()
+                threading.Thread(target=self.install_update, args=(msg_id, args), daemon=True).start()
+            elif cmd == 'restartApp':
+                self.restart_app()
+                self.reply(msg_id, {'ok': True})
             elif cmd == 'print':
                 # the printable report: the usual print window, where "Print to File" makes a PDF
                 op = WebKit.PrintOperation.new(self.view)
@@ -310,24 +313,117 @@ class Tracker:
 
     # ---------- updates: the new version is downloaded from the project's GitHub, checked against its published
     # fingerprint, and opened in Software (GNOME Software), where you press Install. Your data stays.
-    def install_update(self, msg_id, url, sha):
+    # ---------- updates ----------
+    # The new version comes only from the project's GitHub and must match its published SHA-256.
+    # Flatpak: installed quietly through Flatpak's update portal (app installed from the KJT Invest channel),
+    # otherwise the checked file opens in Software, where you press Install.
+    # Zip install: the app's own files in ~/.local/share/kjt-invest-app are replaced. Your data is never touched.
+    @staticmethod
+    def fetch_checked(url, sha):
+        if not url.startswith('https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/'):
+            raise Exception('not from the KJT Invest project')
+        req = urllib.request.Request(url, headers={'User-Agent': 'KJTInvest/' + VERSION})
+        with urllib.request.urlopen(req, timeout=180) as r:
+            data = r.read()
+        if not sha or hashlib.sha256(data).hexdigest().lower() != sha.lower():
+            raise Exception('the downloaded file does not match; nothing was installed')
+        return data
+
+    def portal_update(self):
+        """Flatpak's own update portal: no extra permission; works when the app came from the KJT Invest channel.
+        Returns True when the new version was installed."""
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        name, base = 'org.freedesktop.portal.Flatpak', '/org/freedesktop/portal/Flatpak'
+        portal = Gio.DBusProxy.new_sync(bus, Gio.DBusProxyFlags.NONE, None, name, base, name, None)
+        path = portal.call_sync('CreateUpdateMonitor', GLib.Variant('(a{sv})', ({},)), Gio.DBusCallFlags.NONE, 20000, None).unpack()[0]
+        done, result = threading.Event(), {'ok': False}
+
+        def on_progress(conn, sender, obj, iface, signal, params):
+            info = params.unpack()[0]
+            status = info.get('status', 0)
+            if status in (1, 2, 3):   # 1 nothing to do, 2 done, 3 failed
+                result['ok'] = status == 2
+                done.set()
+        sub = bus.signal_subscribe(name, name + '.UpdateMonitor', 'Progress', path, None, Gio.DBusSignalFlags.NONE, on_progress)
         try:
-            if not url.startswith('https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/'):
-                return self.reply(msg_id, {'error': 'not from the KJT Invest project'})
-            req = urllib.request.Request(url, headers={'User-Agent': 'KJTInvest/' + VERSION})
-            with urllib.request.urlopen(req, timeout=120) as r:
-                data = r.read()
-            if sha and hashlib.sha256(data).hexdigest().lower() != sha.lower():
-                return self.reply(msg_id, {'error': 'the downloaded file does not match; nothing was installed'})
-            folder = os.path.join(DATA_DIR, 'update')
-            os.makedirs(folder, exist_ok=True)
-            path = os.path.join(folder, 'KJT Invest update.flatpak')
-            with open(path, 'wb') as f:
-                f.write(data)
-            GLib.idle_add(self.open_file, path)
-            self.reply(msg_id, {'ok': True})
+            bus.call_sync(name, path, name + '.UpdateMonitor', 'Update', GLib.Variant('(sa{sv})', ('', {})), None, Gio.DBusCallFlags.NONE, 20000, None)
+            done.wait(900)
+        finally:
+            bus.signal_unsubscribe(sub)
+            try:
+                bus.call_sync(name, path, name + '.UpdateMonitor', 'Close', None, None, Gio.DBusCallFlags.NONE, 5000, None)
+            except Exception:
+                pass
+        return result['ok']
+
+    def install_update(self, msg_id, args):
+        try:
+            if IN_FLATPAK:
+                if args.get('quiet'):
+                    try:
+                        if self.portal_update():
+                            return self.reply(msg_id, {'ok': True, 'installed': True})
+                    except Exception:
+                        pass
+                f = args.get('flatpak') or {'url': args.get('url', ''), 'sha256': args.get('sha256', '')}
+                data = self.fetch_checked(f.get('url', ''), f.get('sha256', ''))
+                folder = os.path.join(DATA_DIR, 'update')
+                os.makedirs(folder, exist_ok=True)
+                path = os.path.join(folder, 'KJT Invest update.flatpak')
+                with open(path, 'wb') as fh:
+                    fh.write(data)
+                GLib.idle_add(self.open_file, path)
+                return self.reply(msg_id, {'ok': True, 'opened': True})
+            z = args.get('zip') or {}
+            if not z.get('url'):
+                return self.reply(msg_id, {'error': 'no update file for this kind of install'})
+            if not HERE.startswith(os.path.expanduser('~') + os.sep) or not os.access(os.path.dirname(HERE), os.W_OK):
+                return self.reply(msg_id, {'error': 'this copy of the app cannot update itself'})
+            data = self.fetch_checked(z['url'], z.get('sha256', ''))
+            import io, zipfile
+            new, old = HERE + '.new', HERE + '.old'
+            shutil.rmtree(new, ignore_errors=True)
+            shutil.rmtree(old, ignore_errors=True)
+            os.makedirs(new)
+            with zipfile.ZipFile(io.BytesIO(data)) as zf:
+                for m in zf.namelist():
+                    parts = m.split('/', 1)
+                    if len(parts) < 2 or not parts[1] or '..' in parts[1].split('/') or parts[1].startswith('/'):
+                        continue
+                    rel = parts[1]
+                    if not (rel.startswith('www/') or rel in ('kjt_invest.py', 'LICENSE.txt')):
+                        continue
+                    target = os.path.join(new, rel)
+                    if m.endswith('/'):
+                        os.makedirs(target, exist_ok=True)
+                        continue
+                    os.makedirs(os.path.dirname(target), exist_ok=True)
+                    with open(target, 'wb') as fh:
+                        fh.write(zf.read(m))
+            if not os.path.exists(os.path.join(new, 'kjt_invest.py')) or not os.path.exists(os.path.join(new, 'www', 'index.html')):
+                shutil.rmtree(new, ignore_errors=True)
+                raise Exception('the update file is incomplete; nothing was changed')
+            os.rename(HERE, old)
+            os.rename(new, HERE)
+            shutil.rmtree(old, ignore_errors=True)
+            self.reply(msg_id, {'ok': True, 'installed': True})
         except Exception as e:
             self.reply(msg_id, {'error': str(e)})
+
+    def restart_app(self):
+        if IN_FLATPAK:
+            # the portal's own restart: the sandbox starts the new version of the app
+            try:
+                bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+                bus.call_sync('org.freedesktop.portal.Flatpak', '/org/freedesktop/portal/Flatpak', 'org.freedesktop.portal.Flatpak', 'Spawn',
+                              GLib.Variant('(ayaaya{uh}a{ss}ua{sv})', (b'/\x00', [b'kjt-invest\x00'], {}, {'KJT_WAIT_START': '2'}, 2, {})),   # 2: start the latest version
+                              None, Gio.DBusCallFlags.NONE, 10000, None)
+            except Exception:
+                pass
+        else:
+            subprocess.Popen([sys.executable, os.path.join(HERE, 'kjt_invest.py')], start_new_session=True,
+                             env=dict(os.environ, KJT_WAIT_START='2'))
+        GLib.timeout_add(300, lambda: self.app.quit() or False)
 
     def open_file(self, path):
         gfile = Gio.File.new_for_path(path)
@@ -405,6 +501,9 @@ class Tracker:
 
 
 def main():
+    if os.environ.get('KJT_WAIT_START'):   # a restart after an update: let the old window close first
+        import time
+        time.sleep(float(os.environ.pop('KJT_WAIT_START')))
     app = Gtk.Application(application_id=APP_ID, flags=Gio.ApplicationFlags.FLAGS_NONE)
     holder = {}
 

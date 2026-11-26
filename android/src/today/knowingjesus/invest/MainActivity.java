@@ -37,6 +37,9 @@ public class MainActivity extends Activity {
     private static final int REQ_EXPORT = 41;
     private static final int REQ_IMPORT = 42;
     private static final String ACTION_INSTALLED = "today.knowingjesus.invest.INSTALL_RESULT";
+    /* an update that is ready and waits until you leave the app, so it never interrupts you */
+    private int waitingSession = -1;
+    private boolean inBackground = false;
 
     private WebView web;
     private File dbFile;
@@ -67,6 +70,38 @@ public class MainActivity extends Activity {
         });
         web.loadUrl("file:///android_asset/www/index.html");
         setContentView(web);
+    }
+
+    private void commitUpdate(int sid) {
+        try {
+            PackageInstaller.Session sess = getPackageManager().getPackageInstaller().openSession(sid);
+            Intent back = new Intent(this, MainActivity.class).setAction(ACTION_INSTALLED).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            int flags = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 31 ? 0x02000000 : 0);   // FLAG_MUTABLE: the installer adds its result
+            PendingIntent pend = PendingIntent.getActivity(this, sid, back, flags);
+            sess.commit(pend.getIntentSender());
+            sess.close();
+        } catch (Throwable ignored) { }
+    }
+
+    /* the app was left: a waiting update installs now, quietly */
+    @Override
+    protected void onStop() {
+        super.onStop();
+        inBackground = true;
+        if (waitingSession >= 0) { int sid = waitingSession; waitingSession = -1; commitUpdate(sid); }
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        inBackground = false;
+    }
+
+    /* back in the app: it looks for a new version again (at most every half hour) */
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (web != null) web.evaluateJavascript("window.__onResume && window.__onResume()", null);
     }
 
     /* the result of an update: the phone may first need you to confirm it */
@@ -211,6 +246,9 @@ public class MainActivity extends Activity {
             reply(id, o);
         } else if ("appInfo".equals(cmd)) {
             o.put("platform", "android");
+            String inst = null;
+            try { inst = getPackageManager().getInstallerPackageName(getPackageName()); } catch (Throwable ignored) { }
+            o.put("silentUpdate", Build.VERSION.SDK_INT >= 31 && getPackageName().equals(inst));
             o.put("version", getPackageManager().getPackageInfo(getPackageName(), 0).versionName);
             reply(id, o);
         } else if ("print".equals(cmd)) {
@@ -255,17 +293,22 @@ public class MainActivity extends Activity {
             PackageInstaller pi = getPackageManager().getPackageInstaller();
             PackageInstaller.SessionParams sp = new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
             sp.setAppPackageName(getPackageName());
+            /* Android 12 and newer: once this app installed itself, its next updates need no tap (USER_ACTION_NOT_REQUIRED) */
+            if (Build.VERSION.SDK_INT >= 31) {
+                try { sp.getClass().getMethod("setRequireUserAction", int.class).invoke(sp, 2); } catch (Throwable ignored) { }
+            }
             int sid = pi.createSession(sp);
             PackageInstaller.Session sess = pi.openSession(sid);
             OutputStream out = sess.openWrite("kjt-invest", 0, apk.length);
             out.write(apk);
             sess.fsync(out);
             out.close();
-            Intent back = new Intent(this, MainActivity.class).setAction(ACTION_INSTALLED).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
-            int flags = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 31 ? 0x02000000 : 0);   // FLAG_MUTABLE: the installer adds its result
-            PendingIntent pend = PendingIntent.getActivity(this, sid, back, flags);
-            sess.commit(pend.getIntentSender());
             sess.close();
+            if (a.optBoolean("background") && !inBackground) {
+                if (waitingSession >= 0) try { pi.abandonSession(waitingSession); } catch (Throwable ignored) { }
+                waitingSession = sid;
+                o.put("waiting", true);
+            } else commitUpdate(sid);
             o.put("ok", true);
             reply(id, o);
         } else if ("statusBar".equals(cmd)) {

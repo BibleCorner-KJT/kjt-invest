@@ -1,9 +1,9 @@
-/* KJT Invest 1.8 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
+/* KJT Invest 1.8.1 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
    All data stays in one SQLite file on the device. The only network calls are the
    price updates (metal prices from gold-api.com, exchange rates from the European Central Bank). */
 'use strict';
 
-const APP_VERSION = '1.8';
+const APP_VERSION = '1.8.1';
 const SCHEMA = 7;
 const OZT_G = 31.1034768;
 const METALS = [
@@ -1401,8 +1401,8 @@ function renderMore() {
   h += `<h2 class="sect">Price history</h2><div class="card"><p class="sub">${nh.n ? nh.n.toLocaleString('en-CA') + ' prices kept, from ' + esc(nh.d.slice(0, 4)) + '. Daily for the last years (Yahoo Finance), monthly before that (DataHub), and each day the app updates.' : 'No price history yet.'}${getSetting('daily_loaded') ? ' Daily prices updated ' + when(getSetting('daily_loaded')) + '.' : ''}</p>
     <div class="btns"><button class="btn light" data-act="history">${getSetting('history_loaded') ? 'Refresh past prices' : 'Load past prices'}</button></div></div>`;
   h += `<h2 class="sect">Updates</h2><div class="card">
-    <div class="switch"><span>Check for new versions by itself</span><input type="checkbox" id="set-upd"${getSetting('auto_update', '1') === '1' ? ' checked' : ''}></div>
-    <p class="sub">This is version ${APP_VERSION}. Last checked ${when(getSetting('update_checked'))}.${updateInfo ? ' Version ' + esc(updateInfo.version) + ' is ready.' : ''} When there is a new version a bar appears at the top: on Android the phone then asks you to confirm the update; on Linux, Software (GNOME Software) opens with it and you press Install. Your data always stays.</p>
+    <div class="switch"><span>Update by itself</span><input type="checkbox" id="set-upd"${getSetting('auto_update', '1') === '1' ? ' checked' : ''}></div>
+    <p class="sub">This is version ${APP_VERSION}. Last checked ${when(getSetting('update_checked'))}.${updateInfo ? ' Version ' + esc(updateInfo.version) + ' is ready.' : ''} It looks for a new version at every start and every few hours. Android: the first update asks you to press Update once; after that (Android 12 and newer) updates install quietly when you leave the app. Linux: the update installs by itself and a bar offers to restart.</p>
     <div class="btns"><button class="btn light" data-act="check-update">Check for updates now</button>${updateInfo ? '<button class="btn" data-act="install-update">Update</button>' : ''}</div></div>`;
   h += `<h2 class="sect">Security</h2><div id="sec"></div>`;
   h += `<h2 class="sect">Your data</h2><div class="card">
@@ -2458,31 +2458,70 @@ async function checkUpdate(manual) {
   setSetting('update_checked', new Date().toISOString()); save();
   if (!d) { if (manual) toast('Could not check for updates (no connection?)'); return; }
   const it = d[plat];
-  if (it && newerThan(it.version, APP_VERSION)) { updateInfo = Object.assign({ platform: plat }, it); showUpdateBar(); if (manual) toast('KJT Invest ' + it.version + ' is available'); }
-  else { updateInfo = null; showUpdateBar(); if (manual) toast('You have the newest version (' + APP_VERSION + ')'); }
+  if (it && newerThan(it.version, APP_VERSION)) {
+    const fresh = !updateInfo || updateInfo.version !== it.version;
+    updateInfo = Object.assign({ platform: plat }, it, fresh ? {} : { state: updateInfo.state });
+    showUpdateBar();
+    if (manual) toast('KJT Invest ' + it.version + ' is available');
+    else if (fresh && getSetting('auto_update', '1') === '1') autoInstall();
+  } else { updateInfo = null; showUpdateBar(); if (manual) toast('You have the newest version (' + APP_VERSION + ')'); }
+}
+/* updating by itself: Android installs quietly when you leave the app (after the first update, which the phone asks you to
+   confirm once); Linux installs it at once and offers to restart. */
+async function autoInstall() {
+  if (!updateInfo || updateInfo.state) return;
+  if (updateInfo.platform === 'android' && appInfo.silentUpdate) {
+    updateInfo.state = 'downloading'; showUpdateBar();
+    const r = await native('installUpdate', { url: updateInfo.url, sha256: updateInfo.sha256 || '', background: true });
+    updateInfo.state = r.error ? null : 'waiting'; showUpdateBar();
+  } else if (updateInfo.platform === 'linux') {
+    updateInfo.state = 'downloading'; showUpdateBar();
+    const r = await native('installUpdate', linuxUpdateArgs(true));
+    updateInfo.state = r.installed ? 'installed' : r.opened ? 'opened' : null; showUpdateBar();
+  }
+}
+function linuxUpdateArgs(quiet) {
+  const f = updateInfo[(appInfo && appInfo.arch) || 'x86_64'] || {};
+  return { quiet, flatpak: { url: f.url, sha256: f.sha256 }, zip: updateInfo.zip || null, url: f.url, sha256: f.sha256 };
 }
 function showUpdateBar() {
   const b = document.getElementById('upd'); if (!b) return;
   if (!updateInfo) { b.hidden = true; return; }
-  b.innerHTML = `<span><b>KJT Invest ${esc(updateInfo.version)}</b> is ready${updateInfo.notes ? ': ' + esc(updateInfo.notes) : ''}</span><button class="btn" id="upd-go">${updateInfo.platform === 'android' ? 'Update' : 'How to update'}</button>`;
+  const v = esc(updateInfo.version), st = updateInfo.state;
+  let msg, btn = '';
+  if (st === 'downloading') msg = `Downloading KJT Invest <b>${v}</b>…`;
+  else if (st === 'waiting') { msg = `<b>KJT Invest ${v}</b> is ready. It installs by itself when you leave the app.`; btn = 'Install now'; }
+  else if (st === 'installed') { msg = `<b>KJT Invest ${v}</b> is installed. Restart to use it.`; btn = 'Restart'; }
+  else if (st === 'opened') msg = `Press <b>Install</b> in Software to finish updating to ${v}.`;
+  else { msg = `<b>KJT Invest ${v}</b> is ready${updateInfo.notes ? ': ' + esc(updateInfo.notes) : ''}`; btn = 'Update'; }
+  b.innerHTML = `<span>${msg}</span>${btn ? `<button class="btn" id="upd-go">${btn}</button>` : ''}`;
   b.hidden = false;
-  document.getElementById('upd-go').onclick = installUpdate;
+  const g = document.getElementById('upd-go'); if (g) g.onclick = installUpdate;
 }
 async function installUpdate() {
   if (!updateInfo) return;
+  if (updateInfo.state === 'installed') { native('restartApp', {}); return; }
   if (updateInfo.platform === 'android') {
     toast('Downloading the update…');
     const r = await native('installUpdate', { url: updateInfo.url, sha256: updateInfo.sha256 || '' });
-    if (r.error) toast('Update not installed: ' + r.error); else toast('Confirm the update on the screen that opens');
+    if (r.error) toast('Update not installed: ' + r.error); else toast(appInfo && appInfo.silentUpdate ? 'Installing… the app closes and is updated' : 'Press Update on the screen that opens');
   } else if (updateInfo.platform === 'linux') {
-    const f = updateInfo[(appInfo && appInfo.arch) || 'x86_64'];
-    if (f && f.url) {
-      toast('Downloading the update…');
-      const r = await native('installUpdate', { url: f.url, sha256: f.sha256 || '' });
-      if (r.error) toast('Update not downloaded: ' + r.error); else toast('Software opens with the new version: press Install (your data stays)');
-    } else { await native('openUrl', { url: updateInfo.page }); toast('The download page opened in your browser'); }
+    updateInfo.state = 'downloading'; showUpdateBar();
+    const r = await native('installUpdate', linuxUpdateArgs(true));
+    if (r.error) { updateInfo.state = null; toast('Update not installed: ' + r.error); }
+    else updateInfo.state = r.installed ? 'installed' : 'opened';
+    showUpdateBar();
   }
 }
+/* look again when you come back to the app, and every few hours while it stays open */
+function maybeCheck(minMinutes) {
+  if (getSetting('auto_update', '1') !== '1' || !db) return;
+  const uc = getSetting('update_checked');
+  if (!uc || Date.now() - new Date(uc) > minMinutes * 60000) checkUpdate(false);
+}
+window.__onResume = () => maybeCheck(30);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) maybeCheck(30); });
+setInterval(() => maybeCheck(180), 15 * 60000);
 window.__updateStatus = msg => toast(msg);
 
 /* ---------------- start ---------------- */
@@ -2514,7 +2553,7 @@ window.__updateStatus = msg => toast(msg);
     prepareDb(); loadFx(); processRecurring();
     await saveNow();   /* also stores any upgrade of an older database */
     render();
-    if (getSetting('auto_update', '1') === '1') { const uc = getSetting('update_checked'); if (!uc || Date.now() - new Date(uc) > 3600000) setTimeout(() => checkUpdate(false), 4000); }
+    if (getSetting('auto_update', '1') === '1') setTimeout(() => checkUpdate(false), 3000);   /* every start */
     const last = getSetting('prices_updated');
     if (getSetting('auto_prices', '1') === '1' && (!last || Date.now() - new Date(last) > 15 * 60000)) updatePrices(true);
   } catch (e) {
