@@ -643,7 +643,7 @@ function setTitle(t, back) {
   document.getElementById('title').textContent = t;
   document.getElementById('back').hidden = !back;
 }
-/* Menus: Overview · Assets (Metals, Property, Accounts, Loans, Other assets) · Cash flow · Prices (metal prices, currencies) */
+/* Menus: Overview · Assets (Accounts, Property, Metals, Loans, Other assets) · Cash flow · Prices (metal prices, currencies) */
 /* small coloured pictures for the sub-menus */
 const SUBICON = {
   metals: () => metalIcon('XAU', 'bar', 22),
@@ -657,7 +657,7 @@ const SUBICON = {
   categories: () => `<svg class="sico" viewBox="0 0 24 24"><path class="f" d="M3.5 12.5V4.5a1 1 0 0 1 1-1h8l8 8-9 9z"/><path d="M3.5 12.5V4.5a1 1 0 0 1 1-1h8l8 8-9 9z"/><circle cx="8" cy="8" r="1.5"/></svg>`,
 };
 const subBtn = (k, l, on, attr) => `<button class="${on ? 'on' : ''}" ${attr}="${k}">${SUBICON[k] ? SUBICON[k]() : ''}<span>${l}</span></button>`;
-const ASECS = [['metals', 'Metals'], ['property', 'Property'], ['accounts', 'Accounts'], ['loans', 'Loans'], ['assets', 'Other']];
+const ASECS = [['accounts', 'Accounts'], ['property', 'Property'], ['metals', 'Metals'], ['loans', 'Loans'], ['assets', 'Other']];
 const isAsset = t => ASECS.some(a => a[0] === t);
 function render() {
   navBefore();
@@ -705,25 +705,28 @@ function renderOverview() {
   }
   const M = mcur(), mGain = t.metalsM - t.metalsCostM;
   h += remindersCard();
-  h += `<h2 class="sect">What you own</h2><div class="card tap" data-go="metals"><div class="phead"><span class="pbadge">${metalIcon('XAU', 'bar', 28)}</span><h2 style="margin:0">Precious metals${M !== H ? ' (' + M + ')' : ''}</h2></div>
+  const cards = {};
+  cards.metals = `<div class="card tap" data-go="metals"><div class="phead"><span class="pbadge">${metalIcon('XAU', 'bar', 28)}</span><h2 style="margin:0">Precious metals${M !== H ? ' (' + M + ')' : ''}</h2></div>
     <div class="row strong"><span class="k">Value</span><span class="v">${whole(t.metalsM, M)}</span></div>
     <div class="row"><span class="k">Paid (fees included)</span><span class="v">${whole(t.metalsCostM, M)}</span></div>
     <div class="row"><span class="k">Gain</span><span class="v ${signCls(mGain)}">${whole(mGain, M)} ${t.metalsCostM ? '(' + pct(mGain / t.metalsCostM) + ')' : ''}</span></div>
     ${M !== H ? `<div class="row"><span class="k">Value in ${H}</span><span class="v">${whole(t.metals, H)}</span></div>` : ''}</div>`;
   const reGain = t.re - t.reInvested + t.reIncome;
-  h += `<div class="card tap" data-go="property"><div class="phead"><span class="pbadge">${propIcon('house')}</span><h2 style="margin:0">Real estate</h2></div>
+  cards.property = `<div class="card tap" data-go="property"><div class="phead"><span class="pbadge">${propIcon('house')}</span><h2 style="margin:0">Real estate</h2></div>
     <div class="row strong"><span class="k">Value (your estimate)</span><span class="v">${whole(t.re, H)}</span></div>
     <div class="row"><span class="k">Invested</span><span class="v">${whole(t.reInvested, H)}</span></div>
     ${t.reLastYear ? `<div class="row"><span class="k">Net income ${t.reLastYear}</span><span class="v ${signCls(t.reLastNet)}">${whole(t.reLastNet, H)}</span></div>` : ''}
     <div class="row"><span class="k">Total gain (value + income)</span><span class="v ${signCls(reGain)}">${whole(reGain, H)} ${t.reInvested ? '(' + pct(reGain / t.reInvested) + ')' : ''}</span></div></div>`;
-  h += `<div class="card tap" data-go="accounts"><div class="phead"><span class="pbadge"><svg class="picon" viewBox="0 0 24 24" width="26" height="26"><path d="M3 7h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM3 7l13-3v3M16 13.5h2"/></svg></span><h2 style="margin:0">Cash & bank accounts</h2></div>
+  cards.accounts = `<div class="card tap" data-go="accounts"><div class="phead"><span class="pbadge"><svg class="picon" viewBox="0 0 24 24" width="26" height="26"><path d="M3 7h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM3 7l13-3v3M16 13.5h2"/></svg></span><h2 style="margin:0">Cash & bank accounts</h2></div>
     <div class="row strong"><span class="k">Balance${t.debt > 0.005 ? ' (less credit cards)' : ''}</span><span class="v ${t.cash < 0 ? 'down' : ''}">${whole(t.cash, H)}</span></div>
     ${t.debt > 0.005 ? `<div class="row"><span class="k">Owed on credit cards</span><span class="v down">${whole(t.debt, H)}</span></div>` : ''}</div>`;
-  h += `<div class="card tap" data-go="assets"><div class="phead"><span class="pbadge">${assetIcon('car')}</span><h2 style="margin:0">Other assets</h2></div>
+  cards.assets = `<div class="card tap" data-go="assets"><div class="phead"><span class="pbadge">${assetIcon('car')}</span><h2 style="margin:0">Other assets</h2></div>
     <div class="row strong"><span class="k">Value (your estimate)</span><span class="v">${whole(t.other, H)}</span></div>
     ${t.otherCost ? `<div class="row"><span class="k">Paid</span><span class="v">${whole(t.otherCost, H)}</span></div>` : ''}</div>`;
-  if (q('SELECT COUNT(*) n FROM loans')[0].n) h += `<div class="card tap" data-go="loans"><div class="phead"><span class="pbadge">${loanIcon()}</span><h2 style="margin:0">Loans you made</h2></div>
+  if (q('SELECT COUNT(*) n FROM loans')[0].n) cards.loans = `<div class="card tap" data-go="loans"><div class="phead"><span class="pbadge">${loanIcon()}</span><h2 style="margin:0">Loans you made</h2></div>
     <div class="row strong"><span class="k">Owed to you</span><span class="v">${whole(t.loans, H)}</span></div></div>`;
+  /* in the same order as the Assets menu */
+  h += `<h2 class="sect">What you own</h2>` + ['accounts', 'property', 'metals', 'loans', 'assets'].map(k => cards[k] || '').join('');
   h += `<h2 class="sect">Income & expenses</h2>` + ieCard();
   h += `<h2 class="sect">Current prices <span class="sub">${mcur()} per troy ounce</span></h2><div class="card">${priceStrip()}</div>`;
   if (nAll) h += `<button class="btn wide light" data-act="print-report">Print the report or save it as a PDF</button>`;
@@ -937,7 +940,7 @@ function bindChart() {
 }
 
 /* ---------------- overview: the top box has pages you swipe ---------------- */
-const CATS = [['metals', 'Precious metals', 'cat-m'], ['re', 'Real estate', 'cat-p'], ['cash', 'Cash & bank', 'cat-c'], ['other', 'Other assets', 'cat-o'], ['loans', 'Loans you made', 'cat-l']];
+const CATS = [['cash', 'Cash & bank', 'cat-c'], ['re', 'Real estate', 'cat-p'], ['metals', 'Precious metals', 'cat-m'], ['loans', 'Loans you made', 'cat-l'], ['other', 'Other assets', 'cat-o']];
 function heroPages(t) {
   const H = home(), parts = { metals: t.metals, re: t.re, cash: Math.max(0, t.cash), other: t.other, loans: t.loans || 0 };
   const sum = Object.values(parts).reduce((a, b) => a + b, 0) || 1;
@@ -1722,7 +1725,7 @@ let toastTimer;
 function toast(msg) { const t = document.getElementById('toast'); t.textContent = msg; t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => t.hidden = true, 2600); }
 document.getElementById('tabs').onclick = e => { const b = e.target.closest('button'); if (!b) return;
   let t = b.dataset.tab;
-  if (t === 'assetsgroup') t = isAsset(state.tab) ? state.tab : (state.lastAsec || 'metals');
+  if (t === 'assetsgroup') t = isAsset(state.tab) ? state.tab : (state.lastAsec || 'accounts');
   if (state.tab === t || b.dataset.tab === 'assetsgroup') { state.propertyId = null; state.accountId = null; state.assetId = null; state.loanId = null; }
   state.tab = t; render(); view().scrollTop = 0; };
 document.getElementById('refresh').onclick = () => updatePrices(false);
@@ -2200,7 +2203,7 @@ function remindersCard() {
       ${!r.auto && due ? `<div class="btns" style="margin-top:6px"><button class="btn" data-remdo="${r.id}">Add it</button><button class="btn light" data-remskip="${r.id}">Skip this time</button></div>` : ''}</div>`; }).join('') + `</div></div>`;
 }
 /* ---- money tab ---- */
-const MSECS = [['tx', 'Transactions'], ['reports', 'Reports'], ['recurring', 'Recurring'], ['categories', 'Categories']];
+const MSECS = [['tx', 'Transactions'], ['recurring', 'Recurring'], ['categories', 'Categories'], ['reports', 'Reports']];
 function renderMoney() {
   setTitle('Cash flow');
   state.msec = state.msec || 'tx';
@@ -2554,14 +2557,31 @@ function printReport() {
   /* net worth */
   const debt = t.debt || 0, cashOnly = t.cash + debt;
   h += `<h2>Net worth</h2><table><tbody>
-    <tr><td>Precious metals</td>${td(m(t.metals))}</tr>
-    <tr><td>Real estate (your estimate)</td>${td(m(t.re))}</tr>
     <tr><td>Bank accounts & cash</td>${td(m(cashOnly))}</tr>
     ${debt > 0.005 ? `<tr><td>Owed on credit cards</td>${td('−' + m(debt), 'down')}</tr>` : ''}
-    <tr><td>Other assets</td>${td(m(t.other))}</tr>
+    <tr><td>Real estate (your estimate)</td>${td(m(t.re))}</tr>
+    <tr><td>Precious metals</td>${td(m(t.metals))}</tr>
     ${t.loans ? `<tr><td>Loans you made (still owed to you)</td>${td(m(t.loans))}</tr>` : ''}
+    <tr><td>Other assets</td>${td(m(t.other))}</tr>
     <tr class="tot"><td>Total</td>${td(m(t.total))}</tr></tbody></table>
     ${t.missing ? '<p class="pnote">Some items have no price or exchange rate yet and are left out.</p>' : ''}`;
+  /* accounts */
+  const as = q('SELECT * FROM accounts ORDER BY type, name');
+  if (as.length) {
+    h += `<h2>Bank accounts, cash & credit cards</h2><table><thead><tr><th>Account</th><th>As of</th><th class="n">Share</th><th class="n">Balance</th></tr></thead><tbody>` +
+      as.map(a => { const b = acctBalance(a.id), v = b ? conv(b.balance * shareOf(a), a.currency || H, H) : null, cr = a.type === 'credit';
+        return `<tr><td>${esc(a.name)}<div class="psub">${ACCT_TYPES[a.type] || ''}${a.institution ? ' · ' + esc(a.institution) : ''}${cr && a.credit_limit ? ' · limit ' + money(a.credit_limit, a.currency || H, { dec: 0 }) : ''}${(a.currency || H) !== H && b ? ' · ' + money(b.balance, a.currency) : ''}</div></td>
+          <td>${b ? fmtDate(b.date) : ''}</td>${td(shareLbl(a))}${td(m(v), v < 0 ? 'down' : '')}</tr>`; }).join('') + `</tbody></table>`;
+  }
+  /* property */
+  const ps = q('SELECT * FROM properties ORDER BY name');
+  if (ps.length) {
+    h += `<h2>Real estate</h2><table><thead><tr><th>Property</th><th class="n">Share</th><th class="n">Invested</th><th class="n">Value</th><th class="n">Net cashflow, last 12 months</th></tr></thead><tbody>` +
+      ps.map(p => { const s = propertyStats(p), k = s.share, c = p.currency || H, cv = v => conv(v * k, c, H);
+        let l12 = 0; const fl = []; for (const yr of s.rows) for (const f of yr.months) if (!f.future && f.owned) fl.push(f); for (const f of fl.slice(-12)) l12 += f.net;
+        return `<tr><td>${esc(p.name)}<div class="psub">${(PROP_TYPES[p.type] || PROP_TYPES.house)[0]}${p.address ? ' · ' + esc(p.address) : ''}${p.co_owners ? ' · with ' + esc(p.co_owners) : ''}</div></td>
+          ${td(shareLbl(p))}${td(m(cv(s.invested)))}${td(m(cv(s.value)))}${td(m(cv(l12)), sgn(l12))}</tr>`; }).join('') + `</tbody></table>`;
+  }
   /* metals */
   const hs = q('SELECT * FROM metal_holdings ORDER BY metal, description');
   if (hs.length) {
@@ -2573,22 +2593,12 @@ function printReport() {
           ${td(s.oz.toFixed(3))}${td(m(s.costHome))}${td(m(s.valueHome))}${td(s.costHome ? pct((s.valueHome - s.costHome) / s.costHome) : '', sgn(s.valueHome - s.costHome))}</tr>`; }).join('') +
       `<tr class="tot"><td>Total</td><td></td><td></td>${td(m(tc))}${td(m(tv))}${td(tc ? pct((tv - tc) / tc) : '', sgn(tv - tc))}</tr></tbody></table>`;
   }
-  /* property */
-  const ps = q('SELECT * FROM properties ORDER BY name');
-  if (ps.length) {
-    h += `<h2>Real estate</h2><table><thead><tr><th>Property</th><th class="n">Share</th><th class="n">Invested</th><th class="n">Value</th><th class="n">Net cashflow, last 12 months</th></tr></thead><tbody>` +
-      ps.map(p => { const s = propertyStats(p), k = s.share, c = p.currency || H, cv = v => conv(v * k, c, H);
-        let l12 = 0; const fl = []; for (const yr of s.rows) for (const f of yr.months) if (!f.future && f.owned) fl.push(f); for (const f of fl.slice(-12)) l12 += f.net;
-        return `<tr><td>${esc(p.name)}<div class="psub">${(PROP_TYPES[p.type] || PROP_TYPES.house)[0]}${p.address ? ' · ' + esc(p.address) : ''}${p.co_owners ? ' · with ' + esc(p.co_owners) : ''}</div></td>
-          ${td(shareLbl(p))}${td(m(cv(s.invested)))}${td(m(cv(s.value)))}${td(m(cv(l12)), sgn(l12))}</tr>`; }).join('') + `</tbody></table>`;
-  }
-  /* accounts */
-  const as = q('SELECT * FROM accounts ORDER BY type, name');
-  if (as.length) {
-    h += `<h2>Bank accounts, cash & credit cards</h2><table><thead><tr><th>Account</th><th>As of</th><th class="n">Share</th><th class="n">Balance</th></tr></thead><tbody>` +
-      as.map(a => { const b = acctBalance(a.id), v = b ? conv(b.balance * shareOf(a), a.currency || H, H) : null, cr = a.type === 'credit';
-        return `<tr><td>${esc(a.name)}<div class="psub">${ACCT_TYPES[a.type] || ''}${a.institution ? ' · ' + esc(a.institution) : ''}${cr && a.credit_limit ? ' · limit ' + money(a.credit_limit, a.currency || H, { dec: 0 }) : ''}${(a.currency || H) !== H && b ? ' · ' + money(b.balance, a.currency) : ''}</div></td>
-          <td>${b ? fmtDate(b.date) : ''}</td>${td(shareLbl(a))}${td(m(v), v < 0 ? 'down' : '')}</tr>`; }).join('') + `</tbody></table>`;
+  /* loans */
+  const lns = q('SELECT * FROM loans ORDER BY closed, person');
+  if (lns.length) {
+    h += `<h2>Loans you made</h2><table><thead><tr><th>Lent to</th><th>Lent on</th><th>Due</th><th class="n">Lent</th><th class="n">Repaid</th><th class="n">Still owed</th></tr></thead><tbody>` +
+      lns.map(l => { const s = loanStats(l), c = l.currency || H;
+        return `<tr><td>${esc(l.person)}${l.rate ? `<div class="psub">${l.rate}% a year</div>` : ''}</td><td>${fmtDate(l.date)}</td><td class="${s.overdue || s.off ? 'down' : ''}">${s.off ? 'written off' : l.closed ? 'repaid' : l.due_date ? fmtDate(l.due_date) : ''}</td>${td(money(l.amount, c, { dec: 0 }))}${td(money(s.repaid, c, { dec: 0 }))}${td(money(s.owed, c, { dec: 0 }))}</tr>`; }).join('') + `</tbody></table>`;
   }
   /* other assets */
   const os = q('SELECT * FROM other_assets ORDER BY name');
@@ -2597,13 +2607,6 @@ function printReport() {
       os.map(o => { const v = assetValue(o.id), k = shareOf(o), c = o.currency || H;
         return `<tr><td>${esc(o.name)}<div class="psub">${(ASSET_TYPES[o.type] || ASSET_TYPES.other)[0]}${o.purchase_date ? ' · bought ' + fmtDate(o.purchase_date) : ''}</div></td>
           ${td(shareLbl(o))}${td(m(o.purchase_price != null ? conv(o.purchase_price * k, c, H) : null))}${td(m(v ? conv(v.value * k, c, H) : null))}</tr>`; }).join('') + `</tbody></table>`;
-  }
-  /* loans */
-  const lns = q('SELECT * FROM loans ORDER BY closed, person');
-  if (lns.length) {
-    h += `<h2>Loans you made</h2><table><thead><tr><th>Lent to</th><th>Lent on</th><th>Due</th><th class="n">Lent</th><th class="n">Repaid</th><th class="n">Still owed</th></tr></thead><tbody>` +
-      lns.map(l => { const s = loanStats(l), c = l.currency || H;
-        return `<tr><td>${esc(l.person)}${l.rate ? `<div class="psub">${l.rate}% a year</div>` : ''}</td><td>${fmtDate(l.date)}</td><td class="${s.overdue || s.off ? 'down' : ''}">${s.off ? 'written off' : l.closed ? 'repaid' : l.due_date ? fmtDate(l.due_date) : ''}</td>${td(money(l.amount, c, { dec: 0 }))}${td(money(s.repaid, c, { dec: 0 }))}${td(money(s.owed, c, { dec: 0 }))}</tr>`; }).join('') + `</tbody></table>`;
   }
   /* income & expenses, last 12 months */
   const model = ieModel();
