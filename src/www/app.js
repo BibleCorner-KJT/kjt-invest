@@ -1,9 +1,9 @@
-/* KJT Invest 1.6 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
+/* KJT Invest 1.6.1 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
    All data stays in one SQLite file on the device. The only network calls are the
    price updates (metal prices from gold-api.com, exchange rates from the European Central Bank). */
 'use strict';
 
-const APP_VERSION = '1.6';
+const APP_VERSION = '1.6.1';
 const SCHEMA = 6;
 const OZT_G = 31.1034768;
 const METALS = [

@@ -318,3 +318,15 @@ nav#tabs button { font-size: .66rem; }
 .legend i.lin { border-top: 8px solid var(--up); width: 10px; } .legend i.lout { border-top: 8px solid var(--down); width: 10px; }
 h3.ieh { font-size: .9rem; margin: 12px 0 2px; }
 .arow.ie { grid-template-columns: 1fr auto auto; }
+
+/* 1.6: form boxes always use the app's colours (on Linux the system's light boxes took white text in dark mode) */
+:root { color-scheme: light; }
+:root[data-mode="dark"] { color-scheme: dark; }
+select, input, textarea { -webkit-appearance: none; appearance: none; background-color: var(--bg); color: var(--ink); border-color: var(--line); }
+select, label.f select, .addfav select { background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 18px) 50%, calc(100% - 12px) 50%; background-size: 6px 6px, 6px 6px; background-repeat: no-repeat; padding-right: 32px !important; }
+option, optgroup { background: var(--card); color: var(--ink); }
+input[type="checkbox"] { -webkit-appearance: auto; appearance: auto; accent-color: var(--brand); }
+input[type="radio"] { -webkit-appearance: auto; appearance: auto; }
+input[type="date"] { min-height: 46px; }
+input::placeholder, textarea::placeholder { color: var(--muted); opacity: .8; }

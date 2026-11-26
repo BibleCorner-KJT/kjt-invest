@@ -18,7 +18,7 @@ import urllib.request
 import gi
 
 APP_ID = 'today.knowingjesus.Invest'
-VERSION = '1.6'
+VERSION = '1.6.1'
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(os.environ.get('XDG_DATA_HOME') or os.path.expanduser('~/.local/share'), 'kjt-invest')
 OLD_DIR = os.path.join(os.path.expanduser('~/.local/share'), 'investment-tracker')   # where 1.0-1.2 (Investment Tracker) kept the data
