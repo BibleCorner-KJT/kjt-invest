@@ -1,25 +1,25 @@
 {
   "android": {
-    "version": "1.13",
+    "version": "1.14",
     "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-android.apk",
-    "sha256": "f15d5e63cd0a7779fcb90b72fca457ceec5b8afa41f4bfe6fcb3da418b27838e",
-    "notes": "Fold the Overview cards; folded cards and sections can show their totals (setting to hide them)."
+    "sha256": "9b2b8948d6e78356497b2d67b0e2f6f4fe196c4571178b74f8c82a01f3c5d435",
+    "notes": "Sync between your devices (Syncthing folder), combine databases, quick add from the app icon, new green and gold icon."
   },
   "linux": {
-    "version": "1.13",
+    "version": "1.14",
     "page": "https://github.com/BibleCorner-KJT/kjt-invest/tree/releases",
-    "notes": "Fold the Overview cards; folded cards and sections can show their totals (setting to hide them).",
+    "notes": "Sync between your devices (Syncthing folder), combine databases, quick add from the app icon, new green and gold icon.",
     "x86_64": {
       "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.flatpak",
-      "sha256": "b2a6ad66ffe0e76b034139ff6f9ddc5e9a7198061f62c0c7f32b53db7b021b6a"
+      "sha256": "d5ceb61b5aae94e13f50a2ce4605af8d0d1ba114794e7f140d2e6e7774d58ee6"
     },
     "aarch64": {
       "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux-arm.flatpak",
-      "sha256": "ce43d2c677ed86144faa8eb52e300b04d2ebbf8110120603ffcab74ba1a6cc65"
+      "sha256": "7773cc346f3dec5039bc503b00629eb719ddcb88a9050b0c9b5f54a1af1e863a"
     },
     "zip": {
       "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.zip",
-      "sha256": "24885146f932d2c4676c6e4e70c01680e7ada8ce1a5b1450fe33eb8767af0042"
+      "sha256": "e17f7bfe6af7da706d56cac852efdd185de77fa2a23da1d14cd3db5448f7af63"
     }
   }
 }
