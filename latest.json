@@ -1,14 +1,14 @@
 {
  "android": {
-  "version": "1.17",
+  "version": "1.18",
   "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-android.apk",
-  "sha256": "43d97727ef70c8cef7f49529d5f7de258dcb361fd16b6c422cc262f4779f055f",
-  "notes": "The eye button hides every amount. Prices page: favourite currencies first, metal prices per gram, tola and more, gold and silver pictures. Option to block screenshots."
+  "sha256": "32801c107faab93fe7c611f1a71adb5c400cc8866aa089d25ad11839463fddb1",
+  "notes": "Reconcile with the bank: month-by-month differences and one-tap corrections. Entries not yet in a bank file are marked. Transfers between your own accounts are linked."
  },
  "linux": {
-  "version": "1.17",
+  "version": "1.18",
   "page": "https://github.com/BibleCorner-KJT/kjt-invest/tree/releases",
-  "notes": "The eye button hides every amount. Prices page: favourite currencies first, metal prices per gram, tola and more, gold and silver pictures. Option to block screenshots.",
+  "notes": "Reconcile with the bank: month-by-month differences and one-tap corrections. Entries not yet in a bank file are marked. Transfers between your own accounts are linked.",
   "x86_64": {
    "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.flatpak",
    "sha256": "ec47c31a31cb00ff7aacbb1461c90bbd41489b5b68be64bb3583e2deae1d9c4a"
@@ -19,7 +19,7 @@
   },
   "zip": {
    "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.zip",
-   "sha256": "c2a47f2c13d3ee4ee4578a3742f551346554c665ffb15364fcee8ec711c792ce"
+   "sha256": "66b8fdd86c7e54df1151438964cac63b90aaf4151266f41c22806b91a410ad1e"
   }
  }
 }
