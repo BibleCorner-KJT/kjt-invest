@@ -6,6 +6,9 @@ import android.content.Intent;
 import android.content.pm.PackageInstaller;
 import java.security.MessageDigest;
 import android.net.Uri;
+import android.database.Cursor;
+import android.provider.DocumentsContract;
+import org.json.JSONArray;
 import android.os.Bundle;
 import android.util.Base64;
 import android.os.Build;
@@ -36,14 +39,17 @@ import java.net.URL;
 public class MainActivity extends Activity {
     private static final int REQ_EXPORT = 41;
     private static final int REQ_IMPORT = 42;
+    private static final int REQ_SYNC = 43;
     private static final String ACTION_INSTALLED = "today.knowingjesus.invest.INSTALL_RESULT";
+    /* long-press the app icon: "Add transaction" opens the app straight on a new transaction */
+    private static final String ACTION_ADD_TX = "today.knowingjesus.invest.ADD_TX";
     /* an update that is ready and waits until you leave the app, so it never interrupts you */
     private int waitingSession = -1;
     private boolean inBackground = false;
 
     private WebView web;
     private File dbFile;
-    private String exportId, importId;
+    private String exportId, importId, syncId;
     private byte[] exportBytes;
 
     @Override
@@ -67,9 +73,15 @@ public class MainActivity extends Activity {
             public boolean shouldOverrideUrlLoading(WebView v, String url) {
                 return url == null || !url.startsWith("file:///android_asset/");
             }
+
+            @Override
+            public void onPageFinished(WebView v, String url) {
+                quickAddIfAsked(getIntent());   /* opened from the "Add transaction" shortcut */
+            }
         });
         web.loadUrl("file:///android_asset/www/index.html");
         setContentView(web);
+        addShortcut();
     }
 
     private void commitUpdate(int sid) {
@@ -105,9 +117,36 @@ public class MainActivity extends Activity {
     }
 
     /* the result of an update: the phone may first need you to confirm it */
+    /* the shortcut shown when you long-press the app icon (Android 7.1 and newer) */
+    private void addShortcut() {
+        if (Build.VERSION.SDK_INT < 25) return;
+        try {
+            Class<?> smC = Class.forName("android.content.pm.ShortcutManager");
+            Object sm = getSystemService(smC);
+            Class<?> bC = Class.forName("android.content.pm.ShortcutInfo$Builder");
+            Object b = bC.getConstructor(android.content.Context.class, String.class).newInstance(this, "add_tx");
+            bC.getMethod("setShortLabel", CharSequence.class).invoke(b, "Add transaction");
+            bC.getMethod("setLongLabel", CharSequence.class).invoke(b, "Add a transaction");
+            int icon = getResources().getIdentifier("ic_shortcut_add", "mipmap", getPackageName());
+            if (icon != 0) bC.getMethod("setIcon", android.graphics.drawable.Icon.class).invoke(b, android.graphics.drawable.Icon.createWithResource(this, icon));
+            Intent i = new Intent(this, MainActivity.class).setAction(ACTION_ADD_TX);
+            bC.getMethod("setIntent", Intent.class).invoke(b, i);
+            Object info = bC.getMethod("build").invoke(b);
+            smC.getMethod("setDynamicShortcuts", java.util.List.class).invoke(sm, java.util.Collections.singletonList(info));
+        } catch (Throwable ignored) { }
+    }
+
+    private void quickAddIfAsked(Intent intent) {
+        if (intent != null && ACTION_ADD_TX.equals(intent.getAction()) && web != null) {
+            intent.setAction(Intent.ACTION_MAIN);
+            web.evaluateJavascript("window.__quickAdd && window.__quickAdd()", null);
+        }
+    }
+
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
+        quickAddIfAsked(intent);
         if (intent == null || !ACTION_INSTALLED.equals(intent.getAction())) return;
         int status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, -999);
         if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
@@ -212,7 +251,7 @@ public class MainActivity extends Activity {
             HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
             c.setConnectTimeout(15000);
             c.setReadTimeout(20000);
-            c.setRequestProperty("User-Agent", a.optString("ua", "KJTFinance/1.13"));
+            c.setRequestProperty("User-Agent", a.optString("ua", "KJTFinance/1.14"));
             c.setRequestProperty("Accept", "application/json, application/xml, text/xml");
             int status = c.getResponseCode();
             InputStream in = status < 400 ? c.getInputStream() : c.getErrorStream();
@@ -365,6 +404,66 @@ public class MainActivity extends Activity {
                 @Override
                 public void run() { startActivityForResult(i, REQ_EXPORT); }
             });
+        } else if ("syncPick".equals(cmd)) {
+            /* sync between devices: you choose a folder (for example one shared by Syncthing); the app keeps a copy of its data there */
+            syncId = id;
+            final Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() { startActivityForResult(i, REQ_SYNC); }
+            });
+        } else if ("syncInfo".equals(cmd)) {
+            Uri t = syncTree();
+            o.put("set", t != null);
+            if (t != null) o.put("label", treeLabel(t));
+            reply(id, o);
+        } else if ("syncForget".equals(cmd)) {
+            Uri t = syncTree();
+            if (t != null) try { getContentResolver().releasePersistableUriPermission(t, Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION); } catch (Throwable ignored) { }
+            new File(getFilesDir(), "sync.txt").delete();
+            o.put("ok", true);
+            reply(id, o);
+        } else if ("syncList".equals(cmd)) {
+            Uri t = syncTree();
+            if (t == null) throw new Exception("no sync folder");
+            JSONArray files = new JSONArray();
+            Uri kids = DocumentsContract.buildChildDocumentsUriUsingTree(t, DocumentsContract.getTreeDocumentId(t));
+            Cursor c = getContentResolver().query(kids, new String[] { DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_LAST_MODIFIED, DocumentsContract.Document.COLUMN_SIZE }, null, null, null);
+            if (c != null) {
+                while (c.moveToNext()) {
+                    JSONObject f = new JSONObject();
+                    f.put("name", c.getString(1)); f.put("mtime", c.getLong(2)); f.put("size", c.getLong(3));
+                    files.put(f);
+                }
+                c.close();
+            }
+            o.put("files", files);
+            reply(id, o);
+        } else if ("syncRead".equals(cmd)) {
+            Uri d = syncDoc(a.getString("name"));
+            if (d == null) { o.put("missing", true); reply(id, o); return; }
+            byte[] b = readAll(getContentResolver().openInputStream(d));
+            o.put("b64", Base64.encodeToString(b, Base64.NO_WRAP));
+            reply(id, o);
+        } else if ("syncWrite".equals(cmd)) {
+            Uri t = syncTree();
+            if (t == null) throw new Exception("no sync folder");
+            String name = a.getString("name");
+            Uri d = syncDoc(name);
+            if (d == null) d = DocumentsContract.createDocument(getContentResolver(), DocumentsContract.buildDocumentUriUsingTree(t, DocumentsContract.getTreeDocumentId(t)), "application/octet-stream", name);
+            if (d == null) throw new Exception("could not create the file in the folder");
+            OutputStream out = getContentResolver().openOutputStream(d, "wt");
+            out.write(Base64.decode(a.getString("b64"), Base64.DEFAULT));
+            out.close();
+            o.put("ok", true);
+            reply(id, o);
+        } else if ("syncDelete".equals(cmd)) {
+            Uri d = syncDoc(a.getString("name"));
+            if (d != null) DocumentsContract.deleteDocument(getContentResolver(), d);
+            o.put("ok", true);
+            reply(id, o);
         } else if ("importDb".equals(cmd)) {
             importId = id;
             final Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
@@ -380,10 +479,55 @@ public class MainActivity extends Activity {
         }
     }
 
+    /* the sync folder you chose (kept across restarts) */
+    private Uri syncTree() {
+        try {
+            File f = new File(getFilesDir(), "sync.txt");
+            if (!f.exists()) return null;
+            return Uri.parse(new String(readAll(new FileInputStream(f)), "UTF-8").trim());
+        } catch (Throwable e) { return null; }
+    }
+
+    private String treeLabel(Uri t) {
+        String docId = DocumentsContract.getTreeDocumentId(t);
+        int c = docId.indexOf(':');
+        return c >= 0 ? docId.substring(c + 1) : docId;
+    }
+
+    private Uri syncDoc(String name) throws Exception {
+        Uri t = syncTree();
+        if (t == null) throw new Exception("no sync folder");
+        Uri kids = DocumentsContract.buildChildDocumentsUriUsingTree(t, DocumentsContract.getTreeDocumentId(t));
+        Cursor c = getContentResolver().query(kids, new String[] { DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME }, null, null, null);
+        Uri found = null;
+        if (c != null) {
+            while (c.moveToNext()) if (name.equals(c.getString(1))) { found = DocumentsContract.buildDocumentUriUsingTree(t, c.getString(0)); break; }
+            c.close();
+        }
+        return found;
+    }
+
     @Override
     protected void onActivityResult(int req, int result, Intent data) {
         super.onActivityResult(req, result, data);
         final Uri uri = (result == RESULT_OK && data != null) ? data.getData() : null;
+        if (req == REQ_SYNC && syncId != null) {
+            final String id = syncId;
+            syncId = null;
+            try {
+                JSONObject o = new JSONObject();
+                if (uri != null) {
+                    getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                    FileOutputStream out = new FileOutputStream(new File(getFilesDir(), "sync.txt"));
+                    out.write(uri.toString().getBytes("UTF-8"));
+                    out.close();
+                    o.put("ok", true);
+                    o.put("label", treeLabel(uri));
+                }
+                reply(id, o);
+            } catch (Throwable e) { replyError(id, e); }
+            return;
+        }
         if (req == REQ_EXPORT && exportId != null) {
             final String id = exportId;
             final byte[] bytes = exportBytes;

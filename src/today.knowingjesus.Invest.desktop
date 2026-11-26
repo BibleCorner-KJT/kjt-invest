@@ -10,3 +10,8 @@ Categories=Office;Finance;
 Keywords=gold;silver;metals;bullion;property;real estate;rent;savings;portfolio;net worth;KJT;Knowing Jesus Today;
 StartupNotify=true
 X-Purism-FormFactor=Workstation;Mobile;
+Actions=add;
+
+[Desktop Action add]
+Name=Add a transaction
+Exec=kjt-invest --add

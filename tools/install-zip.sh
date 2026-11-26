@@ -56,6 +56,11 @@ Keywords=gold;silver;metals;property;real estate;rent;portfolio;
 StartupNotify=true
 StartupWMClass=today.knowingjesus.Invest
 X-Purism-FormFactor=Workstation;Mobile;
+Actions=add;
+
+[Desktop Action add]
+Name=Add a transaction
+Exec=python3 "$DEST/kjt_invest.py" --add
 DESK
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$APPS" >/dev/null 2>&1 || true
 command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -q -t "$ICONS" >/dev/null 2>&1 || true

@@ -1,10 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5a1a60"/><stop offset="1" stop-color="#3e093f"/></linearGradient><linearGradient id="au" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f6d77a"/><stop offset="1" stop-color="#c8971f"/></linearGradient></defs>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#14603d"/><stop offset="1" stop-color="#0a3b24"/></linearGradient>
+    <linearGradient id="au" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f4dc8f"/><stop offset=".55" stop-color="#d6a93c"/><stop offset="1" stop-color="#b98a2a"/></linearGradient>
+  </defs>
   <rect width="512" height="512" rx="112" fill="url(#bg)"/>
-  <path d="M52 232 L256 66 L460 232" fill="none" stroke="#f3e2b8" stroke-width="38" stroke-linecap="round" stroke-linejoin="round"/>
-  <text x="256" y="268" text-anchor="middle" font-family="DejaVu Serif, Georgia, 'Times New Roman', serif" font-weight="700" font-size="118" fill="#f3e2b8">KJT</text>
-  <rect x="112" y="368" width="78" height="84" rx="11" fill="url(#au)"/>
-  <rect x="217" y="326" width="78" height="126" rx="11" fill="url(#au)"/>
-  <rect x="322" y="290" width="78" height="162" rx="11" fill="url(#au)"/>
-  <rect x="92" y="462" width="328" height="18" rx="9" fill="#f3e2b8"/>
+  <rect x="26" y="26" width="460" height="460" rx="92" fill="none" stroke="url(#au)" stroke-width="5"/>
+  <g id="mark">
+    <path d="M100 200 L256 86 L412 200" fill="none" stroke="url(#au)" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="256" y="300" text-anchor="middle" font-family="DejaVu Serif, Georgia, serif" font-weight="700" font-size="126" fill="url(#au)">KJT</text>
+    <rect x="153" y="368" width="54" height="44" rx="7" fill="url(#au)"/>
+    <rect x="229" y="342" width="54" height="70" rx="7" fill="url(#au)"/>
+    <rect x="305" y="316" width="54" height="96" rx="7" fill="url(#au)"/>
+    <rect x="134" y="420" width="244" height="7" rx="3.5" fill="url(#au)"/>
+  </g>
 </svg>

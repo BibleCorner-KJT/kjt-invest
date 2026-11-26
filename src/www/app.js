@@ -1,10 +1,10 @@
-/* KJT Finance 1.13 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
+/* KJT Finance 1.14 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
    All data stays in one SQLite file on the device. The only network calls are the
    price updates (metal prices from gold-api.com, exchange rates from the European Central Bank). */
 'use strict';
 
-const APP_VERSION = '1.13';
-const SCHEMA = 10;
+const APP_VERSION = '1.14';
+const SCHEMA = 11;
 const OZT_G = 31.1034768;
 const METALS = [
   { sym: 'XAU', name: 'Gold', purity: 0.9999 },
@@ -44,7 +44,7 @@ window.__nativeReply = function (id, payload) {
   if (typeof data === 'string') { try { data = JSON.parse(data); } catch (e) { data = { error: 'bad reply' }; } }
   p(data || {});
 };
-const LEAVES_APP = ['exportDb', 'importDb', 'bioUnlock', 'bioEnable', 'print'];
+const LEAVES_APP = ['exportDb', 'importDb', 'bioUnlock', 'bioEnable', 'print', 'syncPick'];
 function native(cmd, args) {
   const away = LEAVES_APP.includes(cmd);
   if (away) nativeBusy++;
@@ -68,6 +68,15 @@ async function browserNative(id, cmd, a) {
     else if (cmd === 'secure' || cmd === 'bioDisable' || cmd === 'statusBar' || cmd === 'openUrl') reply({ ok: true });
     else if (cmd === 'appInfo') reply({ platform: 'browser', version: APP_VERSION });
     else if (cmd === 'print') { window.print(); reply({ ok: true }); }
+    /* a pretend sync folder in the browser, for testing */
+    else if (cmd === 'syncPick') { localStorage.setItem('fs-on', '1'); reply({ ok: true, label: 'Test folder' }); }
+    else if (cmd === 'syncInfo') reply({ set: localStorage.getItem('fs-on') === '1', label: 'Test folder' });
+    else if (cmd === 'syncForget') { localStorage.removeItem('fs-on'); reply({ ok: true }); }
+    else if (cmd === 'syncList') { const files = []; for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith('fs:')) { const v = JSON.parse(localStorage.getItem(k)); files.push({ name: k.slice(3), mtime: v.mtime, size: v.b64.length }); } } reply({ files }); }
+    else if (cmd === 'syncRead') { const v = localStorage.getItem('fs:' + a.name); reply(v ? { b64: JSON.parse(v).b64 } : { missing: true }); }
+    else if (cmd === 'syncWrite') { localStorage.setItem('fs:' + a.name, JSON.stringify({ b64: a.b64, mtime: Date.now() })); reply({ ok: true }); }
+    else if (cmd === 'syncDelete') { localStorage.removeItem('fs:' + a.name); reply({ ok: true }); }
+    else if (cmd === 'copyText') { try { await navigator.clipboard.writeText(a.text); } catch (e) { } reply({ ok: true }); }
     else if (cmd === 'bioAvailable') reply({ available: false });
     else if (cmd === 'httpGet') { const r = await fetch(a.url); reply({ status: r.status, body: await r.text() }); }
     else if (cmd === 'exportDb') {
@@ -193,6 +202,7 @@ function prepareDb() {
   }
   if (!getSetting('cats_v111')) { if (!q("SELECT id FROM categories WHERE parent_id IS NULL AND name='Cash spending'").length)
     run("INSERT INTO categories(name,parent_id,kind,sort) VALUES('Cash spending',NULL,'out',95)"); setSetting('cats_v111', '1'); clearCats(); }
+  syncMeta();   /* 1.14: lasting ids, change times and deletion notes, for syncing and merging */
   if (+getSetting('schema', 1) < SCHEMA) setSetting('schema', SCHEMA);
 }
 function isOurDb(candidate) {
@@ -206,6 +216,7 @@ async function saveNow() {
   clearTimeout(saveTimer); saveTimer = null;
   const r = await native('saveDb', { b64: bytesToB64(await fileBytes()) });
   if (r.error) toast('Could not save: ' + r.error);
+  else if (typeof SYNC !== 'undefined' && SYNC.on && !SYNC.busy) syncSoon();
 }
 document.addEventListener('visibilitychange', () => { if (document.hidden && saveTimer) saveNow(); });
 
@@ -1495,6 +1506,7 @@ function renderMore() {
     <p class="sub">This is version ${APP_VERSION}. Last checked ${when(getSetting('update_checked'))}.${updateInfo ? ' Version ' + esc(updateInfo.version) + ' is ready.' : ''} It looks for a new version at every start and every few hours. Android: the first update asks you to press Update once; after that (Android 12 and newer) updates install quietly when you leave the app. Linux: the update installs by itself and a bar offers to restart.</p>
     <div class="btns"><button class="btn light" data-act="check-update">Check for updates now</button>${updateInfo ? '<button class="btn" data-act="install-update">Update</button>' : ''}</div></div>`;
   h += `<h2 class="sect">Security</h2><div id="sec"></div>`;
+  h += syncCard();
   h += `<h2 class="sect">Your data</h2><div class="card">
     <p class="sub">Everything is kept in one SQLite database file on this device. Export it to back it up or to move it to another phone or computer; import it there.</p>
     <div class="btns"><button class="btn" data-act="export">Export database</button><button class="btn light" data-act="import">Import database</button></div>
@@ -1807,6 +1819,11 @@ view().addEventListener('click', e => {
     case 'add-loanpay': loanPayForm(+d.id); break;
     case 'bank-import': bankImport(d.id ? +d.id : null); break;
     case 'add-rule': ruleForm(); break;
+    case 'sync-setup': syncSetup(); break;
+    case 'sync-now': syncNow(true); break;
+    case 'sync-stop': syncStop(); break;
+    case 'merge-file': mergeFile(); break;
+    case 'copy-upd': native('copyText', { text: updateInfo && updateInfo.command || '' }).then(() => toast('Copied: open Terminal and paste it (Ctrl+Shift+V), then press Enter')); break;
     case 'tx-clear': state.txCat = ''; state.txSearch = ''; render(); break;
     case 'select-tx': state.sel = new Set(); render(); selBar(); break;
     case 'sort-uncat': state.txCat = 'none'; render(); state.sel = new Set(Array.from(view().querySelectorAll('[data-tx]')).map(r => +r.dataset.tx)); render(); selBar();
@@ -1925,7 +1942,15 @@ function pad(o) {
     dots();
   });
 }
-function hideLock() { const L = lockEl(); L.hidden = true; L.innerHTML = ''; }
+function hideLock() { const L = lockEl(); L.hidden = true; L.innerHTML = ''; if (window.__quickPending && APP_READY) setTimeout(window.__quickAdd, 200); }
+/* quick add: the + button, and "Add transaction" when you long-press (or right-click) the app's icon */
+let APP_READY = false;
+window.__quickAdd = () => {
+  if (!db || !APP_READY || !lockEl().hidden) { window.__quickPending = true; return; }
+  window.__quickPending = false;
+  if (!q('SELECT COUNT(*) n FROM accounts')[0].n) { state.tab = 'accounts'; render(); return toast('First add an account (or cash), then your transactions.'); }
+  closeSheet(); state.tab = 'money'; state.msec = 'tx'; render(); txForm(null, null, state.txAcct ? { account_id: +state.txAcct } : null);
+};
 async function bioAvailable() { const r = await native('bioAvailable', {}); return r.available ? (r.kind || 'fingerprint') : null; }
 
 /* asks until the right passcode (or fingerprint); opening = the encrypted file at start */
@@ -2331,6 +2356,7 @@ function txForm(id, copyOf, preset) {
       const cs = box.querySelector('[name=category_id]'), cur = +cs.value || t.category_id; cs.innerHTML = catOptions(k === 'in' ? 'in' : 'out', cur);
       const fr = box.querySelector('[name=freq]'); if (fr) box.querySelector('#auto-wrap').style.display = fr.value ? '' : 'none'; };
     box.querySelectorAll('[name=kind]').forEach(r => r.onchange = sync); const fr = box.querySelector('[name=freq]'); if (fr) fr.onchange = sync; sync();
+    if (!id && !copyOf) { const am = box.querySelector('[name=amount]'); if (am && !am.value) setTimeout(() => am.focus(), 250); }
     const pe = box.querySelector('[name=payee]');   /* a payee you used before brings back its category */
     if (pe && !id) pe.onchange = () => { const cs = box.querySelector('[name=category_id]'); if (cs.value) return;
       const rl = matchRule(pe.value), last = rl && rl.category_id ? { category_id: rl.category_id, kind: (cats().byId[rl.category_id] || {}).kind === 'in' ? 'in' : 'out' } : q("SELECT category_id, kind FROM transactions WHERE payee=? AND category_id IS NOT NULL ORDER BY date DESC, id DESC LIMIT 1", [pe.value.trim()])[0];
@@ -3221,9 +3247,262 @@ function enhanceView() {
   });
   /* quick add on the Cash flow pages */
   const fab = document.getElementById('fab');
-  if (fab) { fab.hidden = !!state.sel || !(state.tab === 'money' && q('SELECT COUNT(*) n FROM accounts')[0].n); v.style.paddingBottom = fab.hidden ? '' : '96px'; }
+  if (fab) { const inDetail = state.propertyId || state.accountId || state.assetId || state.loanId;
+    fab.hidden = !!state.sel || !(['overview', 'money', 'accounts'].includes(state.tab) && !(state.tab === 'accounts' && inDetail) && q('SELECT COUNT(*) n FROM accounts')[0].n); v.style.paddingBottom = fab.hidden ? '' : '96px'; }
 }
 
+
+/* ---------------- Sync between your devices, and merging two databases ----------------
+   Every row has a lasting id (uid) and the time it last changed (mod); deletions leave a small note (sync_tomb).
+   Merging another copy of the data (from the sync folder, or a file you pick):
+   - a row only the other copy has is added; a row both have keeps the newer version;
+   - a row deleted on one side is deleted on the other, unless it was changed there afterwards;
+   - the same thing entered on two devices is recognised (same bank reference, same repeating payment on the
+     same day, same account or category name…), so nothing is doubled.
+   The sync folder is any folder your devices share, for example with Syncthing: the app keeps one file there,
+   "KJT Finance data.kjtf" (encrypted when you use a passcode), and merges the copies other devices write. */
+const SYNC_TABLES = ['categories', 'accounts', 'properties', 'metal_holdings', 'other_assets', 'loans', 'recurring', 'transactions',
+  'account_balances', 'rent_periods', 'property_items', 'property_values', 'property_years', 'asset_values', 'loan_payments', 'payee_rules'];
+const NOW_MS = "CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)";
+const NOT_BUSY = 'NOT EXISTS (SELECT 1 FROM sync_busy)';
+const SYNC_SETTINGS = /^(home_currency|metal_currency|fav_currencies|fx_source|metal_source|fold_totals|auto_prices|csvmap:.*)$/;
+function syncMeta() {
+  run('CREATE TABLE IF NOT EXISTS sync_tomb (tbl TEXT NOT NULL, uid TEXT NOT NULL, mod INTEGER, PRIMARY KEY(tbl, uid))');
+  run('CREATE TABLE IF NOT EXISTS sync_busy (x INTEGER)'); run('DELETE FROM sync_busy');
+  for (const t of SYNC_TABLES) {
+    const cols = q(`PRAGMA table_info(${t})`).map(r => r.name); if (!cols.length) continue;
+    if (!cols.includes('uid')) run(`ALTER TABLE ${t} ADD COLUMN uid TEXT`);
+    if (!cols.includes('mod')) run(`ALTER TABLE ${t} ADD COLUMN mod INTEGER`);
+    run(`UPDATE ${t} SET uid = lower(hex(randomblob(16))) WHERE uid IS NULL`);
+    run(`UPDATE ${t} SET mod = 1 WHERE mod IS NULL`);
+    run(`CREATE UNIQUE INDEX IF NOT EXISTS ${t}_uid ON ${t}(uid)`);
+    run(`CREATE TRIGGER IF NOT EXISTS ${t}_si AFTER INSERT ON ${t} WHEN NEW.uid IS NULL OR NEW.mod IS NULL BEGIN UPDATE ${t} SET uid = COALESCE(NEW.uid, lower(hex(randomblob(16)))), mod = COALESCE(NEW.mod, ${NOW_MS}) WHERE rowid = NEW.rowid; END`);
+    run(`CREATE TRIGGER IF NOT EXISTS ${t}_su AFTER UPDATE ON ${t} WHEN NEW.mod IS OLD.mod AND ${NOT_BUSY} BEGIN UPDATE ${t} SET mod = ${NOW_MS} WHERE rowid = NEW.rowid; END`);
+    run(`CREATE TRIGGER IF NOT EXISTS ${t}_sd AFTER DELETE ON ${t} WHEN ${NOT_BUSY} BEGIN INSERT OR REPLACE INTO sync_tomb(tbl, uid, mod) VALUES('${t}', OLD.uid, ${NOW_MS}); END`);
+  }
+  if (!q('PRAGMA table_info(settings)').some(r => r.name === 'mod')) { run('ALTER TABLE settings ADD COLUMN mod INTEGER'); run('UPDATE settings SET mod = 1'); }
+  run(`CREATE TRIGGER IF NOT EXISTS settings_si AFTER INSERT ON settings WHEN NEW.mod IS NULL BEGIN UPDATE settings SET mod = ${NOW_MS} WHERE key = NEW.key; END`);
+  run(`CREATE TRIGGER IF NOT EXISTS settings_su AFTER UPDATE ON settings WHEN NEW.mod IS OLD.mod AND ${NOT_BUSY} BEGIN UPDATE settings SET mod = ${NOW_MS} WHERE key = NEW.key; END`);
+}
+/* the newest change in the data you would want on your other devices */
+function dataStamp() {
+  let m = 0;
+  for (const t of SYNC_TABLES) { const r = q(`SELECT MAX(mod) m FROM ${t}`)[0]; if (r && r.m > m) m = r.m; }
+  const tb = q('SELECT MAX(mod) m FROM sync_tomb')[0]; if (tb && tb.m > m) m = tb.m;
+  for (const s of q('SELECT key, mod FROM settings')) if (SYNC_SETTINGS.test(s.key) && s.mod > m) m = s.mod;
+  return m;
+}
+function qd(dbx, sql, params) { const st = dbx.prepare(sql), out = []; try { if (params) st.bind(params); while (st.step()) out.push(st.getAsObject()); } finally { st.free(); } return out; }
+/* what links one row to another, and how the same thing is recognised when entered on two devices */
+const LINKS = { property: 'properties', metal: 'metal_holdings', asset: 'other_assets', loan: 'loans' };
+const low = v => String(v == null ? '' : v).trim().toLowerCase();
+const SYNC_SPEC = {
+  categories: { fk: { parent_id: 'categories' }, nat: r => [r.kind, low(r.name), r.parent_id || 0] },
+  accounts: { nat: r => [low(r.name), r.type, r.currency] },
+  properties: { nat: r => [low(r.name)] },
+  metal_holdings: { nat: r => [r.metal, low(r.description), r.purchase_date, r.quantity, r.weight] },
+  other_assets: { nat: r => [low(r.name)] },
+  loans: { nat: r => [low(r.person), r.date, r.amount] },
+  recurring: { fk: { account_id: 'accounts', to_account_id: 'accounts', category_id: 'categories' }, link: true, nat: r => [r.account_id, low(r.payee), r.amount, r.freq, r.kind] },
+  transactions: { fk: { account_id: 'accounts', to_account_id: 'accounts', category_id: 'categories', recurring_id: 'recurring' }, link: true,
+    always: r => r.import_id ? ['imp', r.account_id, r.import_id] : r.recurring_id ? ['rec', r.recurring_id, r.date] : null,
+    nat: r => [r.account_id, r.date, r.kind, r.amount, low(r.payee)] },
+  account_balances: { fk: { account_id: 'accounts' }, nat: r => [r.account_id, r.date, r.balance] },
+  rent_periods: { fk: { property_id: 'properties' }, nat: r => [r.property_id, r.start_date, r.monthly_rent] },
+  property_items: { fk: { property_id: 'properties' }, nat: r => [r.property_id, r.kind, r.start_date, r.amount] },
+  property_values: { fk: { property_id: 'properties' }, nat: r => [r.property_id, r.date, r.value] },
+  property_years: { fk: { property_id: 'properties' }, nat: r => [r.property_id, r.year] },
+  asset_values: { fk: { asset_id: 'other_assets' }, nat: r => [r.asset_id, r.date, r.value] },
+  loan_payments: { fk: { loan_id: 'loans', account_id: 'accounts' }, nat: r => [r.loan_id, r.date, r.principal, r.interest] },
+  payee_rules: { fk: { category_id: 'categories', to_account_id: 'accounts' }, nat: r => [r.pattern] },
+};
+const REQUIRED = { account_balances: 'account_id', transactions: 'account_id', recurring: 'account_id', rent_periods: 'property_id', property_items: 'property_id',
+  property_values: 'property_id', property_years: 'property_id', asset_values: 'asset_id', loan_payments: 'loan_id' };
+/* brings another copy of the data into this one. firstTime: the two copies were started separately, so things that look the same are the same */
+function mergeDb(rdb, firstTime) {
+  const st = { added: 0, updated: 0, deleted: 0, theirsOlder: 0 }, idmap = {}, tomb = {};
+  for (const t of q('SELECT * FROM sync_tomb')) tomb[t.tbl + ':' + t.uid] = t.mod;
+  run('INSERT INTO sync_busy VALUES (1)'); db.exec('BEGIN');
+  try {
+    for (const t of SYNC_TABLES) {
+      const spec = SYNC_SPEC[t] || {}, lcols = q(`PRAGMA table_info(${t})`).map(c => c.name); if (!lcols.length) continue;
+      let R; try { R = qd(rdb, `SELECT * FROM ${t}`); } catch (e) { continue; }
+      if (t === 'categories') R.sort((a, b) => (a.parent_id ? 1 : 0) - (b.parent_id ? 1 : 0));
+      const L = q(`SELECT * FROM ${t}`), byUid = new Map(L.map(r => [r.uid, r])), remoteUids = new Set(R.map(r => r.uid));
+      const key = (f, r) => { const k = f && f(r); return k ? JSON.stringify(k) : null; };
+      const alwaysMap = new Map(), natMap = new Map();
+      for (const r of L) { const a = key(spec.always, r); if (a) alwaysMap.set(a, r); if (!remoteUids.has(r.uid)) { const n = key(spec.nat, r); if (n && !natMap.has(n)) natMap.set(n, r); } }
+      for (const r of L) if (!remoteUids.has(r.uid)) st.theirsOlder++;
+      idmap[t] = {};
+      for (const r0 of R) {
+        const dead = tomb[t + ':' + r0.uid]; if (dead != null && dead >= r0.mod) continue;   /* deleted here after its last change there */
+        const r = {}; for (const c of lcols) if (c !== 'id' && c in r0) r[c] = r0[c];
+        let skip = false;
+        for (const [c, ref] of Object.entries(spec.fk || {})) if (r[c] != null) { const m = (idmap[ref] || {})[r[c]]; r[c] = m == null ? null : m; }
+        if (REQUIRED[t] && r[REQUIRED[t]] == null) skip = true;
+        if (spec.link && r.link) { const [k, n] = String(r.link).split(':'); const m = LINKS[k] && (idmap[LINKS[k]] || {})[n]; r.link = m == null ? null : k + ':' + m; }
+        if (skip) continue;
+        let loc = byUid.get(r0.uid), adopt = null;
+        if (!loc) { const a = key(spec.always, r); if (a && alwaysMap.has(a)) loc = alwaysMap.get(a); }
+        if (!loc && (firstTime || t === 'categories' || t === 'accounts' || t === 'payee_rules')) { const n = key(spec.nat, r); if (n && natMap.has(n)) { loc = natMap.get(n); natMap.delete(n); } }
+        if (loc && loc.uid !== r0.uid) adopt = loc.uid < r0.uid ? loc.uid : r0.uid;   /* both sides settle on the same id */
+        const cols = Object.keys(r);
+        if (!loc) {
+          if (t === 'payee_rules' && q('SELECT id FROM payee_rules WHERE pattern=?', [r.pattern]).length) continue;
+          run(`INSERT INTO ${t}(${cols.join(',')}) VALUES(${cols.map(() => '?').join(',')})`, cols.map(c => r[c]));
+          idmap[t][r0.id] = q('SELECT last_insert_rowid() id')[0].id; st.added++;
+        } else {
+          idmap[t][r0.id] = loc.id;
+          if ((r0.mod || 0) > (loc.mod || 0)) { if (adopt) r.uid = adopt; run(`UPDATE ${t} SET ${cols.map(c => c + '=?').join(',')} WHERE id=?`, cols.map(c => r[c]).concat([loc.id])); st.updated++; }
+          else { if ((loc.mod || 0) > (r0.mod || 0)) st.theirsOlder++; if (adopt && adopt !== loc.uid) run(`UPDATE ${t} SET uid=? WHERE id=?`, [adopt, loc.id]); }
+        }
+      }
+    }
+    /* deletions made on the other device */
+    let RT = []; try { RT = qd(rdb, 'SELECT * FROM sync_tomb'); } catch (e) { RT = []; }
+    for (const d of RT) {
+      if (!SYNC_TABLES.includes(d.tbl)) continue;
+      const loc = q(`SELECT id, mod FROM ${d.tbl} WHERE uid=?`, [d.uid])[0];
+      if (loc && (loc.mod || 0) <= d.mod) { run(`DELETE FROM ${d.tbl} WHERE id=?`, [loc.id]); st.deleted++; }
+      const mine = tomb[d.tbl + ':' + d.uid];
+      if (mine == null || mine < d.mod) run('INSERT OR REPLACE INTO sync_tomb(tbl, uid, mod) VALUES(?,?,?)', [d.tbl, d.uid, d.mod]);
+    }
+    for (const t of Object.keys(tomb)) { const [tbl, uid] = t.split(':'); if (!RT.some(d => d.tbl === tbl && d.uid === uid)) { st.theirsOlder++; break; } }
+    /* your choices (home currency, favourite currencies…) */
+    let RS = []; try { RS = qd(rdb, 'SELECT * FROM settings'); } catch (e) { RS = []; }
+    for (const s of RS) {
+      if (!SYNC_SETTINGS.test(s.key)) continue;
+      const loc = q('SELECT value, mod FROM settings WHERE key=?', [s.key])[0];
+      if (!loc || (s.mod || 0) > (loc.mod || 0)) { run('INSERT INTO settings(key,value,mod) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, mod=excluded.mod', [s.key, s.value, s.mod || 1]); st.updated++; }
+      else if ((loc.mod || 0) > (s.mod || 0)) st.theirsOlder++;
+    }
+    /* prices and rates: the newest of each; history: whatever is missing */
+    for (const [t, k] of [['prices', 'symbol'], ['fx', 'currency']]) {
+      let R = []; try { R = qd(rdb, `SELECT * FROM ${t}`); } catch (e) { R = []; }
+      for (const r of R) { const loc = q(`SELECT updated FROM ${t} WHERE ${k}=?`, [r[k]])[0];
+        if (!loc || String(r.updated || '') > String(loc.updated || '')) { const cols = Object.keys(r); run(`INSERT OR REPLACE INTO ${t}(${cols.join(',')}) VALUES(${cols.map(() => '?').join(',')})`, cols.map(c => r[c])); } }
+    }
+    for (const t of ['price_history', 'fx_history']) {
+      let R = []; try { R = qd(rdb, `SELECT * FROM ${t}`); } catch (e) { R = []; }
+      if (!R.length) continue; const cols = Object.keys(R[0]), stx = db.prepare(`INSERT OR IGNORE INTO ${t}(${cols.join(',')}) VALUES(${cols.map(() => '?').join(',')})`);
+      try { for (const r of R) stx.run(cols.map(c => r[c])); } finally { stx.free(); }
+    }
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); run('DELETE FROM sync_busy'); throw e; }
+  run('DELETE FROM sync_busy'); clearCats();
+  return st;
+}
+/* opens a copy of the data (maybe encrypted) as a database, ready to merge */
+async function openCopy(bytes, who) {
+  if (isEncrypted(bytes)) {
+    let o = CRYPT ? await decryptWith(bytes, null, CRYPT.raw) : null;
+    if (!o) {
+      let msg = '';
+      for (let i = 0; i < 5 && !o; i++) {
+        const v = await pad({ title: `${who} is protected: enter its passcode`, cancel: true, msg });
+        if (v == null) break; o = await decryptWith(bytes, v); msg = 'Wrong passcode';
+        if (o) { o.pass = v; }
+      }
+      hideLock(); if (!o) return null;
+      /* from now on this device uses the same key as your other devices, so it never asks again */
+      CRYPT = o.crypt; PREFS.pinLength = o.pass.length; await savePrefs(); native('secure', { on: true });
+      if (PREFS.bio) native('bioEnable', { dek: bytesToB64(CRYPT.raw) });
+      toast('From now on use that passcode on this device too');
+    }
+    bytes = o.plain;
+  }
+  let c; try { c = new SQL.Database(bytes); } catch (e) { return null; }
+  if (!isOurDb(c)) { c.close(); return null; }
+  const keep = db; db = c; try { prepareDb(); } finally { db = keep; } clearCats();
+  return c;
+}
+/* ---- the sync folder ---- */
+const SYNC_FILE = 'KJT Finance data.kjtf';
+const SYNC = { on: false, label: '', busy: false, last: null, err: null, timer: null };
+async function syncInit() {
+  const r = await native('syncInfo', {}); SYNC.on = !!r.set; SYNC.label = r.label || '';
+  if (SYNC.on) syncNow();
+  if (!SYNC.timer) SYNC.timer = setInterval(() => { if (!document.hidden && SYNC.on) syncNow(); }, 20000);
+}
+let syncSoonT = null;
+function syncSoon() { if (!SYNC.on) return; clearTimeout(syncSoonT); syncSoonT = setTimeout(syncNow, 4000); }
+async function syncNow(manual) {
+  if (!SYNC.on || SYNC.busy || !db || (!manual && nativeBusy)) return; SYNC.busy = true;
+  try {
+    const l = await native('syncList', {}); if (l.error) { SYNC.err = l.error; if (manual) toast('Sync folder: ' + l.error); return; }
+    const files = l.files || [], main = files.find(f => f.name === SYNC_FILE);
+    const conflicts = files.filter(f => /^KJT Finance data\.sync-conflict-.*\.kjtf$/.test(f.name));
+    let needWrite = !main || dataStamp() > +getSetting('sync_wrote', '0'), got = null;
+    const sig = main ? main.mtime + ':' + main.size : '';
+    for (const f of (main && sig !== getSetting('sync_seen', '') ? [main] : []).concat(conflicts)) {
+      const rd = await native('syncRead', { name: f.name }); if (!rd.b64) continue;
+      const c = await openCopy(b64ToBytes(rd.b64), 'The data from your other device'); if (!c) { SYNC.err = 'could not open ' + f.name; continue; }
+      const s = mergeDb(c, false); c.close();
+      got = got || { added: 0, updated: 0, deleted: 0 }; got.added += s.added; got.updated += s.updated; got.deleted += s.deleted;
+      if (s.theirsOlder || f !== main) needWrite = true;
+      if (f !== main) await native('syncDelete', { name: f.name });
+    }
+    if (main && sig) setSetting('sync_seen', sig);
+    if (got && (got.added || got.updated || got.deleted)) { await saveNow(); const st = view().scrollTop; render(); view().scrollTop = st;
+      if (manual || got.added + got.updated + got.deleted) toast(`Synced: ${got.added} added, ${got.updated} updated, ${got.deleted} removed`); }
+    if (needWrite) {
+      const w = await native('syncWrite', { name: SYNC_FILE, b64: bytesToB64(await fileBytes()) });
+      if (w.error) { SYNC.err = w.error; return; }
+      setSetting('sync_wrote', String(dataStamp()));
+      const l2 = await native('syncList', {}); const m2 = (l2.files || []).find(f => f.name === SYNC_FILE); if (m2) setSetting('sync_seen', m2.mtime + ':' + m2.size);
+      await saveNow();
+    }
+    SYNC.err = null; SYNC.last = Date.now();
+    if (manual && !got) toast('Everything is in sync');
+  } catch (e) { SYNC.err = String(e.message || e); if (manual) toast('Sync failed: ' + SYNC.err); }
+  finally { SYNC.busy = false; }
+}
+async function syncSetup() {
+  const r = await native('syncPick', {}); if (!r.ok) { if (r.error) toast('Could not use that folder: ' + r.error); return; }
+  SYNC.on = true; SYNC.label = r.label || '';
+  setSetting('sync_seen', ''); setSetting('sync_wrote', '0');
+  const l = await native('syncList', {}); const there = (l.files || []).some(f => f.name === SYNC_FILE);
+  if (there) {
+    const choice = await new Promise(res => openSheet(`<h2>Data from another device is here</h2>
+      <p class="sub">This folder already has KJT Finance data, probably from your other device. What should this device do?</p>
+      <div class="btns"><button class="btn" data-f="merge">Combine both (recommended)</button></div>
+      <div class="btns"><button class="btn light" data-f="theirs">Use only the folder's data (this device's data is replaced)</button></div>
+      <div class="btns"><button class="btn light" data-f="cancel">Cancel</button></div>`, box => { box.onclick = e => { const f = e.target.dataset.f; if (f) { closeSheet(); res(f); } }; }));
+    if (choice === 'cancel') { await native('syncForget', {}); SYNC.on = false; render(); return; }
+    const rd = await native('syncRead', { name: SYNC_FILE }); const c = rd.b64 ? await openCopy(b64ToBytes(rd.b64), 'The data in the folder') : null;
+    if (!c) { await native('syncForget', {}); SYNC.on = false; render(); return toast('Could not open the data in the folder.'); }
+    if (choice === 'theirs') { db.close(); db = c; prepareDb(); loadFx(); setSetting('sync_seen', ''); setSetting('sync_wrote', String(dataStamp())); }
+    else { const s = mergeDb(c, true); c.close(); toast(`Combined: ${s.added} added, ${s.updated} updated`); }
+    await saveNow();
+  }
+  await syncNow(true);
+  if (!SYNC.timer) SYNC.timer = setInterval(() => { if (!document.hidden && SYNC.on) syncNow(); }, 20000);
+  render();
+}
+async function syncStop() {
+  if (!await ask('Stop syncing this device? Your data stays here; the file in the folder stays too.', 'Stop syncing')) return;
+  await native('syncForget', {}); SYNC.on = false; render();
+}
+/* ---- merging a file you pick (for example an export from another device) ---- */
+async function mergeFile() {
+  const r = await native('importDb', {}); if (!r.b64) { if (r.error) toast('Could not open the file: ' + r.error); return; }
+  const c = await openCopy(b64ToBytes(r.b64), 'This file'); if (!c) return toast('That file is not a KJT Finance database.');
+  if (!await ask('Combine that file with the data here? Nothing is doubled: what is the same is recognised, and newer changes win.', 'Combine')) { c.close(); return; }
+  const s = mergeDb(c, true); c.close(); await saveNow(); syncSoon();
+  toast(`Combined: ${s.added} added, ${s.updated} updated, ${s.deleted} removed`); render();
+}
+function syncCard() {
+  return `<h2 class="sect">Sync between your devices</h2><div class="card">` + (SYNC.on
+    ? `<p class="sub">Syncing through the folder <b>${esc(SYNC.label || 'chosen')}</b>${SYNC.last ? ' · last checked ' + new Date(SYNC.last).toLocaleTimeString('en-CA', { hour: 'numeric', minute: '2-digit' }) : ''}.${SYNC.err ? ` <span class="down">Problem: ${esc(SYNC.err)}</span>` : ''}</p>
+      <p class="sub">Changes from your other devices come in by themselves while the app is open; changes made at the same time on two devices are combined.</p>
+      <div class="btns"><button class="btn" data-act="sync-now">Sync now</button><button class="btn light" data-act="sync-stop">Stop syncing</button></div>`
+    : `<p class="sub">Keep the same data on your phone and computer, privately: no account and no cloud.</p>
+      <ol class="steps"><li>Install <b>Syncthing</b> on each device (Android: <b>Syncthing-Fork</b> from F-Droid; Fedora: from Software; postmarketOS: the <i>syncthing</i> package).</li>
+      <li>In Syncthing, share one folder between your devices, for example <i>KJT Finance</i>.</li>
+      <li>Here, choose that folder. Do the same on each device.</li></ol>
+      <div class="btns"><button class="btn" data-act="sync-setup">Choose the sync folder</button></div>`) +
+    `<div class="btns"><button class="btn light" data-act="merge-file">Combine with a database file…</button></div></div>`;
+}
 
 /* ---------------- updates ----------------
    The app looks at one small public file (latest.json on the project's GitHub) to see whether a newer version exists.
@@ -3260,7 +3539,7 @@ async function autoInstall() {
   } else if (updateInfo.platform === 'linux') {
     updateInfo.state = 'downloading'; showUpdateBar();
     const r = await native('installUpdate', linuxUpdateArgs(true));
-    updateInfo.state = r.installed ? 'installed' : r.opened ? 'opened' : null; showUpdateBar();
+    updateInfo.state = r.installed ? 'installed' : r.manual ? 'manual' : r.opened ? 'opened' : null; if (r.command) updateInfo.command = r.command; showUpdateBar();
   }
 }
 function linuxUpdateArgs(quiet) {
@@ -3276,10 +3555,11 @@ function showUpdateBar() {
   else if (st === 'waiting') { msg = `<b>KJT Finance ${v}</b> is ready. It installs by itself when you leave the app.`; btn = 'Install now'; }
   else if (st === 'installed') { msg = `<b>KJT Finance ${v}</b> is installed. Restart to use it.`; btn = 'Restart'; }
   else if (st === 'opened') msg = `Press <b>Install</b> in Software to finish updating to ${v}.`;
+  else if (st === 'manual') { msg = `<b>KJT Finance ${v}</b> is downloaded. To install it, copy this command, paste it in Terminal and press Enter (your data stays):`; btn = 'Copy the command'; }
   else { msg = `<b>KJT Finance ${v}</b> is ready${updateInfo.notes ? ': ' + esc(updateInfo.notes) : ''}`; btn = 'Update'; }
   b.innerHTML = `<span>${msg}</span>${btn ? `<button class="btn" id="upd-go">${btn}</button>` : ''}`;
   b.hidden = false;
-  const g = document.getElementById('upd-go'); if (g) g.onclick = installUpdate;
+  const g = document.getElementById('upd-go'); if (g) g.onclick = st === 'manual' ? () => { native('copyText', { text: updateInfo.command || '' }); toast('Copied: open Terminal, paste it (Ctrl+Shift+V) and press Enter'); } : installUpdate;
 }
 async function installUpdate() {
   if (!updateInfo) return;
@@ -3292,7 +3572,7 @@ async function installUpdate() {
     updateInfo.state = 'downloading'; showUpdateBar();
     const r = await native('installUpdate', linuxUpdateArgs(true));
     if (r.error) { updateInfo.state = null; toast('Update not installed: ' + r.error); }
-    else updateInfo.state = r.installed ? 'installed' : 'opened';
+    else { updateInfo.state = r.installed ? 'installed' : r.manual ? 'manual' : 'opened'; if (r.command) updateInfo.command = r.command; }
     showUpdateBar();
   }
 }
@@ -3302,8 +3582,8 @@ function maybeCheck(minMinutes) {
   const uc = getSetting('update_checked');
   if (!uc || Date.now() - new Date(uc) > minMinutes * 60000) checkUpdate(false);
 }
-window.__onResume = () => maybeCheck(30);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) maybeCheck(30); });
+window.__onResume = () => { maybeCheck(30); if (typeof SYNC !== 'undefined' && SYNC.on) syncNow(); };
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { maybeCheck(30); if (SYNC.on) syncNow(); } });
 setInterval(() => maybeCheck(180), 15 * 60000);
 window.__updateStatus = msg => toast(msg);
 
@@ -3333,9 +3613,10 @@ window.__updateStatus = msg => toast(msg);
     }
     db = opened || new SQL.Database();
     native('secure', { on: !!CRYPT });
-    prepareDb(); loadFx(); processRecurring();
+    prepareDb(); loadFx(); processRecurring(); syncInit();
     await saveNow();   /* also stores any upgrade of an older database */
-    render();
+    render(); APP_READY = true;
+    if (window.__quickPending) setTimeout(window.__quickAdd, 300);
     if (getSetting('auto_update', '1') === '1') setTimeout(() => checkUpdate(false), 3000);   /* every start */
     const last = getSetting('prices_updated');
     if (getSetting('auto_prices', '1') === '1' && (!last || Date.now() - new Date(last) > 15 * 60000)) updatePrices(true);

@@ -20,7 +20,7 @@ import urllib.request
 import gi
 
 APP_ID = 'today.knowingjesus.Invest'
-VERSION = '1.13'
+VERSION = '1.14'
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(os.environ.get('XDG_DATA_HOME') or os.path.expanduser('~/.local/share'), 'kjt-invest')
 OLD_DIR = os.path.join(os.path.expanduser('~/.local/share'), 'investment-tracker')   # where 1.0-1.2 (Investment Tracker) kept the data
@@ -138,6 +138,11 @@ class Tracker:
                     f.flush()
                     os.fsync(f.fileno())
                 os.replace(tmp, DB)
+                self.reply(msg_id, {'ok': True})
+            elif cmd in ('syncPick', 'syncInfo', 'syncForget', 'syncList', 'syncRead', 'syncWrite', 'syncDelete'):
+                self.sync_cmd(msg_id, cmd, args)
+            elif cmd == 'copyText':
+                self.copy_text(args.get('text', ''))
                 self.reply(msg_id, {'ok': True})
             elif cmd == 'getPrefs':
                 # small settings readable before unlocking (look, passcode length, fingerprint)
@@ -372,8 +377,10 @@ class Tracker:
                 path = os.path.join(folder, 'KJT Finance update.flatpak')
                 with open(path, 'wb') as fh:
                     fh.write(data)
-                GLib.idle_add(self.open_file, path)
-                return self.reply(msg_id, {'ok': True, 'opened': True})
+                # a Flatpak installed from a file cannot replace itself, and Software refuses ("already installed"):
+                # the app shows a one-line command (with a Copy button) that reinstalls it, keeping your data
+                cmd = "flatpak install --user -y --reinstall '%s'" % path.replace("'", "'\\''")
+                return self.reply(msg_id, {'ok': True, 'manual': True, 'path': path, 'command': cmd})
             z = args.get('zip') or {}
             if not z.get('url'):
                 return self.reply(msg_id, {'error': 'no update file for this kind of install'})
@@ -467,6 +474,111 @@ class Tracker:
             dlg.add_filter(anyf)
         return dlg
 
+    def quick_add(self):
+        js = 'window.__quickAdd ? window.__quickAdd() : (window.__quickPending = true)'
+
+        def run():
+            if hasattr(self.view, 'evaluate_javascript'):
+                self.view.evaluate_javascript(js, -1, None, None, None, None, None)
+            else:
+                self.view.run_javascript(js, None, None, None)
+            return False
+        GLib.timeout_add(300, run)
+
+    def copy_text(self, text):
+        try:
+            if GTK4:
+                from gi.repository import Gdk
+                self.win.get_clipboard().set_content(Gdk.ContentProvider.new_for_value(text))
+            else:
+                from gi.repository import Gdk
+                Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(text, -1)
+        except Exception:
+            pass
+
+    # ---------- sync between devices ----------
+    # You choose a folder (for example one shared by Syncthing); the app keeps a copy of its data file there,
+    # reads the copies other devices write, and merges them. Only that folder is touched.
+    SYNC_CONF = os.path.join(DATA_DIR, 'sync.json')
+
+    def sync_dir(self):
+        try:
+            with open(self.SYNC_CONF, encoding='utf-8') as f:
+                d = json.load(f).get('dir')
+            return d if d and os.path.isdir(d) else None
+        except Exception:
+            return None
+
+    def sync_path(self, name):
+        d = self.sync_dir()
+        if not d:
+            raise Exception('no sync folder')
+        if '/' in name or name.startswith('.'):
+            raise Exception('bad file name')
+        return os.path.join(d, name)
+
+    def sync_cmd(self, msg_id, cmd, args):
+        try:
+            if cmd == 'syncPick':
+                return self.sync_pick(msg_id)
+            if cmd == 'syncInfo':
+                d = self.sync_dir()
+                return self.reply(msg_id, {'set': bool(d), 'label': d or ''})
+            if cmd == 'syncForget':
+                if os.path.exists(self.SYNC_CONF):
+                    os.remove(self.SYNC_CONF)
+                return self.reply(msg_id, {'ok': True})
+            if cmd == 'syncList':
+                d = self.sync_dir()
+                if not d:
+                    raise Exception('no sync folder')
+                files = []
+                for n in os.listdir(d):
+                    pth = os.path.join(d, n)
+                    if os.path.isfile(pth):
+                        st = os.stat(pth)
+                        files.append({'name': n, 'mtime': int(st.st_mtime * 1000), 'size': st.st_size})
+                return self.reply(msg_id, {'files': files})
+            if cmd == 'syncRead':
+                pth = self.sync_path(args['name'])
+                if not os.path.exists(pth):
+                    return self.reply(msg_id, {'missing': True})
+                with open(pth, 'rb') as f:
+                    return self.reply(msg_id, {'b64': base64.b64encode(f.read()).decode()})
+            if cmd == 'syncWrite':
+                pth = self.sync_path(args['name'])
+                tmp = os.path.join(os.path.dirname(pth), '.' + os.path.basename(pth) + '.tmp')   # Syncthing ignores dot-tmp files until renamed
+                with open(tmp, 'wb') as f:
+                    f.write(base64.b64decode(args['b64']))
+                os.replace(tmp, pth)
+                return self.reply(msg_id, {'ok': True})
+            if cmd == 'syncDelete':
+                pth = self.sync_path(args['name'])
+                if os.path.exists(pth):
+                    os.remove(pth)
+                return self.reply(msg_id, {'ok': True})
+        except Exception as e:
+            self.reply(msg_id, {'error': str(e)})
+
+    def sync_pick(self, msg_id):
+        dlg = Gtk.FileChooserNative.new('Choose the folder to sync', self.win, Gtk.FileChooserAction.SELECT_FOLDER, 'Choose', 'Cancel')
+
+        def done(d, resp):
+            try:
+                if resp == Gtk.ResponseType.ACCEPT:
+                    path = d.get_file().get_path()
+                    with open(self.SYNC_CONF, 'w', encoding='utf-8') as f:
+                        json.dump({'dir': path}, f)
+                    self.reply(msg_id, {'ok': True, 'label': path})
+                else:
+                    self.reply(msg_id, {})
+            except Exception as e:
+                self.reply(msg_id, {'error': str(e)})
+            d.destroy()
+        dlg.connect('response', done)
+        dlg.show()
+        self.dialog = dlg
+
     def export_db(self, msg_id, args):
         data = base64.b64decode(args['b64'])
         dlg = self.chooser('Export database', True, args.get('name') or 'investment-tracker.sqlite')
@@ -510,7 +622,7 @@ def main():
     if os.environ.get('KJT_WAIT_START'):   # a restart after an update: let the old window close first
         import time
         time.sleep(float(os.environ.pop('KJT_WAIT_START')))
-    app = Gtk.Application(application_id=APP_ID, flags=Gio.ApplicationFlags.FLAGS_NONE)
+    app = Gtk.Application(application_id=APP_ID, flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
     holder = {}
 
     def activate(a):
@@ -518,8 +630,16 @@ def main():
             holder['w'].win.present()
         else:
             holder['w'] = Tracker(a)
+
+    def command_line(a, cl):
+        # "--add" comes from the app's menu (right-click or long-press its icon): open on a new transaction
+        activate(a)
+        if '--add' in cl.get_arguments()[1:]:
+            holder['w'].quick_add()
+        return 0
     app.connect('activate', activate)
-    return app.run(sys.argv[:1])
+    app.connect('command-line', command_line)
+    return app.run(sys.argv)
 
 
 if __name__ == '__main__':
