@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_VERSION = '1.11';
-const SCHEMA = 9;
+const SCHEMA = 10;
 const OZT_G = 31.1034768;
 const METALS = [
   { sym: 'XAU', name: 'Gold', purity: 0.9999 },
@@ -176,6 +176,8 @@ function prepareDb() {
   run('CREATE INDEX IF NOT EXISTS tx_import ON transactions(import_id)');
   /* 1.10: a loan you do not expect back can be written off */
   if (!q('PRAGMA table_info(loans)').some(r => r.name === 'written_off')) run('ALTER TABLE loans ADD COLUMN written_off TEXT');
+  /* 1.11: remembered payees (payee -> category, or payee -> transfer to an account, like ATM -> cash in hand) */
+  run('CREATE TABLE IF NOT EXISTS payee_rules (id INTEGER PRIMARY KEY, pattern TEXT NOT NULL UNIQUE, category_id INTEGER, to_account_id INTEGER, created INTEGER)');
   for (const tb of ['properties', 'accounts', 'other_assets']) {
     const tc = q(`PRAGMA table_info(${tb})`).map(r => r.name);
     if (!tc.includes('share_pct')) { run(`ALTER TABLE ${tb} ADD COLUMN share_pct REAL`); run(`UPDATE ${tb} SET share_pct = 100.0 / owners WHERE owners > 1`); }
@@ -189,6 +191,8 @@ function prepareDb() {
     addCat('Transfers & card payments', 'save', []); addCat('Loans', 'save', ['Lent', 'Repaid']);
     setSetting('cats_v19', '1'); clearCats();
   }
+  if (!getSetting('cats_v111')) { if (!q("SELECT id FROM categories WHERE parent_id IS NULL AND name='Cash spending'").length)
+    run("INSERT INTO categories(name,parent_id,kind,sort) VALUES('Cash spending',NULL,'out',95)"); setSetting('cats_v111', '1'); clearCats(); }
   if (+getSetting('schema', 1) < SCHEMA) setSetting('schema', SCHEMA);
 }
 function isOurDb(candidate) {
@@ -1273,6 +1277,18 @@ function reconLine(acct, rc) {
   const more = cr ? rc.diff < 0 : rc.diff > 0;
   return `<div class="recon bad">${cr ? 'The bank says you owe' : 'The bank shows'} ${money(Math.abs(rc.diff), c)} ${more ? 'more' : 'less'} than your transactions add up to: one may be missing or entered twice.</div>`;
 }
+/* you counted your wallet and have less than your records say: record the gap as cash spending, in one tap */
+function offerCashSpending(accountId) {
+  const a = q('SELECT * FROM accounts WHERE id=?', [accountId])[0]; if (!a) return;
+  const bs = q('SELECT * FROM account_balances WHERE account_id=? ORDER BY date DESC, id DESC LIMIT 2', [accountId]);
+  if (!bs.length) return; const prev = bs[1] || { date: '0000-00-00', balance: 0, created: 0 }, rc = reconcile(a, bs[0], prev);
+  const exp = rc ? rc.expected : prev.balance, gap = exp - bs[0].balance;
+  if (!(gap > 0.009)) return;
+  setTimeout(() => ask(`You have ${money(gap, a.currency || home())} less cash than your records. Record it as cash spending (not itemised)?`, 'Record it').then(y => { if (!y) return;
+    const cat = (q("SELECT id FROM categories WHERE parent_id IS NULL AND name='Cash spending'")[0] || {}).id || null;
+    run('INSERT INTO transactions(account_id,date,kind,amount,category_id,payee,note,created) VALUES(?,?,?,?,?,?,?,?)', [accountId, bs[0].date, 'out', +gap.toFixed(2), cat, 'Cash spending', 'Not itemised (from counting your cash)', (bs[0].created || Date.now()) - 1]);
+    save(); toast('Recorded'); render(); }), 400);
+}
 function lastReconText(accountId) {   /* for the message after a new balance check */
   const a = q('SELECT * FROM accounts WHERE id=?', [accountId])[0]; if (!a) return '';
   const bs = q('SELECT * FROM account_balances WHERE account_id=? ORDER BY date DESC, id DESC LIMIT 2', [accountId]);
@@ -1373,7 +1389,7 @@ function balanceForm(accountId, balId) {
       if (a.type === 'credit' && v < 0) return bad('Enter what you owe as a positive amount.');
       if (balId) run('UPDATE account_balances SET date=?,balance=?,note=? WHERE id=?', [d.date, v, d.note.trim(), balId]);
       else run('INSERT INTO account_balances(account_id,date,balance,note,created) VALUES(?,?,?,?,?)', [accountId, d.date, v, d.note.trim(), Date.now()]);
-      save(); closeSheet(); render(); if (!balId) { const rt = lastReconText(accountId); toast('Balance saved' + rt); } };
+      save(); closeSheet(); render(); if (!balId) { const rt = lastReconText(accountId); toast('Balance saved' + rt); if (a.type === 'cash') offerCashSpending(accountId); } };
   });
 }
 
@@ -1724,7 +1740,7 @@ function goBack() {
 window.__onBack = () => goBack();
 window.addEventListener('resize', () => { for (const [id, k] of [['heroS', 'hpage'], ['cfS', 'cfPage']]) { const el = document.getElementById(id); if (el) fitSwipe(el, state[k] || 0); } });
 view().addEventListener('click', e => {
-  const el = e.target.closest('[data-act],[data-go],[data-metal],[data-prop],[data-item],[data-pval],[data-cfy],[data-cfp],[data-rent],[data-price],[data-fx],[data-chart],[data-range],[data-acct],[data-bal],[data-asset],[data-aval],[data-hpage],[data-prange],[data-unfav],[data-ie],[data-asec],[data-msec],[data-txm],[data-tx],[data-rec],[data-cat],[data-addsub],[data-addcat],[data-rp],[data-remdo],[data-remskip],[data-loan],[data-lpay],[data-txper]'); if (!el) return;
+  const el = e.target.closest('[data-act],[data-go],[data-metal],[data-prop],[data-item],[data-pval],[data-cfy],[data-cfp],[data-rent],[data-price],[data-fx],[data-chart],[data-range],[data-acct],[data-bal],[data-asset],[data-aval],[data-hpage],[data-prange],[data-unfav],[data-ie],[data-asec],[data-msec],[data-txm],[data-tx],[data-rec],[data-cat],[data-addsub],[data-addcat],[data-rp],[data-remdo],[data-remskip],[data-loan],[data-lpay],[data-txper],[data-rule]'); if (!el) return;
   const d = el.dataset;
   if (d.chart) { state.chart = d.chart; const st = view().scrollTop; render(); view().scrollTop = st; }
   else if (d.range) { state.range = d.range; const st = view().scrollTop; render(); view().scrollTop = st; }
@@ -1738,6 +1754,7 @@ view().addEventListener('click', e => {
   else if (d.rent) rentForm(state.propertyId, +d.rent);
   else if (d.asec) { state.tab = d.asec; state.propertyId = null; state.accountId = null; state.assetId = null; state.loanId = null; render(); view().scrollTop = 0; }
   else if (d.msec) { state.msec = d.msec; render(); view().scrollTop = 0; }
+  else if (d.rule) ruleForm(+d.rule);
   else if (d.txper) { state.txPer = d.txper; render(); }
   else if (d.txm) { state.txMonth = d.txm; const st = view().scrollTop; render(); view().scrollTop = st; }
   else if (d.tx) { if (state.sel) pickTx(el, +d.tx); else txForm(+d.tx); }
@@ -1777,6 +1794,7 @@ view().addEventListener('click', e => {
     case 'edit-loan': loanForm(+d.id); break;
     case 'add-loanpay': loanPayForm(+d.id); break;
     case 'bank-import': bankImport(d.id ? +d.id : null); break;
+    case 'add-rule': ruleForm(); break;
     case 'tx-clear': state.txCat = ''; state.txSearch = ''; render(); break;
     case 'select-tx': state.sel = new Set(); render(); selBar(); break;
     case 'sort-uncat': state.txCat = 'none'; render(); state.sel = new Set(Array.from(view().querySelectorAll('[data-tx]')).map(r => +r.dataset.tx)); render(); selBar();
@@ -2084,7 +2102,7 @@ const DEFAULT_CATS = [
   ['out', 'Travel', []], ['out', 'Taxes', []], ['out', 'Other', []],
   ['in', 'Salary', []], ['in', 'Rent received', []], ['in', 'Interest', []], ['in', 'Gifts received', []], ['in', 'Other income', []],
   ['save', 'Savings & investments', ['Precious metals', 'Property', 'Big purchases']],
-  ['save', 'Transfers & card payments', []], ['save', 'Loans', ['Lent', 'Repaid']],
+  ['save', 'Transfers & card payments', []], ['save', 'Loans', ['Lent', 'Repaid']], ['out', 'Cash spending', []],
 ];
 const KIND_NAME = { out: 'Expense', in: 'Income', transfer: 'Transfer' };
 const FREQS = { weekly: 'Every week', biweekly: 'Every 2 weeks', monthly: 'Every month', yearly: 'Every year' };
@@ -2303,7 +2321,7 @@ function txForm(id, copyOf, preset) {
     box.querySelectorAll('[name=kind]').forEach(r => r.onchange = sync); const fr = box.querySelector('[name=freq]'); if (fr) fr.onchange = sync; sync();
     const pe = box.querySelector('[name=payee]');   /* a payee you used before brings back its category */
     if (pe && !id) pe.onchange = () => { const cs = box.querySelector('[name=category_id]'); if (cs.value) return;
-      const last = q("SELECT category_id, kind FROM transactions WHERE payee=? AND category_id IS NOT NULL ORDER BY date DESC, id DESC LIMIT 1", [pe.value.trim()])[0];
+      const rl = matchRule(pe.value), last = rl && rl.category_id ? { category_id: rl.category_id, kind: (cats().byId[rl.category_id] || {}).kind === 'in' ? 'in' : 'out' } : q("SELECT category_id, kind FROM transactions WHERE payee=? AND category_id IS NOT NULL ORDER BY date DESC, id DESC LIMIT 1", [pe.value.trim()])[0];
       if (!last) return; const kr = box.querySelector(`[name=kind][value="${last.kind}"]`); if (kr && !kr.checked) { kr.checked = true; sync(); } cs.value = String(last.category_id); };
     box.onclick = e => { const f = e.target.dataset.f; if (!f) return;
       if (f === 'cancel') return closeSheet();
@@ -2313,7 +2331,9 @@ function txForm(id, copyOf, preset) {
       if (!(amt > 0)) return bad('Enter the amount.');
       if (!/^\d{4}-\d{2}-\d{2}$/.test(d.date)) return bad('Enter the date.');
       if (kind === 'transfer' && d.to_account_id === d.account_id) return bad('Choose two different accounts.');
-      const vals = [+d.account_id, d.date, kind, amt, kind === 'transfer' ? null : (+d.category_id || null), kind === 'transfer' ? null : (d.payee || '').trim(), (d.note || '').trim(), kind === 'transfer' ? +d.to_account_id : null, d.link || null];
+      const vals = [+d.account_id, d.date, kind, amt, kind === 'transfer' ? null : (+d.category_id || null), kind === 'transfer' ? (t.payee || null) : (d.payee || '').trim(), (d.note || '').trim(), kind === 'transfer' ? +d.to_account_id : null, d.link || null];
+      /* remember this payee for next time: its category, or (an ATM withdrawal made into a transfer) the account it goes to */
+      if (vals[5]) { if (kind === 'transfer') { if (t.kind !== 'transfer' && t.payee) learnRule(t.payee, null, vals[7]); } else if (vals[4] && vals[4] !== t.category_id) learnRule(vals[5], vals[4], null); }
       if (id) run('UPDATE transactions SET account_id=?,date=?,kind=?,amount=?,category_id=?,payee=?,note=?,to_account_id=?,link=? WHERE id=?', vals.concat([id]));
       else {
         let rid = null;
@@ -2373,8 +2393,40 @@ function categoriesHtml() {
       ${C.rows.filter(c => c.parent_id === t.id).map(c => `<button class="catn sub2" data-cat="${c.id}">› ${esc(c.name)}</button>`).join('')}
       <button class="catadd" data-addsub="${t.id}">+ subcategory</button></div>`).join('')}</div>
       <div class="btns"><button class="btn light" data-addcat="${kind}">+ ${title.replace(/s$/, '')} category</button></div></div>`; };
-  return block('out', 'Expenses') + block('in', 'Income') + block('save', 'Savings & investments') +
+  return block('out', 'Expenses') + block('in', 'Income') + block('save', 'Savings & investments') + rulesHtml() +
     `<p class="sub" style="padding:0 6px">Tap a name to rename it. Subcategories go one level deep only, to keep things simple. Savings & investments (like buying metals) are not counted as spending.</p>`;
+}
+function rulesHtml() {
+  const rs = q('SELECT * FROM payee_rules ORDER BY pattern'), A = Object.fromEntries(q('SELECT id, name FROM accounts').map(a => [a.id, a.name]));
+  return `<h2 class="sect">Remembered payees <span class="sub">used when you import and type</span></h2><div class="card">` +
+    (rs.length ? `<div class="txns" style="margin-top:0">${rs.map(r => `<div class="txn" data-rule="${r.id}"><div class="txn-top"><span class="txn-desc">${esc(r.pattern.toUpperCase())}</span></div>
+      <div class="txn-body"><div class="sub">→ ${r.to_account_id ? 'transfer to ' + esc(A[r.to_account_id] || '?') : esc(cats().label(r.category_id))}</div></div></div>`).join('')}</div>`
+      : `<p class="sub">None yet. When you give a payee a category, the app remembers it here, and imports use it next time.</p>`) +
+    `<div class="btns"><button class="btn light" data-act="add-rule">+ Add one</button></div></div>`;
+}
+function ruleForm(id) {
+  const r = id ? q('SELECT * FROM payee_rules WHERE id=?', [id])[0] : {}, accts = q('SELECT * FROM accounts ORDER BY name');
+  openSheet(`<h2>${id ? 'Remembered payee' : 'New remembered payee'}</h2>
+    ${field('pattern', 'Description contains', r.pattern ? r.pattern.toUpperCase() : '', 'autocomplete="off" placeholder="e.g. METRO or ATM"')}
+    <div class="freqs" style="grid-template-columns:1fr 1fr"><label class="freqo"><input type="radio" name="what" value="cat"${r.to_account_id ? '' : ' checked'}><span>Category</span></label><label class="freqo"><input type="radio" name="what" value="acct"${r.to_account_id ? ' checked' : ''}><span>Transfer to an account</span></label></div>
+    <label class="f" id="r-cat"><span>Category</span><select name="category_id">${catOptions('any', r.category_id)}</select></label>
+    <label class="f" id="r-acct"><span>Account (for example your cash in hand)</span><select name="to_account_id">${accts.map(a => `<option value="${a.id}"${a.id === r.to_account_id ? ' selected' : ''}>${esc(a.name)}</option>`).join('')}</select></label>
+    <div class="btns"><button class="btn" data-f="save">Save</button><button class="btn light" data-f="cancel">Cancel</button></div>
+    ${id ? '<div class="btns"><button class="btn danger" data-f="delete">Forget it</button></div>' : ''}`, box => {
+    const sync = () => { const w = (box.querySelector('[name=what]:checked') || {}).value; box.querySelector('#r-cat').style.display = w === 'cat' ? '' : 'none'; box.querySelector('#r-acct').style.display = w === 'acct' ? '' : 'none'; };
+    box.querySelectorAll('[name=what]').forEach(x => x.onchange = sync); sync();
+    box.onclick = e => { const f = e.target.dataset.f; if (!f) return;
+      if (f === 'cancel') return closeSheet();
+      if (f === 'delete') { run('DELETE FROM payee_rules WHERE id=?', [id]); save(); closeSheet(); render(); return; }
+      const d = formData(box), pat = normPayee(d.pattern);
+      if (!pat) return bad('Type a word from the description.');
+      const cat = d.what === 'cat' ? +d.category_id || null : null, acc = d.what === 'acct' ? +d.to_account_id || null : null;
+      if (!cat && !acc) return bad(d.what === 'cat' ? 'Choose a category.' : 'Choose an account.');
+      if (q('SELECT id FROM payee_rules WHERE pattern=? AND id<>?', [pat, id || -1]).length) return bad('There is already one for this description.');
+      if (id) run('UPDATE payee_rules SET pattern=?, category_id=?, to_account_id=? WHERE id=?', [pat, cat, acc, id]);
+      else run('INSERT INTO payee_rules(pattern,category_id,to_account_id,created) VALUES(?,?,?,?)', [pat, cat, acc, Date.now()]);
+      save(); closeSheet(); render(); };
+  });
 }
 function catForm(id, parentId, kind) {
   const c = id ? q('SELECT * FROM categories WHERE id=?', [id])[0] : { parent_id: parentId || null, kind: kind || (parentId ? q('SELECT kind FROM categories WHERE id=?', [parentId])[0].kind : 'out') };
@@ -2838,7 +2890,7 @@ function payeeMemory() {   /* the category you chose most recently for each paye
 function prepareImport(parsed, accountId) {
   const a = q('SELECT * FROM accounts WHERE id=?', [accountId])[0], credit = a && a.type === 'credit';
   const have = q('SELECT * FROM transactions WHERE account_id=? OR to_account_id=?', [accountId, accountId]);
-  const refs = new Set(have.filter(t => t.import_id).map(t => t.import_id)), used = new Set(), mem = payeeMemory(), cardPay = transferCat();
+  const refs = new Set(have.filter(t => t.import_id).map(t => t.import_id)), used = new Set(), mem = payeeMemory(), cardPay = transferCat(), rules = payeeRules(), cash = cashAccount(accountId);
   const seen = {}, rows = [];
   for (const x of parsed.txs) {
     const base = `${x.date}|${x.amount.toFixed(2)}|${normPayee(x.payee)}`; seen[base] = (seen[base] || 0) + 1;
@@ -2852,25 +2904,37 @@ function prepareImport(parsed, accountId) {
       /* already imported from another kind of file (a CSV after an OFX…): same day, same amount, same payee */
       else if (have.some(t => t.import_id && !used.has(t.id) && Math.abs(dnum(t.date) - dnum(x.date)) <= 3 && Math.abs(t.amount - abs) < 0.005 && firstWord(t.payee) === firstWord(x.payee) && used.add(t.id))) dup = true;
     }
-    const kind = x.amount >= 0 ? 'in' : 'out';
-    let cat = mem.get(x.payee);
+    const kind = x.amount >= 0 ? 'in' : 'out', rule = matchRule(x.payee, rules);
+    let cat = null, transferTo = null;
+    if (rule && rule.to_account_id && rule.to_account_id !== accountId && q('SELECT id FROM accounts WHERE id=?', [rule.to_account_id]).length) transferTo = rule.to_account_id;
+    else if (rule && rule.category_id) cat = rule.category_id;
+    /* cash taken out at an ATM goes into your cash account: it is not spending */
+    if (!cat && !transferTo && !credit && kind === 'out' && a && a.type !== 'cash' && ATM_RE.test(x.payee + ' ' + (x.memo || ''))) transferTo = cash ? cash.id : 'new';
+    if (!cat && !transferTo) cat = mem.get(x.payee);
     if (!cat && credit && kind === 'in') cat = cardPay;   /* a payment to the card is not income */
     if (!cat && !credit && kind === 'out' && /\b(visa|master ?card|amex|american express|credit card|card payment)\b/i.test(x.payee + ' ' + (x.memo || ''))) cat = cardPay;   /* paying your card from the bank */
     if (!cat && kind === 'in' && /\binter[eê]ts?\b|\binterest\b/i.test(x.payee + ' ' + (x.memo || ''))) cat = interestCat();
-    rows.push(Object.assign({}, x, { iid, dup, kind, cat }));
+    rows.push(Object.assign({}, x, { iid, dup, kind: transferTo ? 'transfer' : kind, cat: transferTo ? null : cat, transferTo }));
   }
   return { rows, account: a };
 }
 /* writes one statement into one account; the caller wraps it in BEGIN / COMMIT */
 function commitImport(parsed, id, prep) {
   prep = prep || prepareImport(parsed, id);
-  const a = prep.account, now = Date.now(), dates = parsed.txs.map(x => x.date).sort(); let n = 0;
+  const a = prep.account, now = Date.now(), dates = parsed.txs.map(x => x.date).sort(); let n = 0, newCash = null;
   for (const r of prep.rows) {
     if (r.dup === 'match') { run('UPDATE transactions SET import_id=? WHERE id=?', [r.iid, r.matchId]); continue; }
     if (r.dup) continue;
+    let from = id, to = null;
+    if (r.transferTo) {
+      let dest = r.transferTo;
+      if (dest === 'new') { if (!newCash) { run("INSERT INTO accounts(name,type,currency,owners,share_pct) VALUES('Cash in hand','cash',?,1,100)", [a.currency || home()]); newCash = q('SELECT last_insert_rowid() id')[0].id; } dest = newCash; }
+      if (r.amount < 0) { from = id; to = dest; } else { from = dest; to = id; }
+    }
     run('INSERT INTO transactions(account_id,date,kind,amount,category_id,payee,note,to_account_id,link,recurring_id,created,import_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
-      [id, r.date, r.kind, Math.abs(r.amount), r.cat, String(r.payee || '').slice(0, 120), (r.memo || '').slice(0, 200), null, null, null, now, r.iid]); n++;
+      [from, r.date, r.kind, Math.abs(r.amount), r.cat, String(r.payee || '').slice(0, 120), (r.memo || '').slice(0, 200), to, null, null, now, r.iid]); n++;
   }
+  if (newCash) toastLater = 'A "Cash in hand" account was made for your ATM withdrawals.';
   if (parsed.balance != null) {
     const bd = parsed.balDate || dates[dates.length - 1] || today(), bv = a.type === 'credit' ? Math.abs(parsed.balance) : parsed.balance;
     if (!q('SELECT id FROM account_balances WHERE account_id=? AND date=? AND ABS(balance-?)<0.005', [id, bd, bv]).length)
@@ -2884,6 +2948,7 @@ function parseOfxAll(t) {
   while ((m = re.exec(t))) { const p = parseOfx((m[1] ? '<CCSTMTRS>' : '<STMTRS>') + m[2]); p.kindHint = (ofxTag(m[2], 'ACCTTYPE') || '').toUpperCase(); parts.push(p); }
   return parts.length ? parts : [parseOfx(t)];
 }
+let toastLater = '';
 const tail4 = s => s ? '…' + String(s).replace(/\s/g, '').slice(-4) : '';
 function multiReview(parts) {
   let map = {}; try { map = JSON.parse(getSetting('import_map', '{}')) || {}; } catch (e) { map = {}; }
@@ -2917,6 +2982,23 @@ function multiReview(parts) {
       state.tab = 'accounts'; state.accountId = null; render(); view().scrollTop = 0; };
   });
 }
+/* ---- remembered payees ----
+   Every time you give a payee a category (one transaction or several), the app remembers it as a rule;
+   turning a withdrawal into a transfer to an account (ATM -> Cash in hand) is remembered too.
+   Imports use the rules first. You can see, change and delete them under Cash flow > Categories. */
+const ATM_RE = /\b(atm|abm|gab|retrait|guichet|withdrawal|cash withdrawal|wdl)\b/i;
+function payeeRules() { return q('SELECT * FROM payee_rules ORDER BY LENGTH(pattern) DESC'); }
+function matchRule(payee, rules) {
+  const n = normPayee(payee); if (!n) return null;
+  return (rules || payeeRules()).find(r => n === r.pattern || (r.pattern.length >= 4 && n.includes(r.pattern))) || null;
+}
+function learnRule(payee, catId, toAcct) {
+  const pat = normPayee(payee); if (!pat || pat.length < 2 || (!catId && !toAcct)) return;
+  const ex = q('SELECT id FROM payee_rules WHERE pattern=?', [pat])[0];
+  if (ex) run('UPDATE payee_rules SET category_id=?, to_account_id=? WHERE id=?', [catId || null, toAcct || null, ex.id]);
+  else run('INSERT INTO payee_rules(pattern,category_id,to_account_id,created) VALUES(?,?,?,?)', [pat, catId || null, toAcct || null, Date.now()]);
+}
+function cashAccount(exceptId) { return q("SELECT * FROM accounts WHERE type='cash' AND id<>? ORDER BY id LIMIT 1", [exceptId || -1])[0] || null; }
 function transferCat() { const r = cats().rows.find(c => !c.parent_id && c.name === 'Transfers & card payments'); return r ? r.id : null; }
 /* ---- the screens ---- */
 async function bankImport(accountId) {
@@ -2975,11 +3057,12 @@ function importReview(parsed, accountId) {
     const show = () => {
       const id = +box.querySelector('[name=acct]').value; prep = prepareImport(parsed, id);
       const a = prep.account, c = a.currency || home(), fresh = prep.rows.filter(r => !r.dup), dup = prep.rows.length - fresh.length;
-      const guessed = fresh.filter(r => r.cat).length;
+      const guessed = fresh.filter(r => r.cat || r.transferTo).length, atm = fresh.filter(r => r.transferTo).length, cashA = cashAccount(id);
       box.querySelector('#imp-sum').innerHTML = `<div class="ie3"><div class="stat"><div class="k">New</div><div class="v">${fresh.length}</div></div><div class="stat"><div class="k">Already here</div><div class="v">${dup}</div></div><div class="stat"><div class="k">Categorised</div><div class="v">${guessed}</div></div></div>
         <p class="sub" style="margin:8px 0">${fmtDate(dates[0])} to ${fmtDate(dates[dates.length - 1])}${parsed.balance != null ? ` · balance in the file: <b>${money(a.type === 'credit' ? Math.abs(parsed.balance) : parsed.balance, c)}</b>${a.type === 'credit' ? ' owed' : ''} on ${fmtDate(parsed.balDate || dates[dates.length - 1])}` : ''}</p>
         ${parsed.currency && a.currency && parsed.currency !== a.currency ? `<div class="warn">The file is in ${esc(parsed.currency)} but this account is in ${esc(a.currency)}.</div>` : ''}
         ${fresh.length ? `<div class="preview">${fresh.slice(0, 6).map(r => `${fmtDate(r.date)} · ${esc((r.payee || '').slice(0, 26))} · <span class="${r.amount < 0 ? 'down' : 'up'}">${r.amount < 0 ? '−' : '+'}${money(Math.abs(r.amount), c)}</span>${r.cat ? ' · <i>' + esc(cats().label(r.cat)) + '</i>' : ''}`).join('<br>')}${fresh.length > 6 ? '<br>…and ' + (fresh.length - 6) + ' more' : ''}</div>` : '<p class="sub">Everything in this file is already in the app.</p>'}
+        ${atm ? `<p class="sub" style="margin:0 0 8px">💵 <b>${atm}</b> cash withdrawal${atm > 1 ? 's go' : ' goes'} to ${cashA ? esc(cashA.name) : 'a new "Cash in hand" account'}: moving money to your wallet is not spending.</p>` : ''}
         <p class="hint">Transactions without a category can be sorted later: tap one under Cash flow. Next time, the same payee gets the same category by itself.</p>`;
       box.querySelector('[data-f=go]').textContent = fresh.length ? `Import ${fresh.length}` : 'Update the balance only';
     };
@@ -2990,7 +3073,7 @@ function importReview(parsed, accountId) {
       db.exec('BEGIN');
       try { n = commitImport(parsed, id, prep); db.exec('COMMIT'); } catch (err) { db.exec('ROLLBACK'); return bad('Import failed: ' + err.message); }
       if (parsed.acctId) { map[parsed.acctId] = id; setSetting('import_map', JSON.stringify(map)); }
-      save(); closeSheet(); toast((n ? n + ' transaction' + (n > 1 ? 's' : '') + ' imported' : 'Nothing new; balance updated') + (parsed.balance != null ? lastReconText(id) : ''));
+      save(); closeSheet(); toast((n ? n + ' transaction' + (n > 1 ? 's' : '') + ' imported' : 'Nothing new; balance updated') + (parsed.balance != null ? lastReconText(id) : '')); if (toastLater) { const m = toastLater; toastLater = ''; setTimeout(() => toast(m), 2600); }
       state.tab = 'accounts'; state.accountId = id; render(); view().scrollTop = 0; };
   });
 }
@@ -3044,7 +3127,8 @@ function multiEditForm(ids) {
         const s2 = [], v2 = [];
         sets.forEach((s, i) => { if (t.kind === 'transfer' && /category_id|payee/.test(s)) return; if (/account_id/.test(s) && t.kind === 'transfer' && vals[i] === t.to_account_id) return; s2.push(s); v2.push(vals[i]); });
         if (s2.length) run(`UPDATE transactions SET ${s2.join(',')} WHERE id=?`, v2.concat([id])); }
-      db.exec('COMMIT'); save(); closeSheet(); toast(ids.length + ' changed'); endSel(); };
+      if (d.cat !== 'keep' && d.cat !== 'none') for (const id of ids) { const t = q('SELECT payee, kind FROM transactions WHERE id=?', [id])[0]; if (t && t.kind !== 'transfer' && t.payee) learnRule(t.payee, +d.cat, null); }
+      db.exec('COMMIT'); save(); closeSheet(); toast(ids.length + ' changed · remembered for next time'); endSel(); };
   });
 }
 /* a long press on a transaction starts choosing several */
