@@ -1,9 +1,9 @@
-/* KJT Finance 1.16 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
+/* KJT Finance 1.17 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
    All data stays in one SQLite file on the device. The only network calls are the
    price updates (metal prices from gold-api.com, exchange rates from the European Central Bank). */
 'use strict';
 
-const APP_VERSION = '1.16';
+const APP_VERSION = '1.17';
 const SCHEMA = 11;
 const OZT_G = 31.1034768;
 const METALS = [
@@ -692,7 +692,28 @@ function render() {
     view().insertAdjacentHTML('afterbegin', `<div class="subnav">${ASECS.map(([k, l]) => subBtn(k, l, k === state.tab, 'data-asec')).join('')}</div>`);
   }
   enhanceView();
+  markAmounts();
   navAfter();
+}
+/* "hide amounts" (the eye): find every amount on the page, inside any sentence, and wrap it so it can be blurred.
+   Market prices (Prices page) and Settings are left alone: they are not your money. */
+const AMT_RE = /[-+\u2212]?\s?(?:[A-Z]{1,3})?[$\u20ac\u00a3\u00a5\u20b9]\s?\d[\d,.\u00a0\u202f]*\d|[-+\u2212]?\s?(?:[A-Z]{1,3})?[$\u20ac\u00a3\u00a5\u20b9]\s?\d|\d[\d,.\u00a0\u202f]*\s?[\u20ac\u00a3]|[-+\u2212]?\d[\d,]*(?:\.\d+)?\s?%|[-+\u2212]?\d{1,3}(?:,\d{3})+(?:\.\d+)?|\b\d+\.\d{2}\b/g;
+function markAmounts(root) {
+  if (['markets', 'currency', 'more'].includes(state.tab)) return;
+  root = root || view(); if (!root) return;
+  const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT), nodes = [];
+  while (w.nextNode()) { const n = w.currentNode, el = n.parentElement;
+    if (!el || el.closest('.amt, input, textarea, select, option, script, style, .nomask')) continue;
+    AMT_RE.lastIndex = 0; if (AMT_RE.test(n.textContent)) nodes.push(n); }
+  for (const n of nodes) {
+    const el = n.parentElement;
+    if (el.closest('svg')) { el.classList.add('amt'); continue; }
+    const t = n.textContent, f = document.createDocumentFragment(); let i = 0; AMT_RE.lastIndex = 0; let m;
+    while ((m = AMT_RE.exec(t))) { if (m.index > i) f.append(t.slice(i, m.index));
+      const sp = document.createElement('span'); sp.className = 'amt'; sp.textContent = m[0]; f.append(sp); i = m.index + m[0].length; }
+    if (i < t.length) f.append(t.slice(i));
+    n.replaceWith(f);
+  }
 }
 /* metal prices in the unit you like: troy ounce (the market's), gram, kilogram, tola, tael */
 const PUNITS = { ozt: ['troy ounce', 'oz t', 31.1034768], g: ['gram', 'g', 1], kg: ['kilogram', 'kg', 1000], tola: ['tola', 'tola', 11.6638038], tael: ['tael', 'tael', 37.429], oz: ['ounce (avoirdupois)', 'oz', 28.349523125] };
@@ -953,7 +974,7 @@ function bindChart() {
       const d2 = svg.querySelector('.dot2'); if (d2) { d2.setAttribute('cx', X); d2.setAttribute('cy', c.geo.y(p[2])); d2.setAttribute('visibility', 'visible'); }
       tip.innerHTML = `<b>${new Date(p[0] + 'T12:00:00').toLocaleDateString('en-CA', { year: 'numeric', month: 'short', day: 'numeric' })}</b><br>` +
         (c.two ? `${c.names[0]} ${money(p[1], c.M, { dec: 0 })}<br>${c.names[1]} ${money(p[2], c.M, { dec: 0 })}` : money(p[1], c.M));
-      tip.hidden = false; const left = X / c.geo.W * r.width; tip.style.left = Math.min(Math.max(left - tip.offsetWidth / 2, 0), r.width - tip.offsetWidth) + 'px';
+      markAmounts(tip); tip.hidden = false; const left = X / c.geo.W * r.width; tip.style.left = Math.min(Math.max(left - tip.offsetWidth / 2, 0), r.width - tip.offsetWidth) + 'px';
     };
     const hide = () => { tip.hidden = true; svg.querySelectorAll('.xh,.dot1,.dot2').forEach(el => el.setAttribute('visibility', 'hidden')); };
     const hit = svg.querySelector('.hit');

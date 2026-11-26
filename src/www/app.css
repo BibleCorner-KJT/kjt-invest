@@ -550,3 +550,8 @@ ol.steps { margin: 8px 0; padding-left: 20px; display: grid; gap: 6px; font-size
 .item.fav .fn { min-width: 0; }
 .conv .f > span .cbadge { min-width: 24px; height: 24px; font-size: .68rem; margin-right: 4px; }
 .segs.units { margin-bottom: 10px; }
+
+/* 1.17: every amount found on the page (also inside sentences and charts) hides with the eye */
+.hideamt .amt { filter: blur(6px); user-select: none; }
+.hideamt span.amt { display: inline-block; }
+.hideamt svg .amt { opacity: 0; }
