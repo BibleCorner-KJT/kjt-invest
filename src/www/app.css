@@ -503,3 +503,36 @@ h2.foldh.closed::after { white-space: nowrap; }
 
 /* ---------- 1.14: sync ---------- */
 ol.steps { margin: 8px 0; padding-left: 20px; display: grid; gap: 6px; font-size: .92rem; }
+
+/* ---------- 1.15: accounts as a clean list (like MMEX) ---------- */
+.acard h2.gh { align-items: center; font-size: 1.02rem; }
+.gico { width: 22px; height: 22px; fill: none; stroke: var(--brand); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; vertical-align: -5px; margin-right: 8px; }
+.alist { display: grid; }
+.arowx { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 11px 2px; border-top: 1px solid var(--soft); cursor: pointer; }
+.arowx:active { background: var(--soft); }
+.arowx .an { font-weight: 700; font-size: 1.02rem; }
+.arowx .ar { text-align: right; }
+.arowx .av { font-weight: 800; font-size: 1.12rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.arowx .ar .sub { font-size: .8rem; }
+.arowx .limitbar { grid-column: 1 / -1; margin-top: 4px; }
+/* ---------- 1.15: this month ---------- */
+.mrow { display: grid; grid-template-columns: 84px auto 1fr; align-items: center; gap: 10px; padding: 6px 0; }
+.mrow .k { font-weight: 750; } .mrow .v { font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mrow .mb { height: 12px; border-radius: 6px; background: var(--soft); overflow: hidden; }
+.mrow .mb i { display: block; height: 100%; border-radius: 6px; }
+.mbi { background: var(--up); } .mbo { background: var(--down); }
+.mrow.tot { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 8px; }
+/* ---------- 1.15: hide amounts ---------- */
+#eye .ec { display: none; } #eye.on .ec { display: inline; } #eye.on .eo { display: none; }
+.hideamt :is(.big, .v, .strongv, .txa, .av, .gt, .ptot, .ftot, .ap, .cbt b, .notes b, .stat .v, .arowx .ar .sub, td.n) { filter: blur(7px); user-select: none; }
+/* ---------- 1.15: import review, payees ---------- */
+.maybes { display: grid; gap: 6px; margin-bottom: 8px; }
+.maybe { display: flex; gap: 10px; align-items: flex-start; padding: 8px; border: 1px solid var(--line); border-radius: 10px; font-size: .88rem; }
+.maybe input { margin-top: 3px; }
+#cut-wrap input[type=date] { width: auto; display: inline-block; padding: 4px 6px; margin-left: 4px; }
+.prow .txl { cursor: pointer; } .prow .txa { cursor: pointer; }
+.prow .tick { cursor: pointer; }
+.btn.small { padding: 6px 10px; font-size: .82rem; }
+/* ---------- 1.15: room for the title next to four buttons; five sub-menu buttons ---------- */
+@media (max-width: 480px) { header#top .iconbtn { width: 38px; } header#top h1 { font-size: 1.08rem; } }
+.subnav:has(button:nth-child(5)) button { font-size: .66rem; letter-spacing: -.02em; }

@@ -1,9 +1,9 @@
-/* KJT Finance 1.14 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
+/* KJT Finance 1.15 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
    All data stays in one SQLite file on the device. The only network calls are the
    price updates (metal prices from gold-api.com, exchange rates from the European Central Bank). */
 'use strict';
 
-const APP_VERSION = '1.14';
+const APP_VERSION = '1.15';
 const SCHEMA = 11;
 const OZT_G = 31.1034768;
 const METALS = [
@@ -665,6 +665,7 @@ const SUBICON = {
   tx: () => `<svg class="sico" viewBox="0 0 24 24"><rect class="f" x="4" y="3" width="16" height="18" rx="2.5"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>`,
   reports: () => `<svg class="sico" viewBox="0 0 24 24"><path class="f" d="M12 3a9 9 0 1 0 9 9h-9z"/><path d="M12 3a9 9 0 1 0 9 9h-9zM15 3.5A8 8 0 0 1 20.5 9H15z"/></svg>`,
   recurring: () => `<svg class="sico" viewBox="0 0 24 24"><circle class="f" cx="12" cy="12" r="8.5" stroke="none"/><path d="M19.5 9A8 8 0 0 0 5 7.5M4.5 15A8 8 0 0 0 19 16.5M5 3.5v4h4M19 20.5v-4h-4"/></svg>`,
+  payees: () => `<svg class="sico" viewBox="0 0 24 24"><circle class="f" cx="12" cy="8" r="4"/><circle cx="12" cy="8" r="4"/><path d="M4 20c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>`,
   categories: () => `<svg class="sico" viewBox="0 0 24 24"><path class="f" d="M3.5 12.5V4.5a1 1 0 0 1 1-1h8l8 8-9 9z"/><path d="M3.5 12.5V4.5a1 1 0 0 1 1-1h8l8 8-9 9z"/><circle cx="8" cy="8" r="1.5"/></svg>`,
 };
 const subBtn = (k, l, on, attr) => `<button class="${on ? 'on' : ''}" ${attr}="${k}">${SUBICON[k] ? SUBICON[k]() : ''}<span>${l}</span></button>`;
@@ -712,10 +713,12 @@ function renderOverview() {
   let h = missingWarn() + `<h2 class="sect" data-ftot="${esc(whole(t.total, H))}">Summary <span class="sub">swipe the box for more</span></h2>` + heroHtml(t);
   if (!nAll) {
     h += `<div class="card"><h2>Welcome</h2><p class="sub">Add what you own. Everything stays on this device, in one file you can export at any time.</p>
-      <div class="btns"><button class="btn" data-act="add-metal">Add precious metal</button><button class="btn" data-act="add-property">Add property</button><button class="btn" data-act="add-account">Add bank account</button><button class="btn" data-act="add-asset">Add other asset</button></div></div>`;
+      <div class="btns"><button class="btn" data-act="add-metal">Add precious metal</button><button class="btn" data-act="add-property">Add property</button><button class="btn" data-act="add-account">Add bank account</button><button class="btn" data-act="add-asset">Add other asset</button></div>
+      <div class="btns"><button class="btn light" data-act="mmex-import">Bring my data from MMEX</button><button class="btn light" data-act="merge-file">From my other device (file)</button></div></div>`;
   }
   const M = mcur(), mGain = t.metalsM - t.metalsCostM;
   h += remindersCard();
+  if (q('SELECT COUNT(*) n FROM transactions')[0].n) h += monthCard();
   const cards = {};
   cards.metals = `<div class="card tap ocard${cardFolded('metals') ? ' folded' : ''}" data-go="metals"><div class="phead"><span class="pbadge">${metalIcon('XAU', 'bar', 28)}</span><h2 style="margin:0">Precious metals${M !== H ? ' (' + M + ')' : ''}</h2>${foldBits('metals', whole(t.metals, H))}</div>
     <div class="row strong"><span class="k">Value</span><span class="v">${whole(t.metalsM, M)}</span></div>
@@ -1261,11 +1264,12 @@ function renderAccounts() {
       const mine = b ? b.balance * share : null, hv = conv(mine, c, H); if (hv != null) { total += hv; gsum += hv; if (cr) owed -= hv; }
       if (mine != null && a.interest_rate && !cr) yearly += conv(mine * a.interest_rate / 100, c, H) || 0;
       const used = cr && a.credit_limit > 0 && b ? -b.balance / a.credit_limit : null;
-      return `<div class="txn${cr ? ' cost' : ''}" data-acct="${a.id}"><div class="txn-top"><span class="txn-date">${b ? (cr ? 'owed ' : '') + 'as of ' + fmtDate(b.date) : 'no balance yet'}</span><span class="txn-desc">${esc(a.name)}</span></div>
-        <div class="txn-body"><div class="sub">${esc(a.institution || label)}${a.interest_rate && !cr ? ' · ' + a.interest_rate + '% interest' : ''}${cr && a.credit_limit ? ' · limit ' + money(a.credit_limit, c, { dec: 0 }) + (b ? ` · <b class="${a.credit_limit + b.balance < 0 ? 'down' : 'up'}">${money(a.credit_limit + b.balance, c, { dec: 0 })} left</b>` : '') : ''}${shareOf(a) < 1 ? ' · your share ' + shareLbl(a) : ''}</div>
-        <div class="r"><div class="strongv${cr && mine < 0 ? ' down' : ''}">${mine == null ? '—' : money(mine, c)}</div>${used != null ? `<div class="sub${used > .7 ? ' down' : ''}">${Math.round(used * 100)}% used</div>` : ''}</div></div>
+      const sub = [b ? (cr ? 'owed, ' : '') + fmtDate(b.date) : 'no balance yet', a.institution, a.interest_rate && !cr ? a.interest_rate + '%' : '', shareOf(a) < 1 ? 'your share ' + shareLbl(a) : ''].filter(Boolean).map(esc).join(' · ');
+      return `<div class="arowx" data-acct="${a.id}"><div class="al"><div class="an">${esc(a.name)}</div><div class="sub">${sub}</div>
+        ${cr && a.credit_limit ? `<div class="sub">limit ${money(a.credit_limit, c, { dec: 0 })}${b ? ` · <b class="${a.credit_limit + b.balance < 0 ? 'down' : 'up'}">${money(a.credit_limit + b.balance, c, { dec: 0 })} left</b>` : ''}</div>` : ''}</div>
+        <div class="ar"><div class="av${mine < 0 ? ' down' : ''}">${mine == null ? '—' : money(mine, c)}</div>${c !== H && hv != null ? `<div class="sub">${money(hv, H)}</div>` : ''}${used != null ? `<div class="sub${used > .7 ? ' down' : ''}">${Math.round(used * 100)}% used</div>` : ''}</div>
         ${used != null ? limitBar(used) : ''}</div>`; }).join('');
-    body += `<div class="card"><h2 class="gh"><span>${ACCT_GROUP[type] || label}${list.length > 1 ? ` <small class="sub">${list.length}</small>` : ''}</span><span class="gt ${gsum < -0.005 ? 'down' : ''}">${whole(gsum, H)}</span></h2><div class="txns">${rowsH}</div></div>`;
+    body += `<div class="card acard"><h2 class="gh"><span>${acctIcon(type)}${ACCT_GROUP[type] || label}${list.length > 1 ? ` <small class="sub">${list.length}</small>` : ''}</span><span class="gt ${gsum < -0.005 ? 'down' : ''}">${whole(gsum, H)}</span></h2><div class="alist">${rowsH}</div></div>`;
   }
   h += `<h2 class="sect">Total</h2><div class="card hero"><div class="label">Cash & bank (${H})</div><div class="big">${whole(total, H)}</div>
     ${owed > 0.005 ? `<div class="sub">${whole(total + owed, H)} in accounts and cash, less ${whole(owed, H)} owed on credit cards</div>` : ''}
@@ -1312,6 +1316,9 @@ function lastReconText(accountId) {   /* for the message after a new balance che
   if (a.type === 'cash') return Math.abs(rc.diff) < 0.01 ? ' · matches your records ✓' : '';
   return Math.abs(rc.diff) < 0.01 ? ' · agrees with your transactions ✓' : ` · differs by ${money(Math.abs(rc.diff), a.currency || home())} from your transactions`;
 }
+const ACCT_ICON = { cash: '<rect x="2.5" y="6" width="19" height="12" rx="2"/><circle cx="12" cy="12" r="2.6"/>', credit: '<rect x="2.5" y="5" width="19" height="14" rx="2.5"/><path d="M2.5 9.5h19M6 15h4"/>',
+  chequing: '<path d="M3 9.5 12 4l9 5.5M5 10v8M9.5 10v8M14.5 10v8M19 10v8M3 20h18"/>', savings: '<path d="M3 9.5 12 4l9 5.5M5 10v8M9.5 10v8M14.5 10v8M19 10v8M3 20h18"/>', gic: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>', other: '<rect x="4" y="4" width="16" height="16" rx="3"/>' };
+const acctIcon = t => `<svg class="gico" viewBox="0 0 24 24" aria-hidden="true">${ACCT_ICON[t] || ACCT_ICON.other}</svg>`;
 function limitBar(used) { const u = Math.max(0, Math.min(1, used)); return `<div class="limitbar${used > .7 ? ' hi' : ''}"><i style="width:${(u * 100).toFixed(1)}%"></i></div>`; }
 function renderAccount(id) {
   const a = q('SELECT * FROM accounts WHERE id=?', [id])[0];
@@ -1510,12 +1517,17 @@ function renderMore() {
   h += `<h2 class="sect">Your data</h2><div class="card">
     <p class="sub">Everything is kept in one SQLite database file on this device. Export it to back it up or to move it to another phone or computer; import it there.</p>
     <div class="btns"><button class="btn" data-act="export">Export database</button><button class="btn light" data-act="import">Import database</button></div>
+    <h3 class="ieh">From MMEX (Money Manager Ex)</h3><p class="sub">Brings your accounts, categories, payees, every transaction (cash too), scheduled bills and assets from an MMEX database (.mmb). Import the same file again later and only what is new is added.</p>
+    <div class="btns"><button class="btn" data-act="mmex-import">Import MMEX file</button></div>
     <h3 class="ieh">From your bank</h3><p class="sub">In your online banking, download your account's history (OFX, QFX, QIF or CSV), then import it here. Your bank password is never needed and the file is read only on this device. Transactions already here are skipped.</p>
     <div class="btns"><button class="btn" data-act="bank-import">Import bank file</button></div>
+    ${importsHtml()}
     <h3 class="ieh">Printable report</h3><p class="sub">A clean summary on paper: net worth, every holding, income & expenses, bills coming. Print it, or choose "Save as PDF" (Android) / "Print to File" (Linux) to keep a PDF.</p>
     <div class="btns"><button class="btn" data-act="print-report">Print or save as PDF</button></div>
     <h3 class="ieh">For a spreadsheet (CSV)</h3><p class="sub">Opens in LibreOffice Calc, Excel or Google Sheets. Amounts in each item's own currency, with your share.</p>
     <div class="btns"><button class="btn light" data-act="csv" data-which="tx">Transactions</button><button class="btn light" data-act="csv" data-which="assets">Assets</button><button class="btn light" data-act="csv" data-which="propcf">Property cashflow</button></div></div>`;
+  h += `<div class="card"><h3 class="ieh" style="margin-top:0">Start fresh</h3><p class="sub">Erases everything on this device (accounts, transactions, assets, loans…) so you can import again cleanly. Your settings stay. Export a backup first.</p>
+    <div class="btns"><button class="btn danger" data-act="start-fresh">Erase everything and start fresh</button></div></div>`;
   h += `<h2 class="sect">About</h2><div class="card"><p class="sub">KJT Finance ${APP_VERSION}, by Knowing Jesus Today (knowingjesus.today). Open source (GPL-2.0-or-later), no accounts, no analytics, no tracking.
     The app only goes online to update prices and to look for app updates. Metals: gold-api.com, Yahoo Finance, Currency API. Exchange rates: European Central Bank, Bank of Canada, ExchangeRate-API (exchangerate-api.com), Currency API. Past prices: DataHub, Yahoo Finance, Frankfurter. Nothing about you or your holdings is sent.</p></div>`;
   view().innerHTML = h;
@@ -1745,6 +1757,9 @@ document.getElementById('tabs').onclick = e => { const b = e.target.closest('but
   if (state.tab === t || b.dataset.tab === 'assetsgroup') { state.propertyId = null; state.accountId = null; state.assetId = null; state.loanId = null; }
   state.tab = t; render(); view().scrollTop = 0; };
 document.getElementById('refresh').onclick = () => updatePrices(false);
+document.getElementById('eye').onclick = () => { PREFS.hideAmt = !PREFS.hideAmt; applyLook(); savePrefs(); toast(PREFS.hideAmt ? 'Amounts hidden' : 'Amounts shown'); };
+document.getElementById('search').onclick = () => { Object.assign(state, { tab: 'money', msec: 'tx', txPer: 'all', txCat: '', propertyId: null, accountId: null, assetId: null, loanId: null }); render();
+  const s = document.getElementById('tx-search'); if (s) { s.focus(); s.scrollIntoView({ block: 'center' }); } };
 document.getElementById('fab').onclick = () => txForm(null, null, state.txAcct ? { account_id: +state.txAcct } : null);
 document.getElementById('settings').onclick = () => { state.tab = 'more'; render(); view().scrollTop = 0; };
 document.getElementById('back').onclick = () => goBack();
@@ -1763,7 +1778,7 @@ function goBack() {
 window.__onBack = () => goBack();
 window.addEventListener('resize', () => { for (const [id, k] of [['heroS', 'hpage'], ['cfS', 'cfPage']]) { const el = document.getElementById(id); if (el) fitSwipe(el, state[k] || 0); } });
 view().addEventListener('click', e => {
-  const el = e.target.closest('[data-act],[data-go],[data-metal],[data-prop],[data-item],[data-pval],[data-cfy],[data-cfp],[data-rent],[data-price],[data-fx],[data-chart],[data-range],[data-acct],[data-bal],[data-asset],[data-aval],[data-hpage],[data-prange],[data-unfav],[data-ie],[data-asec],[data-msec],[data-txm],[data-tx],[data-rec],[data-cat],[data-addsub],[data-addcat],[data-rp],[data-remdo],[data-remskip],[data-loan],[data-lpay],[data-txper],[data-rule],[data-cfold]'); if (!el) return;
+  const el = e.target.closest('[data-act],[data-go],[data-metal],[data-prop],[data-item],[data-pval],[data-cfy],[data-cfp],[data-rent],[data-price],[data-fx],[data-chart],[data-range],[data-acct],[data-bal],[data-asset],[data-aval],[data-hpage],[data-prange],[data-unfav],[data-ie],[data-asec],[data-msec],[data-txm],[data-tx],[data-rec],[data-cat],[data-addsub],[data-addcat],[data-rp],[data-remdo],[data-remskip],[data-loan],[data-lpay],[data-txper],[data-rule],[data-cfold],[data-payee],[data-ptick]'); if (!el) return;
   const d = el.dataset;
   if (d.chart) { state.chart = d.chart; const st = view().scrollTop; render(); view().scrollTop = st; }
   else if (d.range) { state.range = d.range; const st = view().scrollTop; render(); view().scrollTop = st; }
@@ -1777,6 +1792,8 @@ view().addEventListener('click', e => {
   else if (d.rent) rentForm(state.propertyId, +d.rent);
   else if (d.asec) { state.tab = d.asec; state.propertyId = null; state.accountId = null; state.assetId = null; state.loanId = null; render(); view().scrollTop = 0; }
   else if (d.msec) { state.msec = d.msec; render(); view().scrollTop = 0; }
+  else if (d.ptick != null) { state.psel = state.psel || new Set(); if (state.psel.has(d.ptick)) state.psel.delete(d.ptick); else state.psel.add(d.ptick); const st = view().scrollTop; render(); view().scrollTop = st; }
+  else if (d.payee != null) payeeForm(d.payee);
   else if (d.cfold) { e.preventDefault(); toggleCard(d.cfold); }
   else if (d.rule) ruleForm(+d.rule);
   else if (d.txper) { state.txPer = d.txper; render(); }
@@ -1785,7 +1802,7 @@ view().addEventListener('click', e => {
   else if (d.loan) { state.loanId = +d.loan; render(); view().scrollTop = 0; }
   else if (d.lpay) loanPayForm(state.loanId, +d.lpay);
   else if (d.rec) recForm(+d.rec);
-  else if (d.cat) catForm(+d.cat);
+  else if (d.cat) catManage(+d.cat);
   else if (d.addsub) catForm(null, +d.addsub);
   else if (d.addcat) catForm(null, null, d.addcat);
   else if (d.rp) { state.rp = d.rp; const st = view().scrollTop; render(); view().scrollTop = st; }
@@ -1819,6 +1836,13 @@ view().addEventListener('click', e => {
     case 'add-loanpay': loanPayForm(+d.id); break;
     case 'bank-import': bankImport(d.id ? +d.id : null); break;
     case 'add-rule': ruleForm(); break;
+    case 'p-merge': payeeMergeForm(Array.from(state.psel || [])); break;
+    case 'p-cat': payeeCatForm(Array.from(state.psel || [])); break;
+    case 'p-clear': state.psel = new Set(); render(); break;
+    case 'cat-clean': removeUnusedCats(); break;
+    case 'mmex-import': mmexImport(); break;
+    case 'undo-import': undoImport(+d.id); break;
+    case 'start-fresh': startFresh(); break;
     case 'sync-setup': syncSetup(); break;
     case 'sync-now': syncNow(true); break;
     case 'sync-stop': syncStop(); break;
@@ -1909,6 +1933,7 @@ function applyLook() {
   de.dataset.mode = dark ? 'dark' : 'light';
   setTimeout(() => { const cs = getComputedStyle(de); native('statusBar', { color: cs.getPropertyValue('--head').trim(), nav: cs.getPropertyValue('--card').trim(), dark }); }, 0);
   if (PREFS.size === 'large' || PREFS.size === 'larger') de.dataset.size = PREFS.size; else delete de.dataset.size;
+  de.classList.toggle('hideamt', !!PREFS.hideAmt); const eb = document.getElementById('eye'); if (eb) eb.classList.toggle('on', !!PREFS.hideAmt);
 }
 
 /* the keypad screen; resolves with the digits, 'BIO' or null (cancel) */
@@ -2142,7 +2167,8 @@ const DEFAULT_CATS = [
   ['save', 'Transfers & card payments', []], ['save', 'Loans', ['Lent', 'Repaid']], ['out', 'Cash spending', []],
 ];
 const KIND_NAME = { out: 'Expense', in: 'Income', transfer: 'Transfer' };
-const FREQS = { weekly: 'Every week', biweekly: 'Every 2 weeks', monthly: 'Every month', yearly: 'Every year' };
+const FREQS = { weekly: 'Every week', biweekly: 'Every 2 weeks', monthly: 'Every month', bimonthly: 'Every 2 months', quarterly: 'Every 3 months', halfyearly: 'Every 6 months', yearly: 'Every year' };
+const FREQ_MONTHS = { monthly: 1, bimonthly: 2, quarterly: 3, halfyearly: 6, yearly: 12 };
 function seedCategories() {
   if (q('SELECT COUNT(*) n FROM categories')[0].n) return;
   let i = 0;
@@ -2193,8 +2219,8 @@ function nextDate(d, freq) {
   const n = dnum(d);
   if (freq === 'weekly') return dstr(n + 7);
   if (freq === 'biweekly') return dstr(n + 14);
-  const y = +d.slice(0, 4), m = +d.slice(5, 7), day = +d.slice(8, 10);
-  const ny = freq === 'yearly' ? y + 1 : (m === 12 ? y + 1 : y), nm = freq === 'yearly' ? m : (m === 12 ? 1 : m + 1);
+  const y = +d.slice(0, 4), m = +d.slice(5, 7), day = +d.slice(8, 10), k = (y * 12 + m - 1) + (FREQ_MONTHS[freq] || 1);
+  const ny = Math.floor(k / 12), nm = k % 12 + 1;
   const last = new Date(Date.UTC(ny, nm, 0)).getUTCDate();
   return `${ny}-${String(nm).padStart(2, '0')}-${String(Math.min(day, last)).padStart(2, '0')}`;
 }
@@ -2233,7 +2259,7 @@ function remindersCard() {
       ${!r.auto && due ? `<div class="btns" style="margin-top:6px"><button class="btn" data-remdo="${r.id}">Add it</button><button class="btn light" data-remskip="${r.id}">Skip this time</button></div>` : ''}</div>`; }).join('') + `</div></div>`;
 }
 /* ---- money tab ---- */
-const MSECS = [['tx', 'Transactions'], ['recurring', 'Recurring'], ['categories', 'Categories'], ['reports', 'Reports']];
+const MSECS = [['tx', 'Transactions'], ['recurring', 'Recurring'], ['categories', 'Categories'], ['payees', 'Payees'], ['reports', 'Reports']];
 function renderMoney() {
   setTitle('Cash flow');
   state.msec = state.msec || 'tx';
@@ -2244,11 +2270,14 @@ function renderMoney() {
   if (state.msec === 'reports') h += reportsHtml();
   else if (state.msec === 'recurring') h += recurringHtml();
   else if (state.msec === 'categories') h += categoriesHtml();
+  else if (state.msec === 'payees') h += payeesHtml();
   else h += remindersCard() + txListHtml();
   view().innerHTML = h;
   const s = document.getElementById('tx-search'); if (s) { s.oninput = () => { state.txSearch = s.value; clearTimeout(s._t); s._t = setTimeout(() => { const pos = s.selectionStart; render(); const n = document.getElementById('tx-search'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }, 350); }; }
   const fa = document.getElementById('tx-acct'); if (fa) fa.onchange = () => { state.txAcct = fa.value; render(); };
   const fc = document.getElementById('tx-cat'); if (fc) fc.onchange = () => { state.txCat = fc.value; render(); };
+  const ps = document.getElementById('p-sort'); if (ps) ps.onchange = () => { state.psort = ps.value; render(); };
+  const pq = document.getElementById('p-search'); if (pq) pq.oninput = () => { state.psearch = pq.value; clearTimeout(pq._t); pq._t = setTimeout(() => { const pos = pq.selectionStart; render(); const n = document.getElementById('p-search'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }, 350); };
   const fs = document.getElementById('tx-sort'); if (fs) fs.onchange = () => { state.txSort = fs.value; render(); };
 }
 const TXSORTS = [['new', 'Newest first'], ['old', 'Oldest first'], ['big', 'Largest amount'], ['small', 'Smallest amount'], ['payee', 'Payee A–Z'], ['cat', 'Category']];
@@ -2392,7 +2421,7 @@ function txForm(id, copyOf, preset) {
 function recurringHtml() {
   const rs = q('SELECT * FROM recurring ORDER BY active DESC, next_date'), A = Object.fromEntries(q('SELECT * FROM accounts').map(a => [a.id, a])), H = home();
   let monthlyOut = 0, monthlyIn = 0;
-  const perMonth = r => r.amount * ({ weekly: 52 / 12, biweekly: 26 / 12, monthly: 1, yearly: 1 / 12 }[r.freq] || 1);
+  const perMonth = r => r.amount * (({ weekly: 52 / 12, biweekly: 26 / 12 }[r.freq] || 1 / (FREQ_MONTHS[r.freq] || 1)));
   for (const r of rs) if (r.active && r.kind !== 'transfer') { const v = conv(perMonth(r), (A[r.account_id] || {}).currency || H, H) || 0; if (r.kind === 'in') monthlyIn += v; else monthlyOut += v; }
   let h = `<h2 class="sect">Recurring <span class="sub">bills, salary, subscriptions…</span></h2>`;
   if (rs.length) h += `<div class="card"><div class="ie3"><div class="stat"><div class="k">In a month</div><div class="v up">${whole(monthlyIn, H)}</div></div><div class="stat"><div class="k">Out a month</div><div class="v down">${whole(monthlyOut, H)}</div></div><div class="stat"><div class="k">Net</div><div class="v ${signCls(monthlyIn - monthlyOut)}">${whole(monthlyIn - monthlyOut, H)}</div></div></div></div>`;
@@ -2431,8 +2460,9 @@ function categoriesHtml() {
       ${C.rows.filter(c => c.parent_id === t.id).map(c => `<button class="catn sub2" data-cat="${c.id}">› ${esc(c.name)}</button>`).join('')}
       <button class="catadd" data-addsub="${t.id}">+ subcategory</button></div>`).join('')}</div>
       <div class="btns"><button class="btn light" data-addcat="${kind}">+ ${title.replace(/s$/, '')} category</button></div></div>`; };
-  return block('out', 'Expenses') + block('in', 'Income') + block('save', 'Savings & investments') + rulesHtml() +
-    `<p class="sub" style="padding:0 6px">Tap a name to rename it. Subcategories go one level deep only, to keep things simple. Savings & investments (like buying metals) are not counted as spending.</p>`;
+  return block('out', 'Expenses') + block('in', 'Income') + block('save', 'Savings & investments') +
+    `<div class="btns" style="padding:0 2px"><button class="btn light" data-act="cat-clean">Remove categories nothing uses</button></div>` + rulesHtml() +
+    `<p class="sub" style="padding:0 6px">Tap a name to rename, merge or move it. Subcategories go one level deep only, to keep things simple. Savings & investments (like buying metals) are not counted as spending.</p>`;
 }
 function rulesHtml() {
   const rs = q('SELECT * FROM payee_rules ORDER BY pattern'), A = Object.fromEntries(q('SELECT id, name FROM accounts').map(a => [a.id, a.name]));
@@ -2925,7 +2955,8 @@ function payeeMemory() {   /* the category you chose most recently for each paye
     full[normPayee(t.payee)] = t.category_id; const w = firstWord(t.payee); if (w) first[w] = t.category_id; }
   return { get: p => full[normPayee(p)] || first[firstWord(p)] || null };
 }
-function prepareImport(parsed, accountId) {
+function prepareImport(parsed, accountId, opts) {
+  opts = opts || {};
   const a = q('SELECT * FROM accounts WHERE id=?', [accountId])[0], credit = a && a.type === 'credit';
   const have = q('SELECT * FROM transactions WHERE account_id=? OR to_account_id=?', [accountId, accountId]);
   const refs = new Set(have.filter(t => t.import_id).map(t => t.import_id)), used = new Set(), mem = payeeMemory(), cardPay = transferCat(), rules = payeeRules(), cash = cashAccount(accountId);
@@ -2936,18 +2967,23 @@ function prepareImport(parsed, accountId) {
     let dup = refs.has(iid);
     if (!dup) {   /* typed in by hand before: same account, same amount, within 3 days, not imported */
       const kind = x.amount >= 0 ? 'in' : 'out', abs = Math.abs(x.amount);
-      const hit = have.find(t => !t.import_id && !used.has(t.id) && Math.abs(t.amount - abs) < 0.005 && Math.abs(dnum(t.date) - dnum(x.date)) <= 3 &&
+      const own = t => !t.import_id || String(t.import_id).startsWith('mmex:');
+      const hit = have.find(t => own(t) && !used.has(t.id) && Math.abs(t.amount - abs) < 0.005 && Math.abs(dnum(t.date) - dnum(x.date)) <= 3 &&
         (t.kind === kind || (t.kind === 'transfer' && ((kind === 'out' && t.account_id === accountId) || (kind === 'in' && t.to_account_id === accountId)))));
       if (hit) { used.add(hit.id); dup = 'match'; x.matchId = hit.id; }
       /* already imported from another kind of file (a CSV after an OFX…): same day, same amount, same payee */
-      else if (have.some(t => t.import_id && !used.has(t.id) && Math.abs(dnum(t.date) - dnum(x.date)) <= 3 && Math.abs(t.amount - abs) < 0.005 && firstWord(t.payee) === firstWord(x.payee) && used.add(t.id))) dup = true;
+      else if (have.some(t => t.import_id && !own(t) && !used.has(t.id) && Math.abs(dnum(t.date) - dnum(x.date)) <= 3 && Math.abs(t.amount - abs) < 0.005 && firstWord(t.payee) === firstWord(x.payee) && used.add(t.id))) dup = true;
+      /* same amount within a week of something you entered (or brought from MMEX): maybe the same; you decide */
+      else { const mb = have.find(t => own(t) && !used.has(t.id) && Math.abs(t.amount - abs) < 0.005 && Math.abs(dnum(t.date) - dnum(x.date)) <= 7);
+        if (mb) { used.add(mb.id); dup = 'maybe'; x.maybe = mb; } }
     }
+    if (!dup && opts.cutoff && x.date <= opts.cutoff) dup = 'before';
     const kind = x.amount >= 0 ? 'in' : 'out', rule = matchRule(x.payee, rules);
     let cat = null, transferTo = null;
     if (rule && rule.to_account_id && rule.to_account_id !== accountId && q('SELECT id FROM accounts WHERE id=?', [rule.to_account_id]).length) transferTo = rule.to_account_id;
     else if (rule && rule.category_id) cat = rule.category_id;
     /* cash taken out at an ATM goes into your cash account: it is not spending */
-    if (!cat && !transferTo && !credit && kind === 'out' && a && a.type !== 'cash' && ATM_RE.test(x.payee + ' ' + (x.memo || ''))) transferTo = cash ? cash.id : 'new';
+    /* 1.15: ATM withdrawals are no longer moved to a cash account by themselves (only when you made a remembered payee for it) */
     if (!cat && !transferTo) cat = mem.get(x.payee);
     if (!cat && credit && kind === 'in') cat = cardPay;   /* a payment to the card is not income */
     if (!cat && !credit && kind === 'out' && /\b(visa|master ?card|amex|american express|credit card|card payment)\b/i.test(x.payee + ' ' + (x.memo || ''))) cat = cardPay;   /* paying your card from the bank */
@@ -2958,11 +2994,11 @@ function prepareImport(parsed, accountId) {
 }
 /* writes one statement into one account; the caller wraps it in BEGIN / COMMIT */
 function commitImport(parsed, id, prep) {
-  prep = prep || prepareImport(parsed, id);
+  prep = prep || prepareImport(parsed, id, { cutoff: lastOwnDate(id) });
   const a = prep.account, now = Date.now(), dates = parsed.txs.map(x => x.date).sort(); let n = 0, newCash = null;
   for (const r of prep.rows) {
-    if (r.dup === 'match') { run('UPDATE transactions SET import_id=? WHERE id=?', [r.iid, r.matchId]); continue; }
-    if (r.dup) continue;
+    if (r.dup === 'match') { run('UPDATE transactions SET import_id=? WHERE id=? AND import_id IS NULL', [r.iid, r.matchId]); continue; }   /* an MMEX entry keeps its MMEX number */
+    if (r.dup && !(r.dup === 'maybe' && r.include)) continue;
     let from = id, to = null;
     if (r.transferTo) {
       let dest = r.transferTo;
@@ -3002,7 +3038,8 @@ function multiReview(parts) {
     const show = () => parts.forEach((p, i) => { const v = box.querySelector(`[name=to${i}]`).value, el = box.querySelector('#mps' + i);
       if (v === 'skip') el.textContent = 'Not imported.';
       else if (v === 'new') el.textContent = `A new account is made with all ${p.txs.length}.`;
-      else { const pr = prepareImport(p, +v), fresh = pr.rows.filter(r => !r.dup).length; el.textContent = `${fresh} new, ${pr.rows.length - fresh} already there.`; } });
+      else { const pr = prepareImport(p, +v, { cutoff: lastOwnDate(+v) }), fresh = pr.rows.filter(r => !r.dup).length, mb = pr.rows.filter(r => r.dup === 'maybe').length, bf = pr.rows.filter(r => r.dup === 'before').length;
+        el.textContent = `${fresh} new, ${pr.rows.length - fresh - mb - bf} already there${bf ? ', ' + bf + ' before ' + fmtDate(lastOwnDate(+v)) : ''}${mb ? ', ' + mb + ' possible duplicates left out (import this account alone to review them)' : ''}.`; } });
     box.onchange = show; show();
     box.onclick = e => { const f = e.target.dataset.f; if (!f) return;
       if (f === 'cancel') return closeSheet();
@@ -3037,6 +3074,8 @@ function learnRule(payee, catId, toAcct) {
   else run('INSERT INTO payee_rules(pattern,category_id,to_account_id,created) VALUES(?,?,?,?)', [pat, catId || null, toAcct || null, Date.now()]);
 }
 function cashAccount(exceptId) { return q("SELECT * FROM accounts WHERE type='cash' AND id<>? ORDER BY id LIMIT 1", [exceptId || -1])[0] || null; }
+/* the last day of what you entered yourself or brought from MMEX: bank lines up to that day are already there */
+function lastOwnDate(accountId) { const r = q("SELECT MAX(date) d FROM transactions WHERE (account_id=? OR to_account_id=?) AND (import_id IS NULL OR import_id LIKE 'mmex:%')", [accountId, accountId])[0]; return r && r.d; }
 function transferCat() { const r = cats().rows.find(c => !c.parent_id && c.name === 'Transfers & card payments'); return r ? r.id : null; }
 /* ---- the screens ---- */
 async function bankImport(accountId) {
@@ -3089,22 +3128,33 @@ function importReview(parsed, accountId) {
   const dates = parsed.txs.map(x => x.date).sort();
   openSheet(`<h2>Import ${parsed.format} file</h2>
     <label class="f"><span>Into which account?</span><select name="acct">${accts.map(a => `<option value="${a.id}"${a.id === +acc ? ' selected' : ''}>${esc(a.name)}${a.type === 'credit' ? ' (credit card)' : ''}</option>`).join('')}</select></label>
+    <div id="cut-wrap"><label class="switch"><span>Only add what is after <input type="date" name="cut"></span><input type="checkbox" name="usecut"></label>
+      <p class="hint" style="margin-top:0">Up to that day the account already has its transactions (typed in or from MMEX), so nothing is doubled.</p></div>
     <div id="imp-sum"></div>
     <div class="btns"><button class="btn" data-f="go">Import</button><button class="btn light" data-f="cancel">Cancel</button></div>`, box => {
-    let prep = null;
+    let prep = null, lastAcct = null;
     const show = () => {
-      const id = +box.querySelector('[name=acct]').value; prep = prepareImport(parsed, id);
-      const a = prep.account, c = a.currency || home(), fresh = prep.rows.filter(r => !r.dup), dup = prep.rows.length - fresh.length;
+      const id = +box.querySelector('[name=acct]').value, cutEl = box.querySelector('[name=cut]'), useEl = box.querySelector('[name=usecut]');
+      if (id !== lastAcct) { lastAcct = id; const lo = lastOwnDate(id); cutEl.value = lo || ''; useEl.checked = !!lo; box.querySelector('#cut-wrap').style.display = lo ? '' : 'none'; }
+      prep = prepareImport(parsed, id, { cutoff: useEl.checked && cutEl.value ? cutEl.value : null });
+      const keepMaybe = new Set(Array.from(box.querySelectorAll('[data-maybe]:checked')).map(x => +x.dataset.maybe));
+      prep.rows.forEach((r, i) => { if (r.dup === 'maybe' && keepMaybe.has(i)) r.include = true; });
+      const maybes = prep.rows.map((r, i) => [r, i]).filter(([r]) => r.dup === 'maybe'), before = prep.rows.filter(r => r.dup === 'before').length;
+      const a = prep.account, c = a.currency || home(), fresh = prep.rows.filter(r => !r.dup), dup = prep.rows.length - fresh.length - maybes.length - before;
       const guessed = fresh.filter(r => r.cat || r.transferTo).length, atm = fresh.filter(r => r.transferTo).length, cashA = cashAccount(id);
       box.querySelector('#imp-sum').innerHTML = `<div class="ie3"><div class="stat"><div class="k">New</div><div class="v">${fresh.length}</div></div><div class="stat"><div class="k">Already here</div><div class="v">${dup}</div></div><div class="stat"><div class="k">Categorised</div><div class="v">${guessed}</div></div></div>
         <p class="sub" style="margin:8px 0">${fmtDate(dates[0])} to ${fmtDate(dates[dates.length - 1])}${parsed.balance != null ? ` · balance in the file: <b>${money(a.type === 'credit' ? Math.abs(parsed.balance) : parsed.balance, c)}</b>${a.type === 'credit' ? ' owed' : ''} on ${fmtDate(parsed.balDate || dates[dates.length - 1])}` : ''}</p>
         ${parsed.currency && a.currency && parsed.currency !== a.currency ? `<div class="warn">The file is in ${esc(parsed.currency)} but this account is in ${esc(a.currency)}.</div>` : ''}
         ${fresh.length ? `<div class="preview">${fresh.slice(0, 6).map(r => `${fmtDate(r.date)} · ${esc((r.payee || '').slice(0, 26))} · <span class="${r.amount < 0 ? 'down' : 'up'}">${r.amount < 0 ? '−' : '+'}${money(Math.abs(r.amount), c)}</span>${r.cat ? ' · <i>' + esc(cats().label(r.cat)) + '</i>' : ''}`).join('<br>')}${fresh.length > 6 ? '<br>…and ' + (fresh.length - 6) + ' more' : ''}</div>` : '<p class="sub">Everything in this file is already in the app.</p>'}
         ${atm ? `<p class="sub" style="margin:0 0 8px">💵 <b>${atm}</b> cash withdrawal${atm > 1 ? 's go' : ' goes'} to ${cashA ? esc(cashA.name) : 'a new "Cash in hand" account'}: moving money to your wallet is not spending.</p>` : ''}
+        ${before ? `<p class="sub" style="margin:0 0 8px"><b>${before}</b> up to ${fmtDate(box.querySelector('[name=cut]').value)} left out (already in the account).</p>` : ''}
+        ${maybes.length ? `<h3 class="ieh">Possible duplicates: not added unless you tick them</h3><div class="maybes">${maybes.map(([r, i]) => `<label class="maybe"><input type="checkbox" data-maybe="${i}"${r.include ? ' checked' : ''}>
+          <span><b>${fmtDate(r.date)} ${esc((r.payee || '').slice(0, 24))} ${money(Math.abs(r.amount), c)}</b><br><small>looks like ${fmtDate(r.maybe.date)} ${esc(r.maybe.payee || cats().label(r.maybe.category_id))}</small></span></label>`).join('')}</div>` : ''}
         <p class="hint">Transactions without a category can be sorted later: tap one under Cash flow. Next time, the same payee gets the same category by itself.</p>`;
-      box.querySelector('[data-f=go]').textContent = fresh.length ? `Import ${fresh.length}` : 'Update the balance only';
+      const nIn = fresh.length + maybes.filter(([r]) => r.include).length;
+      box.querySelector('[data-f=go]').textContent = nIn ? `Import ${nIn}` : 'Update the balance only';
     };
-    box.querySelector('[name=acct]').onchange = show; show();
+    box.onchange = show; show();
     box.onclick = e => { const f = e.target.dataset.f; if (!f) return;
       if (f === 'cancel') return closeSheet();
       const id = +box.querySelector('[name=acct]').value; let n = 0;
@@ -3467,8 +3517,10 @@ async function syncSetup() {
       <p class="sub">This folder already has KJT Finance data, probably from your other device. What should this device do?</p>
       <div class="btns"><button class="btn" data-f="merge">Combine both (recommended)</button></div>
       <div class="btns"><button class="btn light" data-f="theirs">Use only the folder's data (this device's data is replaced)</button></div>
+      <div class="btns"><button class="btn light" data-f="mine">Use only this device's data (the folder's is replaced)</button></div>
       <div class="btns"><button class="btn light" data-f="cancel">Cancel</button></div>`, box => { box.onclick = e => { const f = e.target.dataset.f; if (f) { closeSheet(); res(f); } }; }));
     if (choice === 'cancel') { await native('syncForget', {}); SYNC.on = false; render(); return; }
+    if (choice === 'mine') { await native('syncWrite', { name: SYNC_FILE, b64: bytesToB64(await fileBytes()) }); setSetting('sync_wrote', String(dataStamp())); await syncNow(true); render(); return; }
     const rd = await native('syncRead', { name: SYNC_FILE }); const c = rd.b64 ? await openCopy(b64ToBytes(rd.b64), 'The data in the folder') : null;
     if (!c) { await native('syncForget', {}); SYNC.on = false; render(); return toast('Could not open the data in the folder.'); }
     if (choice === 'theirs') { db.close(); db = c; prepareDb(); loadFx(); setSetting('sync_seen', ''); setSetting('sync_wrote', String(dataStamp())); }
@@ -3501,7 +3553,309 @@ function syncCard() {
       <li>In Syncthing, share one folder between your devices, for example <i>KJT Finance</i>.</li>
       <li>Here, choose that folder. Do the same on each device.</li></ol>
       <div class="btns"><button class="btn" data-act="sync-setup">Choose the sync folder</button></div>`) +
-    `<div class="btns"><button class="btn light" data-act="merge-file">Combine with a database file…</button></div></div>`;
+    `<h3 class="ieh">Without Syncthing</h3><p class="sub">Export the database on one device (Settings › Your data), bring the file to the other (USB, email, KDE Connect…), then press this there. What is the same is recognised, newer changes win, nothing is doubled.</p>
+    <div class="btns"><button class="btn light" data-act="merge-file">Combine with a database file…</button></div></div>`;
+}
+
+/* ================= 1.15 ================= */
+/* ---- MMEX (Money Manager Ex) import: reads its .mmb database directly ----
+   Accounts (with their opening balances), categories (deeper levels become category › sub / sub),
+   every transaction (split ones become one line per split; voided and deleted ones are left out),
+   transfers, payees (remembered with their category), scheduled bills (repeating) and assets.
+   Each MMEX transaction remembers its MMEX number, so importing the same file again adds only what is new. */
+const MMEX_TYPES = { cash: 'cash', checking: 'chequing', 'credit card': 'credit', term: 'gic', loan: 'other', investment: 'other', shares: 'other', asset: 'other' };
+const MMEX_FREQ = { 1: 'weekly', 2: 'biweekly', 3: 'monthly', 4: 'bimonthly', 5: 'quarterly', 6: 'halfyearly', 7: 'yearly' };
+function mmexCols(m, t) { try { return qd(m, `PRAGMA table_info(${t})`).map(c => c.name); } catch (e) { return []; } }
+function mmexRead(m) {
+  const cur = {}; for (const c of (mmexCols(m, 'CURRENCYFORMATS_V1').length ? qd(m, 'SELECT * FROM CURRENCYFORMATS_V1') : [])) cur[c.CURRENCYID] = c.CURRENCY_SYMBOL || c.CURRENCYNAME;
+  const tc = mmexCols(m, 'CHECKINGACCOUNT_V1'), live = [tc.includes('DELETEDTIME') ? "(DELETEDTIME IS NULL OR DELETEDTIME='')" : '1', "COALESCE(STATUS,'')<>'V'"].join(' AND ');
+  const accts = qd(m, 'SELECT * FROM ACCOUNTLIST_V1 ORDER BY ACCOUNTNAME').map(a => {
+    const n = qd(m, `SELECT COUNT(*) n, MIN(substr(TRANSDATE,1,10)) a, MAX(substr(TRANSDATE,1,10)) b FROM CHECKINGACCOUNT_V1 WHERE (ACCOUNTID=? OR TOACCOUNTID=?) AND ${live}`, [a.ACCOUNTID, a.ACCOUNTID])[0];
+    return { id: a.ACCOUNTID, name: a.ACCOUNTNAME, type: MMEX_TYPES[low(a.ACCOUNTTYPE)] || 'other', mtype: a.ACCOUNTTYPE, cur: cur[a.CURRENCYID] || home(), init: +a.INITIALBAL || 0,
+      initDate: a.INITIALDATE ? String(a.INITIALDATE).slice(0, 10) : null, closed: low(a.STATUS) === 'closed', heldAt: a.HELDAT || '', notes: a.NOTES || '',
+      limit: +a.CREDITLIMIT || null, rate: +a.INTERESTRATE || null, n: n.n, from: n.a, to: n.b };
+  });
+  return { accts, live, tc };
+}
+async function mmexImport() {
+  const r = await native('importDb', { title: 'Choose your MMEX database (.mmb)', filter: 'mmex' });
+  if (!r.b64) { if (r.error) toast('Could not open the file: ' + r.error); return; }
+  let m; try { m = new SQL.Database(b64ToBytes(r.b64)); qd(m, 'SELECT 1 FROM ACCOUNTLIST_V1 LIMIT 1'); }
+  catch (e) { return toast('This is not an MMEX database (.mmb). If it ends in .emb, save it as .mmb in MMEX first.'); }
+  const info = mmexRead(m), accts = q('SELECT * FROM accounts ORDER BY name');
+  openSheet(`<h2>Import from MMEX</h2><p class="sub">${info.accts.length} accounts. Choose where each one goes; "New" makes the account here with its opening balance.</p>
+    ${info.accts.map((a, i) => `<div class="mpart"><div class="mph"><b>${esc(a.name)}</b> <span class="sub">${esc(a.mtype)} · ${esc(a.cur)} · ${a.n} transaction${a.n === 1 ? '' : 's'}${a.from ? ' · ' + fmtDate(a.from) + ' – ' + fmtDate(a.to) : ''}${a.closed ? ' · closed' : ''}</span></div>
+      <select name="to${i}"><option value="new">New account: ${esc(a.name)}</option><option value="skip">Skip it</option>${accts.map(x => `<option value="${x.id}"${low(x.name) === low(a.name) ? ' selected' : ''}>Into ${esc(x.name)}</option>`).join('')}</select></div>`).join('')}
+    <label class="switch"><span>Payees: remember their categories</span><input type="checkbox" name="payees" checked></label>
+    <label class="switch"><span>Scheduled bills: as repeating transactions</span><input type="checkbox" name="bills" checked></label>
+    <label class="switch"><span>Assets</span><input type="checkbox" name="assets" checked></label>
+    <p class="hint">Importing the same MMEX file again later adds only what is new.</p>
+    <div class="btns"><button class="btn" data-f="go">Import</button><button class="btn light" data-f="cancel">Cancel</button></div>`, box => {
+    info.accts.forEach((a, i) => { const s = box.querySelector(`[name=to${i}]`); if (!accts.some(x => low(x.name) === low(a.name))) s.value = a.n || !a.closed ? 'new' : 'skip'; });
+    box.onclick = e => { const f = e.target.dataset.f; if (!f) return;
+      if (f === 'cancel') { m.close(); return closeSheet(); }
+      const map = {}; info.accts.forEach((a, i) => { map[a.id] = box.querySelector(`[name=to${i}]`).value; });
+      const opt = { payees: box.querySelector('[name=payees]').checked, bills: box.querySelector('[name=bills]').checked, assets: box.querySelector('[name=assets]').checked };
+      let st;
+      db.exec('BEGIN');
+      try { st = mmexDo(m, info, map, opt); db.exec('COMMIT'); } catch (err) { db.exec('ROLLBACK'); m.close(); return bad('Import failed: ' + err.message); }
+      m.close(); clearCats(); save(); closeSheet();
+      toast(`MMEX: ${st.tx} transactions, ${st.accts} accounts, ${st.cats} categories${st.rules ? ', ' + st.rules + ' payees' : ''}${st.bills ? ', ' + st.bills + ' repeating' : ''}${st.assets ? ', ' + st.assets + ' assets' : ''}${st.again ? ' (' + st.again + ' already here)' : ''}`);
+      state.tab = 'accounts'; state.accountId = null; render(); view().scrollTop = 0; };
+  });
+}
+function mmexDo(m, info, map, opt) {
+  const st = { tx: 0, accts: 0, cats: 0, rules: 0, bills: 0, assets: 0, again: 0, skipped: 0 }, B = Date.now();
+  /* categories: MMEX 1.6+ (PARENTID, any depth) or older (CATEGORY + SUBCATEGORY) */
+  const cc = mmexCols(m, 'CATEGORY_V1'), nested = cc.includes('PARENTID');
+  const catRows = cc.length ? qd(m, 'SELECT * FROM CATEGORY_V1') : [], byId = {}; for (const c of catRows) byId[c.CATEGID] = c;
+  const subRows = !nested && mmexCols(m, 'SUBCATEGORY_V1').length ? qd(m, 'SELECT * FROM SUBCATEGORY_V1') : [], subById = {}; for (const s of subRows) subById[s.SUBCATEGID] = s;
+  const path = (cid, sid) => {   /* -> [top, sub] names */
+    if (!nested) { const c = byId[cid]; if (!c) return null; const s = sid > 0 ? subById[sid] : null; return [c.CATEGNAME, s ? s.SUBCATEGNAME : null]; }
+    const chain = []; let c = byId[cid], guard = 0; while (c && guard++ < 20) { chain.unshift(c.CATEGNAME); c = c.PARENTID > 0 ? byId[c.PARENTID] : null; }
+    return chain.length ? [chain[0], chain.length > 1 ? chain.slice(1).join(' / ') : null] : null;
+  };
+  /* income or expense: from how each main category is used */
+  const tc = info.tc, hasSub = tc.includes('SUBCATEGID'), use = {};
+  for (const r of qd(m, `SELECT CATEGID${hasSub ? ', SUBCATEGID' : ''}, TRANSCODE, COUNT(*) n FROM CHECKINGACCOUNT_V1 WHERE ${info.live} GROUP BY CATEGID${hasSub ? ', SUBCATEGID' : ''}, TRANSCODE`)) {
+    const p = path(r.CATEGID, r.SUBCATEGID); if (!p) continue; const u = use[low(p[0])] = use[low(p[0])] || { in: 0, out: 0 }; if (r.TRANSCODE === 'Deposit') u.in += r.n; else if (r.TRANSCODE === 'Withdrawal') u.out += r.n; }
+  const catCache = {};
+  const ensureCat = (cid, sid) => {
+    const p = path(cid, sid); if (!p) return null; const k = low(p[0]) + '|' + low(p[1]);
+    if (k in catCache) return catCache[k];
+    const u = use[low(p[0])] || { in: 0, out: 0 }, kind = u.in > u.out ? 'in' : 'out';
+    let top = q('SELECT * FROM categories WHERE parent_id IS NULL AND lower(name)=lower(?) ORDER BY kind=? DESC LIMIT 1', [p[0], kind])[0];
+    if (!top) { run('INSERT INTO categories(name,parent_id,kind,sort) VALUES(?,?,?,?)', [p[0], null, kind, 500]); top = { id: q('SELECT last_insert_rowid() id')[0].id, kind }; st.cats++; }
+    let id = top.id;
+    if (p[1]) { const s = q('SELECT id FROM categories WHERE parent_id=? AND lower(name)=lower(?)', [top.id, p[1]])[0];
+      if (s) id = s.id; else { run('INSERT INTO categories(name,parent_id,kind,sort) VALUES(?,?,?,?)', [p[1], top.id, top.kind, 501]); id = q('SELECT last_insert_rowid() id')[0].id; st.cats++; } }
+    return (catCache[k] = id);
+  };
+  /* accounts */
+  const acc = {};
+  for (const a of info.accts) {
+    const v = map[a.id]; if (v === 'skip') continue;
+    if (v === 'new') {
+      run('INSERT INTO accounts(name,type,institution,currency,interest_rate,owners,notes,share_pct,credit_limit) VALUES(?,?,?,?,?,1,?,100,?)',
+        [a.name, a.type, a.heldAt, a.cur, a.type === 'credit' ? null : a.rate, (a.notes + (a.closed ? ' (closed in MMEX)' : '')).trim(), a.type === 'credit' ? a.limit : null]);
+      acc[a.id] = q('SELECT last_insert_rowid() id')[0].id; st.accts++;
+      /* the opening balance, on or before the first transaction, so every MMEX transaction counts as it did in MMEX */
+      const d = [a.initDate, a.from].filter(Boolean).sort()[0] || today();
+      run('INSERT INTO account_balances(account_id,date,balance,note,created) VALUES(?,?,?,?,?)', [acc[a.id], d, a.type === 'credit' ? Math.max(0, -a.init) : a.init, 'Opening balance (MMEX)', B - 1]);
+    } else acc[a.id] = +v;
+  }
+  /* payees */
+  const pc = mmexCols(m, 'PAYEE_V1'), payees = {}; for (const p of (pc.length ? qd(m, 'SELECT * FROM PAYEE_V1') : [])) payees[p.PAYEEID] = p;
+  /* splits */
+  const splits = {}; if (mmexCols(m, 'SPLITTRANSACTIONS_V1').length) for (const s of qd(m, 'SELECT * FROM SPLITTRANSACTIONS_V1')) (splits[s.TRANSID] = splits[s.TRANSID] || []).push(s);
+  const have = new Set(q("SELECT import_id FROM transactions WHERE import_id LIKE 'mmex:%'").map(r => r.import_id));
+  const ins = db.prepare('INSERT INTO transactions(account_id,date,kind,amount,category_id,payee,note,to_account_id,link,recurring_id,created,import_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)');
+  try {
+    for (const t of qd(m, `SELECT * FROM CHECKINGACCOUNT_V1 WHERE ${info.live} ORDER BY TRANSDATE, TRANSID`)) {
+      const from = acc[t.ACCOUNTID], to = t.TOACCOUNTID > 0 ? acc[t.TOACCOUNTID] : null, date = String(t.TRANSDATE || '').slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { st.skipped++; continue; }
+      let kind = t.TRANSCODE === 'Deposit' ? 'in' : t.TRANSCODE === 'Transfer' ? 'transfer' : 'out', acct = from, toA = null, amt = Math.abs(+t.TRANSAMOUNT || 0);
+      if (kind === 'transfer') {
+        if (from && to) toA = to;
+        else if (from) kind = 'out';                                     /* the other account was skipped */
+        else if (to) { kind = 'in'; acct = to; amt = Math.abs(+t.TOTRANSAMOUNT || amt); }
+      }
+      if (!acct) continue;
+      const payee = kind === 'transfer' ? null : (payees[t.PAYEEID] || {}).PAYEENAME || null;
+      const note = [t.NOTES, t.TRANSACTIONNUMBER ? '#' + t.TRANSACTIONNUMBER : ''].filter(Boolean).join(' ').slice(0, 200);
+      const parts = splits[t.TRANSID] && kind !== 'transfer' ? splits[t.TRANSID] : null;
+      if (parts) {
+        for (const s of parts) { const iid = `mmex:${t.TRANSID}:${s.SPLITTRANSID}`; if (have.has(iid)) { st.again++; continue; }
+          const v = +s.SPLITTRANSAMOUNT || 0, k = v < 0 ? (kind === 'in' ? 'out' : 'in') : kind;
+          ins.run([acct, date, k, Math.abs(v), ensureCat(s.CATEGID, s.SUBCATEGID), payee, [note, s.NOTES, '(split)'].filter(Boolean).join(' ').slice(0, 200), null, null, null, B, iid]); st.tx++; }
+      } else {
+        const iid = 'mmex:' + t.TRANSID; if (have.has(iid)) { st.again++; continue; }
+        ins.run([acct, date, kind, amt, kind === 'transfer' ? null : ensureCat(t.CATEGID, t.SUBCATEGID), payee, note, toA, null, null, B, iid]); st.tx++;
+      }
+    }
+  } finally { ins.free(); }
+  /* payees remember their category */
+  if (opt.payees) for (const p of Object.values(payees)) { if (!(p.CATEGID > 0) || !p.PAYEENAME) continue; const c = ensureCat(p.CATEGID, p.SUBCATEGID); const pat = normPayee(p.PAYEENAME);
+    if (c && pat && !q('SELECT id FROM payee_rules WHERE pattern=?', [pat]).length) { run('INSERT INTO payee_rules(pattern,category_id,created) VALUES(?,?,?)', [pat, c, B]); st.rules++; } }
+  /* scheduled bills */
+  if (opt.bills && mmexCols(m, 'BILLSDEPOSITS_V1').length) for (const b of qd(m, 'SELECT * FROM BILLSDEPOSITS_V1')) {
+    const freq = MMEX_FREQ[(+b.REPEATS || 0) % 100], from = acc[b.ACCOUNTID]; if (!freq || !from) continue;
+    const kind = b.TRANSCODE === 'Deposit' ? 'in' : b.TRANSCODE === 'Transfer' && acc[b.TOACCOUNTID] ? 'transfer' : 'out', payee = kind === 'transfer' ? null : (payees[b.PAYEEID] || {}).PAYEENAME || null;
+    const nd = String(b.NEXTOCCURRENCEDATE || b.TRANSDATE || today()).slice(0, 10);
+    if (q("SELECT id FROM recurring WHERE account_id=? AND COALESCE(payee,'')=? AND amount=? AND freq=?", [from, payee || '', Math.abs(+b.TRANSAMOUNT || 0), freq]).length) continue;
+    run('INSERT INTO recurring(account_id,kind,amount,category_id,payee,note,to_account_id,link,freq,next_date,auto,active) VALUES(?,?,?,?,?,?,?,?,?,?,?,1)',
+      [from, kind, Math.abs(+b.TRANSAMOUNT || 0), kind === 'transfer' ? null : ensureCat(b.CATEGID, b.SUBCATEGID), payee, b.NOTES || '', kind === 'transfer' ? acc[b.TOACCOUNTID] : null, null, freq, nd, +b.REPEATS >= 200 ? 1 : 0]); st.bills++;
+  }
+  /* assets */
+  if (opt.assets && mmexCols(m, 'ASSETS_V1').length) {
+    const cur = {}; if (mmexCols(m, 'CURRENCYFORMATS_V1').length) for (const c of qd(m, 'SELECT * FROM CURRENCYFORMATS_V1')) cur[c.CURRENCYID] = c.CURRENCY_SYMBOL;
+    const AT = { automobile: 'car', jewellery: 'jewelry', jewelry: 'jewelry', art: 'art', 'household object': 'equipment' };
+    for (const a of qd(m, 'SELECT * FROM ASSETS_V1')) {
+      if (low(a.ASSETSTATUS) === 'closed') continue; const c = cur[a.CURRENCYID] || home(), d = a.STARTDATE ? String(a.STARTDATE).slice(0, 10) : null;
+      if (low(a.ASSETTYPE) === 'property') { if (q('SELECT id FROM properties WHERE lower(name)=lower(?)', [a.ASSETNAME]).length) continue;
+        run('INSERT INTO properties(name,currency,purchase_date,purchase_price,notes,owners,type,share_pct) VALUES(?,?,?,?,?,1,?,100)', [a.ASSETNAME, c, d, +a.VALUE || 0, a.NOTES || '', 'house']); }
+      else { if (q('SELECT id FROM other_assets WHERE lower(name)=lower(?)', [a.ASSETNAME]).length) continue;
+        run('INSERT INTO other_assets(name,type,purchase_date,purchase_price,currency,owners,notes,share_pct) VALUES(?,?,?,?,?,1,?,100)', [a.ASSETNAME, AT[low(a.ASSETTYPE)] || 'other', d, +a.VALUE || 0, c, a.NOTES || '']); }
+      st.assets++;
+    }
+  }
+  return st;
+}
+
+/* ---- imports you can undo ---- */
+function importBatches() {
+  return q(`SELECT created, COUNT(*) n, MIN(date) a, MAX(date) b, MAX(CASE WHEN import_id LIKE 'mmex:%' THEN 1 ELSE 0 END) mmex,
+    GROUP_CONCAT(DISTINCT account_id) accts FROM transactions WHERE import_id IS NOT NULL AND created IS NOT NULL GROUP BY created ORDER BY created DESC LIMIT 12`);
+}
+function importsHtml() {
+  const bs = importBatches(); if (!bs.length) return '';
+  const A = Object.fromEntries(q('SELECT id, name FROM accounts').map(a => [a.id, a.name]));
+  return `<h3 class="ieh">Recent imports</h3><div class="txns" style="margin-top:0">${bs.map(b => `<div class="txn"><div class="txn-top"><span class="txn-date">${new Date(b.created).toLocaleDateString('en-CA', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span><span class="txn-desc">${b.mmex ? 'MMEX' : 'Bank file'}: ${b.n} transaction${b.n === 1 ? '' : 's'}</span></div>
+    <div class="txn-body"><div class="sub">${String(b.accts || '').split(',').map(i => esc(A[i] || '?')).join(', ')} · ${fmtDate(b.a)} – ${fmtDate(b.b)}</div><div class="r"><button class="btn light small" data-act="undo-import" data-id="${b.created}">Undo</button></div></div></div>`).join('')}</div>`;
+}
+async function undoImport(created) {
+  const n = q('SELECT COUNT(*) n FROM transactions WHERE created=? AND import_id IS NOT NULL', [created])[0].n;
+  if (!await ask(`Remove the ${n} transactions of this import? The balances it set are removed too.`, 'Remove them')) return;
+  run('DELETE FROM transactions WHERE created=? AND import_id IS NOT NULL', [created]);
+  run("DELETE FROM account_balances WHERE created IN (?, ?) AND note IN ('From the bank file', 'Opening balance (MMEX)')", [created - 1, created + 1]);
+  save(); toast(n + ' removed'); render();
+}
+
+/* ---- start fresh ---- */
+async function startFresh() {
+  if (!await ask('Erase ALL your data on this device (accounts, transactions, assets, loans…) and start fresh? Export a backup first if you are not sure. Your settings (look, currencies) stay.', 'Erase everything')) return;
+  if (!await ask('Are you sure? This cannot be undone.', 'Yes, start fresh')) return;
+  if (SYNC.on) { await native('syncForget', {}); SYNC.on = false; }
+  run('INSERT INTO sync_busy VALUES (1)'); db.exec('BEGIN');
+  try {
+    for (const t of SYNC_TABLES.concat(['sync_tomb'])) { try { run(`DELETE FROM ${t}`); } catch (e) { } }
+    run("DELETE FROM settings WHERE key IN ('import_map','folded','sync_seen','sync_wrote','cats_seeded','cats_v19','cats_v111') OR key LIKE 'csvmap:%'");
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); run('DELETE FROM sync_busy'); return bad('Could not erase: ' + e.message); }
+  run('DELETE FROM sync_busy'); FOLDED = null; clearCats(); prepareDb(); await saveNow();
+  Object.assign(state, { tab: 'overview', propertyId: null, accountId: null, assetId: null, loanId: null, txAcct: '', txCat: '', txSearch: '' });
+  toast('Everything is erased: you can import your MMEX file now (Settings › Your data)'); render();
+}
+
+/* ---- payees: see them all, rename, merge, give a category ---- */
+function payeeList() {
+  const rows = q("SELECT payee, COUNT(*) n, SUM(CASE WHEN kind='out' THEN amount ELSE 0 END) outv, SUM(CASE WHEN kind='in' THEN amount ELSE 0 END) inv, MAX(date) last FROM transactions WHERE payee IS NOT NULL AND payee<>'' GROUP BY payee");
+  const rules = payeeRules();
+  for (const r of rows) { const rl = matchRule(r.payee, rules); r.rule = rl; r.cat = rl && rl.category_id;
+    if (!r.cat) { const c = q('SELECT category_id, COUNT(*) n FROM transactions WHERE payee=? AND category_id IS NOT NULL GROUP BY category_id ORDER BY n DESC LIMIT 1', [r.payee])[0]; r.usual = c && c.category_id; } }
+  return rows;
+}
+function payeesHtml() {
+  const srt = state.psort || 'name', srch = low(state.psearch);
+  let rows = payeeList(); if (srch) rows = rows.filter(r => low(r.payee).includes(srch));
+  rows.sort(srt === 'n' ? (a, b) => b.n - a.n : srt === 'amt' ? (a, b) => (b.outv + b.inv) - (a.outv + a.inv) : srt === 'last' ? (a, b) => (b.last < a.last ? -1 : 1) : (a, b) => a.payee.localeCompare(b.payee, 'en', { sensitivity: 'base' }));
+  const sel = state.psel || new Set();
+  let h = `<h2 class="sect">Payees <span class="sub">who you pay and who pays you</span></h2><div class="card">
+    <div class="f2"><label class="f"><span>Sort</span><select id="p-sort">${[['name', 'Name A–Z'], ['n', 'Most used'], ['amt', 'Largest total'], ['last', 'Most recent']].map(([k, l]) => `<option value="${k}"${k === srt ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+    <label class="f"><span>Search</span><input id="p-search" value="${esc(state.psearch || '')}" autocomplete="off" placeholder="name…"></label></div>
+    ${sel.size ? `<div class="btns"><button class="btn" data-act="p-merge">Merge ${sel.size} into one…</button><button class="btn light" data-act="p-cat">Category for ${sel.size}…</button></div><div class="btns"><button class="btn light" data-act="p-clear">Untick all</button></div>`
+      : '<p class="sub" style="margin:6px 0 0">Tick payees to merge them (e.g. "METRO #123" and "Metro") or give them a category together. Tap a name to rename it.</p>'}</div>`;
+  if (!rows.length) return h + `<div class="card empty">No payees${srch ? ' match' : ' yet'}.</div>`;
+  h += `<div class="card"><div class="txlist">${rows.map(r => `<div class="txrow prow${sel.has(r.payee) ? ' picked' : ''}"><span class="tick${sel.has(r.payee) ? ' on' : ''}" data-ptick="${esc(r.payee)}"></span>
+    <div class="txl" data-payee="${esc(r.payee)}"><div class="txt">${esc(r.payee)}</div><div class="sub">${r.n} · ${r.cat ? '→ ' + esc(cats().label(r.cat)) : r.usual ? 'usually ' + esc(cats().label(r.usual)) : 'no category'}</div></div>
+    <div class="txa" data-payee="${esc(r.payee)}">${whole(r.outv + r.inv, home())}</div></div>`).join('')}</div></div>`;
+  return h;
+}
+function payeeForm(name) {
+  const r = payeeList().find(x => x.payee === name); if (!r) return;
+  const others = q("SELECT DISTINCT payee FROM transactions WHERE payee IS NOT NULL AND payee<>'' AND payee<>? ORDER BY payee LIMIT 500", [name]).map(x => x.payee);
+  openSheet(`<h2>${esc(name)}</h2><p class="sub">${r.n} transaction${r.n === 1 ? '' : 's'} · last ${fmtDate(r.last)}</p>
+    ${field('name', 'Name', name, 'autocomplete="off" list="p-others"')}<datalist id="p-others">${others.map(o => `<option value="${esc(o)}">`).join('')}</datalist>
+    <p class="hint">Type the name of another payee to merge this one into it.</p>
+    <label class="f"><span>Usual category (remembered for imports and typing)</span><select name="cat">${catOptions('any', r.cat || null)}</select></label>
+    <label class="switch"><span>Also put its transactions without a category in it</span><input type="checkbox" name="fill" checked></label>
+    <label class="switch"><span>Put ALL its transactions in it</span><input type="checkbox" name="all"></label>
+    <div class="btns"><button class="btn" data-f="save">Save</button><button class="btn light" data-f="cancel">Cancel</button></div>
+    <div class="btns"><button class="btn light" data-f="list">See its transactions</button>${r.rule ? '<button class="btn light" data-f="forget">Forget its category</button>' : ''}</div>`, box => {
+    box.onclick = e => { const f = e.target.dataset.f; if (!f) return;
+      if (f === 'cancel') return closeSheet();
+      if (f === 'list') { closeSheet(); Object.assign(state, { tab: 'money', msec: 'tx', txPer: 'all', txSearch: name, txCat: '' }); render(); return; }
+      if (f === 'forget') { run('DELETE FROM payee_rules WHERE id=?', [r.rule.id]); save(); closeSheet(); render(); return; }
+      const d = formData(box), nn = (d.name || '').trim(), cat = +d.cat || null; if (!nn) return bad('Enter a name.');
+      db.exec('BEGIN');
+      if (nn !== name) { run('UPDATE transactions SET payee=? WHERE payee=?', [nn, name]); run('UPDATE recurring SET payee=? WHERE payee=?', [nn, name]);
+        if (r.rule && r.rule.pattern === normPayee(name)) run('DELETE FROM payee_rules WHERE id=?', [r.rule.id]); }
+      if (cat) { learnRule(nn, cat, null);
+        if (box.querySelector('[name=all]').checked) run("UPDATE transactions SET category_id=? WHERE payee=? AND kind<>'transfer'", [cat, nn]);
+        else if (box.querySelector('[name=fill]').checked) run("UPDATE transactions SET category_id=? WHERE payee=? AND category_id IS NULL AND kind<>'transfer'", [cat, nn]); }
+      db.exec('COMMIT'); save(); closeSheet(); toast(nn !== name ? 'Renamed' + (others.includes(nn) ? ' and merged' : '') : 'Saved'); render(); };
+  });
+}
+function payeeMergeForm(names) {
+  const sugg = names.slice().sort((a, b) => a.length - b.length)[0];
+  openSheet(`<h2>Merge ${names.length} payees</h2><p class="sub">${names.map(esc).join(' · ')}</p>
+    ${field('name', 'Keep them all as', sugg, 'autocomplete="off"')}
+    <div class="btns"><button class="btn" data-f="go">Merge</button><button class="btn light" data-f="cancel">Cancel</button></div>`, box => {
+    box.onclick = e => { const f = e.target.dataset.f; if (!f) return; if (f === 'cancel') return closeSheet();
+      const nn = (formData(box).name || '').trim(); if (!nn) return bad('Enter a name.');
+      db.exec('BEGIN'); for (const n of names) { run('UPDATE transactions SET payee=? WHERE payee=?', [nn, n]); run('UPDATE recurring SET payee=? WHERE payee=?', [nn, n]); } db.exec('COMMIT');
+      state.psel = new Set(); save(); closeSheet(); toast('Merged'); render(); };
+  });
+}
+function payeeCatForm(names) {
+  openSheet(`<h2>Category for ${names.length} payees</h2>
+    <label class="f"><span>Category</span><select name="cat">${catOptions('any', null)}</select></label>
+    <label class="switch"><span>Also change their existing transactions</span><input type="checkbox" name="all" checked></label>
+    <div class="btns"><button class="btn" data-f="go">Save</button><button class="btn light" data-f="cancel">Cancel</button></div>`, box => {
+    box.onclick = e => { const f = e.target.dataset.f; if (!f) return; if (f === 'cancel') return closeSheet();
+      const cat = +formData(box).cat; if (!cat) return bad('Choose a category.');
+      db.exec('BEGIN'); for (const n of names) { learnRule(n, cat, null); if (box.querySelector('[name=all]').checked) run("UPDATE transactions SET category_id=? WHERE payee=? AND kind<>'transfer'", [cat, n]); } db.exec('COMMIT');
+      state.psel = new Set(); save(); closeSheet(); toast('Saved'); render(); };
+  });
+}
+
+/* ---- categories: merge, move, clean up ---- */
+function catUse(id) { return q('SELECT COUNT(*) n, COALESCE(SUM(amount),0) s FROM transactions WHERE category_id=?', [id])[0]; }
+function catManage(id) {
+  const C = cats(), c = C.byId[id]; if (!c) return;
+  const subs = C.rows.filter(x => x.parent_id === id), u = catUse(id), tops = C.rows.filter(x => !x.parent_id && x.id !== id && x.id !== c.parent_id);
+  openSheet(`<h2>${esc(C.label(id))}</h2><p class="sub">${u.n} transaction${u.n === 1 ? '' : 's'} · ${whole(u.s, home())}${subs.length ? ' · ' + subs.length + ' subcategories' : ''}</p>
+    ${field('name', 'Name', c.name, 'autocomplete="off"')}
+    <div class="btns"><button class="btn" data-f="rename">Save the name</button><button class="btn light" data-f="cancel">Close</button></div>
+    <h3 class="ieh">Merge into another category</h3><label class="f"><span>Its transactions, repeats and remembered payees go to</span><select name="into"><option value="">Choose…</option>${catOptions('any', null).replace('<option value="">No category</option>', '')}</select></label>
+    <div class="btns"><button class="btn light" data-f="merge">Merge</button></div>
+    ${subs.length ? '' : `<h3 class="ieh">Move</h3><label class="f"><span>${c.parent_id ? 'Move under' : 'Make it a subcategory of'}</span><select name="under">${c.parent_id ? '<option value="top">Make it a main category</option>' : '<option value="">Choose…</option>'}${tops.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select></label>
+      <div class="btns"><button class="btn light" data-f="move">Move</button></div>`}
+    <div class="btns"><button class="btn danger" data-f="delete">Delete</button></div>`, box => {
+    box.onclick = e => { const f = e.target.dataset.f; if (!f) return;
+      if (f === 'cancel') return closeSheet();
+      if (f === 'delete') { closeSheet(); return catForm(id); }
+      if (f === 'rename') { const n = (formData(box).name || '').trim(); if (!n) return bad('Enter a name.'); run('UPDATE categories SET name=? WHERE id=?', [n, id]); clearCats(); save(); closeSheet(); render(); return; }
+      if (f === 'merge') { const into = +formData(box).into; if (!into || into === id) return bad('Choose the category to merge into.');
+        const target = C.byId[into]; db.exec('BEGIN');
+        for (const tb of ['transactions', 'recurring', 'payee_rules']) run(`UPDATE ${tb} SET category_id=? WHERE category_id=?`, [into, id]);
+        for (const s of subs) { if (!target.parent_id) run('UPDATE categories SET parent_id=?, kind=? WHERE id=?', [into, target.kind, s.id]); else { for (const tb of ['transactions', 'recurring', 'payee_rules']) run(`UPDATE ${tb} SET category_id=? WHERE category_id=?`, [into, s.id]); run('DELETE FROM categories WHERE id=?', [s.id]); } }
+        run('DELETE FROM categories WHERE id=?', [id]); db.exec('COMMIT'); clearCats(); save(); closeSheet(); toast('Merged into ' + C.label(into)); render(); return; }
+      if (f === 'move') { const v = formData(box).under; if (!v) return bad('Choose where to move it.');
+        if (v === 'top') run('UPDATE categories SET parent_id=NULL WHERE id=?', [id]);
+        else { const p = C.byId[+v]; run('UPDATE categories SET parent_id=?, kind=? WHERE id=?', [p.id, p.kind, id]); }
+        clearCats(); save(); closeSheet(); render(); }
+    };
+  });
+}
+async function removeUnusedCats() {
+  const used = new Set(q('SELECT DISTINCT category_id c FROM transactions WHERE category_id IS NOT NULL UNION SELECT DISTINCT category_id FROM recurring WHERE category_id IS NOT NULL UNION SELECT DISTINCT category_id FROM payee_rules WHERE category_id IS NOT NULL').map(r => r.c));
+  const C = cats(), keep = new Set(['Transfers & card payments', 'Loans', 'Lent', 'Repaid', 'Interest', 'Cash spending']);
+  const gone = C.rows.filter(c => !used.has(c.id) && !keep.has(c.name) && !C.rows.some(s => s.parent_id === c.id && (used.has(s.id) || keep.has(s.name))));
+  if (!gone.length) return toast('Every category is in use');
+  if (!await ask(`Remove ${gone.length} categories that nothing uses? (${gone.slice(0, 8).map(c => c.name).join(', ')}${gone.length > 8 ? '…' : ''})`, 'Remove them')) return;
+  db.exec('BEGIN'); for (const c of gone.filter(c => c.parent_id)) run('DELETE FROM categories WHERE id=?', [c.id]); for (const c of gone.filter(c => !c.parent_id)) run('DELETE FROM categories WHERE id=?', [c.id]); db.exec('COMMIT');
+  clearCats(); save(); toast(gone.length + ' removed'); render();
+}
+
+/* ---- this month, at a glance (like MMEX) ---- */
+function monthCard() {
+  const ym = today().slice(0, 7), x = ieModel()[ym] || { rent: 0, other: 0, interest: 0, hin: 0, costs: 0 }, H = home();
+  const inc = x.rent + x.other + x.interest + (x.hin || 0), out = x.costs, mx = Math.max(inc, out, 1), net = inc - out;
+  return `<h2 class="sect" data-ftot="${esc((net >= 0 ? '+' : '') + whole(net, H))}">This month <span class="sub">${new Date(ym + '-15T12:00:00').toLocaleDateString('en-CA', { month: 'long' })}</span></h2><div class="card tap" data-go="money">
+    <div class="mrow"><span class="k up">Income</span><span class="v up">${whole(inc, H)}</span><span class="mb"><i class="mbi" style="width:${(inc / mx * 100).toFixed(1)}%"></i></span></div>
+    <div class="mrow"><span class="k down">Expenses</span><span class="v down">${whole(out, H)}</span><span class="mb"><i class="mbo" style="width:${(out / mx * 100).toFixed(1)}%"></i></span></div>
+    <div class="mrow tot"><span class="k">Difference</span><span class="v ${signCls(net)}">${(net >= 0 ? '+' : '') + whole(net, H)}</span><span></span></div></div>`;
 }
 
 /* ---------------- updates ----------------

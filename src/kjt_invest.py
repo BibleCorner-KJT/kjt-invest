@@ -20,7 +20,7 @@ import urllib.request
 import gi
 
 APP_ID = 'today.knowingjesus.Invest'
-VERSION = '1.14'
+VERSION = '1.15'
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(os.environ.get('XDG_DATA_HOME') or os.path.expanduser('~/.local/share'), 'kjt-invest')
 OLD_DIR = os.path.join(os.path.expanduser('~/.local/share'), 'investment-tracker')   # where 1.0-1.2 (Investment Tracker) kept the data
@@ -459,7 +459,10 @@ class Tracker:
                 pass
         else:
             f = Gtk.FileFilter()
-            if filt == 'bank':   # files downloaded from online banking
+            if filt == 'mmex':   # a Money Manager Ex database
+                f.set_name('MMEX database (.mmb)')
+                pats = ('*.mmb', '*.MMB')
+            elif filt == 'bank':   # files downloaded from online banking
                 f.set_name('Bank files (OFX, QFX, QIF, CSV)')
                 pats = ('*.ofx', '*.qfx', '*.qbo', '*.qif', '*.csv', '*.OFX', '*.QFX', '*.QBO', '*.QIF', '*.CSV', '*.txt')
             else:
