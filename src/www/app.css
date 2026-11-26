@@ -555,3 +555,16 @@ ol.steps { margin: 8px 0; padding-left: 20px; display: grid; gap: 6px; font-size
 .hideamt .amt { filter: blur(6px); user-select: none; }
 .hideamt span.amt { display: inline-block; }
 .hideamt svg .amt { opacity: 0; }
+
+/* 1.18: reconcile */
+.badge.wait { background: transparent; border: 1px dashed var(--muted); color: var(--muted); font-weight: 600; }
+.rtab { display: grid; gap: 0; }
+.rtab > div { display: grid; grid-template-columns: 1.3fr 1fr 1fr; gap: 8px; padding: 9px 4px; border-top: 1px solid var(--line, rgba(127,127,127,.18)); align-items: baseline; font-variant-numeric: tabular-nums; }
+.rtab > div > span:nth-child(n+2) { text-align: right; }
+.rtab .rth { border-top: 0; font-size: .74rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.rtab .rty { font-weight: 800; background: var(--soft); border-radius: 8px; border-top: 0; margin-top: 4px; }
+.rtab .rty.tot { margin-top: 8px; }
+.rtab .rtr span.down, .rtab .rtr span.up, .rtab .rty span.down, .rtab .rty span.up { font-weight: 700; }
+.rblock { background: var(--soft); border-radius: 12px; padding: 8px 12px; margin: 10px 0; }
+.rrow { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; font-variant-numeric: tabular-nums; }
+.loosesel { flex: 1; min-width: 0; max-width: 62%; }

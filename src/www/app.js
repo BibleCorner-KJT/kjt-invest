@@ -1,9 +1,9 @@
-/* KJT Finance 1.17 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
+/* KJT Finance 1.18 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
    All data stays in one SQLite file on the device. The only network calls are the
    price updates (metal prices from gold-api.com, exchange rates from the European Central Bank). */
 'use strict';
 
-const APP_VERSION = '1.17';
+const APP_VERSION = '1.18';
 const SCHEMA = 11;
 const OZT_G = 31.1034768;
 const METALS = [
@@ -202,6 +202,10 @@ function prepareDb() {
   }
   if (!getSetting('cats_v111')) { if (!q("SELECT id FROM categories WHERE parent_id IS NULL AND name='Cash spending'").length)
     run("INSERT INTO categories(name,parent_id,kind,sort) VALUES('Cash spending',NULL,'out',95)"); setSetting('cats_v111', '1'); clearCats(); }
+  /* 1.18: which entries the bank has confirmed (2 = a bank file, 1 = you or MMEX said so); the bank line of a transfer's other side */
+  if (!q('PRAGMA table_info(transactions)').some(r => r.name === 'bank_ok')) run('ALTER TABLE transactions ADD COLUMN bank_ok INTEGER');
+  if (!q('PRAGMA table_info(transactions)').some(r => r.name === 'import_id2')) { run('ALTER TABLE transactions ADD COLUMN import_id2 TEXT'); run('CREATE INDEX IF NOT EXISTS tx_import2 ON transactions(import_id2)'); }
+  if (!getSetting('bank_ok_v118')) { run("UPDATE transactions SET bank_ok=2 WHERE bank_ok IS NULL AND (import_id LIKE 'ref:%' OR import_id LIKE 'h:%')"); setSetting('bank_ok_v118', '1'); }
   syncMeta();   /* 1.14: lasting ids, change times and deletion notes, for syncing and merging */
   if (+getSetting('schema', 1) < SCHEMA) setSetting('schema', SCHEMA);
 }
@@ -649,6 +653,7 @@ function priceOn(sym, date, cur) {   /* USD price of a troy ounce on a date, in 
 
 /* ---------------- screens ---------------- */
 const state = { tab: 'overview', propertyId: null };
+let PFROM = {};   /* 1.18: per account, the first day a bank file covered (cleared at each render) */
 const view = () => document.getElementById('view');
 function setTitle(t, back) {
   document.getElementById('title').textContent = t;
@@ -672,7 +677,7 @@ const subBtn = (k, l, on, attr) => `<button class="${on ? 'on' : ''}" ${attr}="$
 const ASECS = [['accounts', 'Accounts'], ['property', 'Property'], ['metals', 'Metals'], ['loans', 'Loans'], ['assets', 'Other']];
 const isAsset = t => ASECS.some(a => a[0] === t);
 function render() {
-  navBefore();
+  navBefore(); PFROM = {};
   if (isAsset(state.tab)) state.lastAsec = state.tab;
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === state.tab || (b.dataset.tab === 'assetsgroup' && isAsset(state.tab))));
   document.getElementById('settings').classList.toggle('on', state.tab === 'more');
@@ -685,6 +690,7 @@ function render() {
   else if (state.tab === 'loans') state.loanId ? renderLoan(state.loanId) : renderLoans();
   else if (state.tab === 'currency') renderMarkets();
   else if (state.tab === 'money') renderMoney();
+  else if (state.tab === 'recon') renderRecon(state.reconId);
   else renderMore();
   const inDetail = state.propertyId && state.tab === 'property' || state.accountId && state.tab === 'accounts' || state.assetId && state.tab === 'assets' || state.loanId && state.tab === 'loans';
   if (isAsset(state.tab) && !inDetail) {
@@ -1306,6 +1312,7 @@ function renderAccounts() {
   h += `<h2 class="sect">Your accounts</h2>`;
   h += as.length ? body : `<div class="card empty">No accounts yet. Add your chequing and savings accounts, credit cards, and cash on hand.</div>`;
   h += `<button class="btn wide" data-act="add-account">+ Add account</button>`;
+  if (as.length) h += `<button class="btn wide light" data-act="recon" data-id="">Reconcile with the bank</button>`;
   view().innerHTML = h;
 }
 /* does a balance check agree with your transactions since the check before it? */
@@ -1364,14 +1371,14 @@ function renderAccount(id) {
       ${a.interest_rate ? `<div class="sub" style="margin-top:8px">${a.interest_rate}% interest a year on what is not paid in time</div>` : ''}
       <div class="btns"><button class="btn" data-act="add-tx" data-acct-id="${a.id}">+ Expense</button><button class="btn light" data-act="pay-card" data-id="${a.id}">Pay the card</button></div>
       <div class="btns"><button class="btn light" data-act="add-balance" data-id="${a.id}">Statement / what you owe</button><button class="btn light" data-act="bank-import" data-id="${a.id}">Import bank file</button></div>
-      <div class="btns"><button class="btn light" data-act="edit-account" data-id="${a.id}">Edit</button></div></div>`;
+      <div class="btns"><button class="btn light" data-act="recon" data-id="${a.id}">Reconcile</button><button class="btn light" data-act="edit-account" data-id="${a.id}">Edit</button></div></div>`;
   } else {
     h = `<div class="card hero"><div class="label">${esc(ACCT_TYPES[a.type] || 'Account')}${a.institution ? ' · ' + esc(a.institution) : ''}</div>
       <div class="big">${b ? money(b.balance * share, c) : '—'}</div>
       <div class="sub">${b ? 'as of ' + fmtDate(b.date) : 'no balance yet'}${share < 1 ? ' · your share (' + shareLbl(a) + ') of ' + money(b ? b.balance : 0, c) : ''}${a.interest_rate ? ' · ' + a.interest_rate + '% interest' : ''}</div>
       <div class="btns"><button class="btn" data-act="add-tx" data-acct-id="${a.id}">+ ${isCash ? 'Cash spent or received' : 'Transaction'}</button><button class="btn light" data-act="add-balance" data-id="${a.id}">${isCash ? 'Count your cash' : 'Update balance'}</button></div>
-      <div class="btns">${isCash ? '' : `<button class="btn light" data-act="bank-import" data-id="${a.id}">Import bank file</button>`}<button class="btn light" data-act="edit-account" data-id="${a.id}">Edit</button></div>
-      ${isCash ? '<p class="sub" style="margin:8px 0 0">Money taken out at an ATM comes in here by itself. Counting your cash is optional: do it now and then, and any difference can be recorded as cash spending.</p>' : ''}</div>`;
+      <div class="btns">${isCash ? '' : `<button class="btn light" data-act="bank-import" data-id="${a.id}">Import bank file</button>`}<button class="btn light" data-act="recon" data-id="${a.id}">Reconcile</button><button class="btn light" data-act="edit-account" data-id="${a.id}">Edit</button></div>
+      ${isCash ? '<p class="sub" style="margin:8px 0 0">Counting your cash is optional: do it now and then, and any difference can be recorded as cash spending.</p>' : ''}</div>`;
   }
   const txs = q('SELECT * FROM transactions WHERE account_id=? OR to_account_id=? ORDER BY date DESC, id DESC LIMIT 60', [id, id]);
   if (txs.length) {
@@ -1881,6 +1888,10 @@ view().addEventListener('click', e => {
     case 'pay-card': { const bank = q("SELECT id FROM accounts WHERE type<>'credit' ORDER BY type='chequing' DESC, name LIMIT 1")[0];
       if (!bank) { toast('First add the bank account you pay the card from.'); break; }
       const ow = acctBalance(+d.id); txForm(null, null, { kind: 'transfer', account_id: bank.id, to_account_id: +d.id, amount: ow && ow.balance < 0 ? +(-ow.balance).toFixed(2) : null, note: 'Card payment' }); break; }
+    case 'recon': state.tab = 'recon'; state.reconId = d.id ? +d.id : null; render(); view().scrollTop = 0; break;
+    case 'find-xfer': offerTransfers(false); break;
+    case 'xfer-apply': applyLoose(+d.id); break;
+    case 'recon-month': reconMonth(+d.id, d.ym); break;
     case 'tx-of': state.tab = 'money'; state.msec = 'tx'; state.txAcct = d.id; state.accountId = null; render(); view().scrollTop = 0; break;
     case 'csv': exportCsv(d.which); break;
     case 'add-loan': loanForm(); break;
@@ -2392,7 +2403,8 @@ function txRow(t, A, withDate) {
   const sub = (withDate ? `<b class="txdate">${fmtDate(t.date)}</b> · ` : '') + (t.kind === 'transfer' ? esc(a.name || '') + (t.note ? ' · ' + esc(t.note) : '') : `${esc(cats().label(t.category_id))} · ${esc(a.name || '')}${t.note ? ' · ' + esc(t.note) : ''}`);
   const sign = t.kind === 'in' ? '+' : t.kind === 'out' ? '−' : '';
   const pk = state.sel ? `<span class="tick${state.sel.has(t.id) ? ' on' : ''}" aria-hidden="true"></span>` : '';
-  return `<div class="txrow${state.sel && state.sel.has(t.id) ? ' picked' : ''}" data-tx="${t.id}">${pk}<div class="txl"><div class="txt">${title}${t.recurring_id ? ' <span class="badge">↻</span>' : ''}${t.link ? ' <span class="badge">' + esc(linkLabel(t.link)) + '</span>' : ''}</div><div class="sub">${sub}</div></div>
+  const wait = isWaiting(t, t.account_id) ? ' <span class="badge wait" title="Not in a bank file yet">not in bank yet</span>' : '';
+  return `<div class="txrow${state.sel && state.sel.has(t.id) ? ' picked' : ''}" data-tx="${t.id}">${pk}<div class="txl"><div class="txt">${title}${wait}${t.recurring_id ? ' <span class="badge">↻</span>' : ''}${t.link ? ' <span class="badge">' + esc(linkLabel(t.link)) + '</span>' : ''}</div><div class="sub">${sub}</div></div>
     <div class="txa ${t.kind === 'in' ? 'up' : t.kind === 'out' ? 'down' : ''}">${sign}${money(t.amount, c)}</div></div>`;
 }
 function linkOptions(sel) {
@@ -2431,6 +2443,7 @@ function txForm(id, copyOf, preset) {
     <label class="f"><span>Linked to something you own (optional)</span><select name="link">${linkOptions(t.link || '')}</select></label>
     ${id ? (rec ? `<p class="hint">Part of a repeating transaction (${esc(FREQS[rec.freq])}); change the repeat under Cash flow › Recurring.</p>` : '') : `<div class="f2"><label class="f"><span>Repeat</span><select name="freq"><option value="">Only once</option>${Object.entries(FREQS).map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></label>
       <label class="f" id="auto-wrap"><span>Next times</span><select name="auto"><option value="0">Remind me</option><option value="1">Add by itself</option></select></label></div>`}
+    ${id && t.account_id && (q('SELECT type FROM accounts WHERE id=?', [t.account_id])[0] || {}).type !== 'cash' ? `<label class="switch"><span>Seen on the bank statement${t.bank_ok === 2 ? ' (from a bank file)' : ''}</span><input type="checkbox" name="bank_ok"${t.bank_ok ? ' checked' : ''}></label>` : ''}
     <div class="btns"><button class="btn" data-f="save">Save</button><button class="btn light" data-f="cancel">Cancel</button></div>
     ${id ? '<div class="btns"><button class="btn light" data-f="dup">Duplicate</button><button class="btn danger" data-f="delete">Delete</button></div>' : ''}`, box => {
     const sync = () => { const k = (box.querySelector('[name=kind]:checked') || {}).value || 'out';
@@ -2456,7 +2469,8 @@ function txForm(id, copyOf, preset) {
       const vals = [+d.account_id, d.date, kind, amt, kind === 'transfer' ? null : (+d.category_id || null), kind === 'transfer' ? (t.payee || null) : (d.payee || '').trim(), (d.note || '').trim(), kind === 'transfer' ? +d.to_account_id : null, d.link || null];
       /* remember this payee for next time: its category, or (an ATM withdrawal made into a transfer) the account it goes to */
       if (vals[5]) { if (kind === 'transfer') { if (t.kind !== 'transfer' && t.payee) learnRule(t.payee, null, vals[7]); } else if (vals[4] && vals[4] !== t.category_id) learnRule(vals[5], vals[4], null); }
-      if (id) run('UPDATE transactions SET account_id=?,date=?,kind=?,amount=?,category_id=?,payee=?,note=?,to_account_id=?,link=? WHERE id=?', vals.concat([id]));
+      if (id) { run('UPDATE transactions SET account_id=?,date=?,kind=?,amount=?,category_id=?,payee=?,note=?,to_account_id=?,link=? WHERE id=?', vals.concat([id]));
+        const bo = box.querySelector('[name=bank_ok]'); if (bo) run('UPDATE transactions SET bank_ok=? WHERE id=?', [bo.checked ? (t.bank_ok || 1) : null, id]); }
       else {
         let rid = null;
         if (d.freq) { run('INSERT INTO recurring(account_id,kind,amount,category_id,payee,note,to_account_id,link,freq,next_date,auto,active) VALUES(?,?,?,?,?,?,?,?,?,?,?,1)',
@@ -3014,7 +3028,7 @@ function prepareImport(parsed, accountId, opts) {
   opts = opts || {};
   const a = q('SELECT * FROM accounts WHERE id=?', [accountId])[0], credit = a && a.type === 'credit';
   const have = q('SELECT * FROM transactions WHERE account_id=? OR to_account_id=?', [accountId, accountId]);
-  const refs = new Set(have.filter(t => t.import_id).map(t => t.import_id)), used = new Set(), mem = payeeMemory(), cardPay = transferCat(), rules = payeeRules(), cash = cashAccount(accountId);
+  const refs = new Set(have.flatMap(t => [t.import_id, t.import_id2]).filter(Boolean)), used = new Set(), mem = payeeMemory(), cardPay = transferCat(), rules = payeeRules(), cash = cashAccount(accountId);
   const seen = {}, rows = [];
   for (const x of parsed.txs) {
     const base = `${x.date}|${x.amount.toFixed(2)}|${normPayee(x.payee)}`; seen[base] = (seen[base] || 0) + 1;
@@ -3052,7 +3066,11 @@ function commitImport(parsed, id, prep) {
   prep = prep || prepareImport(parsed, id, { cutoff: lastOwnDate(id) });
   const a = prep.account, now = Date.now(), dates = parsed.txs.map(x => x.date).sort(); let n = 0, newCash = null;
   for (const r of prep.rows) {
-    if (r.dup === 'match') { run('UPDATE transactions SET import_id=? WHERE id=? AND import_id IS NULL', [r.iid, r.matchId]); continue; }   /* an MMEX entry keeps its MMEX number */
+    if (r.dup === 'match') {   /* your own entry, now confirmed by the bank (an MMEX entry keeps its MMEX number) */
+      const m = q('SELECT account_id, to_account_id, kind FROM transactions WHERE id=?', [r.matchId])[0];
+      if (m && m.kind === 'transfer' && m.to_account_id === id && m.account_id !== id) run('UPDATE transactions SET import_id2=? WHERE id=? AND import_id2 IS NULL', [r.iid, r.matchId]);
+      else { run('UPDATE transactions SET import_id=? WHERE id=? AND import_id IS NULL', [r.iid, r.matchId]); run('UPDATE transactions SET bank_ok=2 WHERE id=?', [r.matchId]); }
+      continue; }
     if (r.dup && !(r.dup === 'maybe' && r.include)) continue;
     let from = id, to = null;
     if (r.transferTo) {
@@ -3060,8 +3078,9 @@ function commitImport(parsed, id, prep) {
       if (!dest || dest === 'new') { r.kind = r.amount < 0 ? 'out' : 'in'; r.transferTo = null; }   /* 1.15: never makes a cash account by itself */
       else if (r.amount < 0) { from = id; to = dest; } else { from = dest; to = id; }
     }
-    run('INSERT INTO transactions(account_id,date,kind,amount,category_id,payee,note,to_account_id,link,recurring_id,created,import_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
-      [from, r.date, r.kind, Math.abs(r.amount), r.cat, String(r.payee || '').slice(0, 120), (r.memo || '').slice(0, 200), to, null, null, now, r.iid]); n++;
+    const toSide = to === id;   /* money came in from a remembered account: the bank line belongs to the receiving side */
+    run('INSERT INTO transactions(account_id,date,kind,amount,category_id,payee,note,to_account_id,link,recurring_id,created,import_id,import_id2,bank_ok) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      [from, r.date, r.kind, Math.abs(r.amount), r.cat, String(r.payee || '').slice(0, 120), (r.memo || '').slice(0, 200), to, null, null, now, toSide ? null : r.iid, toSide ? r.iid : null, toSide ? null : 2]); n++;
   }
   if (newCash) toastLater = 'A "Cash in hand" account was made for your ATM withdrawals.';
   if (parsed.balance != null) {
@@ -3106,7 +3125,7 @@ function multiReview(parts) {
           n += commitImport(p, +v); accN++; done.push(+v); if (p.acctId) map[p.acctId] = +v; });
         db.exec('COMMIT');
       } catch (err) { db.exec('ROLLBACK'); return bad('Import failed: ' + err.message); }
-      setSetting('import_map', JSON.stringify(map)); save(); closeSheet();
+      setSetting('import_map', JSON.stringify(map)); save(); closeSheet(); offerTransfersSoon();
       const diffs = done.map(id => lastReconText(id)).filter(s => s.includes('differs')).length;
       toast(`${n} transaction${n === 1 ? '' : 's'} imported into ${accN} account${accN === 1 ? '' : 's'}` + (diffs ? ` · ${diffs} balance${diffs > 1 ? 's differ' : ' differs'} from your transactions` : ' · balances updated'));
       state.tab = 'accounts'; state.accountId = null; render(); view().scrollTop = 0; };
@@ -3216,8 +3235,197 @@ function importReview(parsed, accountId) {
       db.exec('BEGIN');
       try { n = commitImport(parsed, id, prep); db.exec('COMMIT'); } catch (err) { db.exec('ROLLBACK'); return bad('Import failed: ' + err.message); }
       if (parsed.acctId) { map[parsed.acctId] = id; setSetting('import_map', JSON.stringify(map)); }
-      save(); closeSheet(); toast((n ? n + ' transaction' + (n > 1 ? 's' : '') + ' imported' : 'Nothing new; balance updated') + (parsed.balance != null ? lastReconText(id) : '')); if (toastLater) { const m = toastLater; toastLater = ''; setTimeout(() => toast(m), 2600); }
+      save(); closeSheet(); offerTransfersSoon(); toast((n ? n + ' transaction' + (n > 1 ? 's' : '') + ' imported' : 'Nothing new; balance updated') + (parsed.balance != null ? lastReconText(id) : '')); if (toastLater) { const m = toastLater; toastLater = ''; setTimeout(() => toast(m), 2600); }
       state.tab = 'accounts'; state.accountId = id; render(); view().scrollTop = 0; };
+  });
+}
+
+/* ---------------- 1.18: reconcile with the bank ----------------
+   Each balance check (from a bank file, a statement or a cash count) is compared with the check before it plus the
+   transactions in between. A difference means something is missing, doubled or wrong. Per month you see the difference,
+   per year and in total; one tap adds a correction. Entries you typed that no bank file has shown yet are "not in bank yet".
+   Money that left one of your accounts and arrived in another (BR TO BR at RBC) is linked into one transfer. */
+const XFER_RE = /\b(br\s*to\s*br|transfer|virement|tfr|xfer|trsf|inter-?account)\b/i, ETR_RE = /\b(e-?transfer|interac|etfr|e-?tfr|send money)\b/i;
+function pendFrom(id) {   /* entries from this day on should show up in the bank's files */
+  if (id in PFROM) return PFROM[id];
+  const a = q('SELECT type FROM accounts WHERE id=?', [id])[0];
+  const r = a && a.type !== 'cash' ? q("SELECT MIN(date) d FROM transactions WHERE (account_id=? AND bank_ok=2) OR (to_account_id=? AND import_id2 IS NOT NULL)", [id, id])[0] : null;
+  return (PFROM[id] = r && r.d || null);
+}
+function isWaiting(t, id) {
+  if (t.kind === 'transfer' && t.to_account_id === id && t.account_id !== id) { const f = pendFrom(id); return !!f && t.date >= f && !t.import_id2; }
+  if (t.account_id !== id) return false; const f = pendFrom(id); return !!f && t.date >= f && !t.bank_ok;
+}
+function corrCat() {
+  let r = cats().rows.find(c => !c.parent_id && c.name === 'Balance corrections');
+  if (!r) { run("INSERT INTO categories(name,parent_id,kind,sort) VALUES('Balance corrections',NULL,'save',905)"); clearCats(); r = cats().rows.find(c => !c.parent_id && c.name === 'Balance corrections'); }
+  return r ? r.id : null;
+}
+/* every balance check after the first, with what your transactions say */
+function reconPeriods(a) {
+  const bs = q('SELECT * FROM account_balances WHERE account_id=? ORDER BY date, COALESCE(created,0), id', [a.id]), out = [], cur = a.currency || home();
+  const sg = b => a.type === 'credit' ? -Math.abs(b) : b, cc = (cats().rows.find(c => !c.parent_id && c.name === 'Balance corrections') || {}).id;
+  for (let i = 1; i < bs.length; i++) {
+    const r = bs[i], prev = bs[i - 1], pc = prev.created || 0, rc = r.created || 9e15;
+    const txs = q('SELECT * FROM transactions WHERE (account_id=? OR to_account_id=?) AND (date>? OR (date=? AND COALESCE(created,0)>?)) AND (date<? OR (date=? AND COALESCE(created,0)<=?))',
+      [a.id, a.id, prev.date, prev.date, pc, r.date, r.date, rc]);
+    let exp = sg(prev.balance), fix = 0; for (const t of txs) { const e = txEffect(t, a.id, cur); exp += e; if (cc && t.category_id === cc) fix += e; }
+    const diff = sg(r.balance) - exp;
+    out.push({ check: r, prev, bank: sg(r.balance), expected: exp, diff: Math.abs(diff) < 0.005 ? 0 : diff, fix, n: txs.length, txs, ym: r.date.slice(0, 7) });
+  }
+  return out;
+}
+function monthsOf(periods) {   /* several checks in one month add up */
+  const m = new Map();
+  for (const p of periods) { const x = m.get(p.ym) || { ym: p.ym, diff: 0, fix: 0, n: 0, bank: 0, last: null, periods: [] };
+    x.diff += p.diff; x.fix += p.fix; x.n += p.n; x.bank = p.bank; x.last = p.check; x.periods.push(p); m.set(p.ym, x); }
+  return [...m.values()].reverse();
+}
+const ymLabel = ym => new Date(ym + '-15T12:00:00').toLocaleDateString('en-CA', { month: 'long', year: 'numeric' });
+/* money moving between two of your accounts, entered on both sides: link each pair into one transfer */
+function findTransfers(since) {
+  let no = []; try { no = JSON.parse(getSetting('xfer_no', '[]')); } catch (e) { no = []; } const NO = new Set(no);
+  const A = Object.fromEntries(q('SELECT * FROM accounts').map(a => [a.id, a]));
+  const outs = q("SELECT * FROM transactions WHERE kind='out' ORDER BY date"), ins = q("SELECT * FROM transactions WHERE kind='in' ORDER BY date"), byAmt = new Map();
+  for (const t of ins) { const k = t.amount.toFixed(2); if (!byAmt.has(k)) byAmt.set(k, []); byAmt.get(k).push(t); }
+  const used = new Set(), pairs = [], loose = t => XFER_RE.test((t.payee || '') + ' ' + (t.note || '')) && !ETR_RE.test((t.payee || '') + ' ' + (t.note || ''));
+  const xc = transferCat();
+  const score = (o, i) => (loose(o) ? 2 : 0) + (loose(i) ? 2 : 0) + (xc && o.category_id === xc ? 2 : 0) + (xc && i.category_id === xc ? 2 : 0) + (!o.category_id ? 1 : 0) + (!i.category_id ? 1 : 0) - Math.abs(dnum(o.date) - dnum(i.date));
+  const cand = [];
+  for (const o of outs) { const ao = A[o.account_id]; if (!ao) continue;
+    for (const i of byAmt.get(o.amount.toFixed(2)) || []) { const ai = A[i.account_id];
+      if (!ai || i.account_id === o.account_id || (ai.currency || home()) !== (ao.currency || home())) continue;
+      if (Math.abs(dnum(o.date) - dnum(i.date)) > 3 || NO.has(o.uid + '|' + i.uid)) continue;
+      if (since && Math.max(o.created || 0, i.created || 0) < since) continue;
+      cand.push({ o, i, s: score(o, i) }); } }
+  cand.sort((x, y) => y.s - x.s);
+  for (const c of cand) { if (used.has(c.o.id) || used.has(c.i.id)) continue; used.add(c.o.id); used.add(c.i.id); c.likely = c.s >= 1; pairs.push(c); }
+  return pairs.sort((x, y) => x.o.date < y.o.date ? 1 : -1);
+}
+function linkTransfer(o, i) {   /* the money-out entry becomes the transfer; the money-in entry is folded into it */
+  const note = [o.note, o.payee && o.payee !== i.payee ? o.payee : '', i.payee].filter(Boolean).filter((v, k, arr) => arr.indexOf(v) === k).join(' · ').slice(0, 200);
+  run("UPDATE transactions SET kind='transfer', to_account_id=?, category_id=NULL, note=?, import_id2=COALESCE(import_id2, ?) WHERE id=?", [i.account_id, note, i.import_id || null, o.id]);
+  run('DELETE FROM transactions WHERE id=?', [i.id]);
+}
+let xferTimer = null;
+function offerTransfersSoon() { const t0 = Date.now() - 60000; clearTimeout(xferTimer); xferTimer = setTimeout(() => offerTransfers(true, t0), 900); }
+function offerTransfers(quiet, since) {
+  const pairs = findTransfers(since), A = Object.fromEntries(q('SELECT * FROM accounts').map(a => [a.id, a]));
+  if (!pairs.length) { if (!quiet) toast('No new transfers between your accounts found'); return; }
+  openSheet(`<h2>Transfers between your accounts</h2><p class="sub">The same amount left one of your accounts and arrived in another within a few days. Linked, it counts once, as a transfer: not as spending and not as income.</p>
+    <div class="maybes">${pairs.map((p, k) => `<label class="maybe"><input type="checkbox" data-pair="${k}"${p.likely ? ' checked' : ''}>
+      <span><b>${money(p.o.amount, A[p.o.account_id].currency || home())} · ${esc(A[p.o.account_id].name)} → ${esc(A[p.i.account_id].name)}</b><br>
+      <small>${fmtDate(p.o.date)} ${esc(p.o.payee || cats().label(p.o.category_id) || '')}${p.i.date !== p.o.date ? ' · arrived ' + fmtDate(p.i.date) : ''} ${esc(p.i.payee && p.i.payee !== p.o.payee ? '· ' + p.i.payee : '')}</small></span></label>`).join('')}</div>
+    <p class="hint">Untick any that are not a transfer (two payments of the same amount by chance); the app will not ask about them again.</p>
+    <div class="btns"><button class="btn" data-f="go">Link the ticked ones</button><button class="btn light" data-f="cancel">Not now</button></div>`, box => {
+    const cnt = () => { const n = box.querySelectorAll('[data-pair]:checked').length; box.querySelector('[data-f=go]').textContent = n ? `Link ${n} as transfer${n > 1 ? 's' : ''}` : 'None are transfers'; };
+    box.onchange = cnt; cnt();
+    box.onclick = e => { const f = e.target.dataset.f; if (!f) return; if (f === 'cancel') return closeSheet();
+      let no = []; try { no = JSON.parse(getSetting('xfer_no', '[]')); } catch (er) { no = []; }
+      let n = 0; db.exec('BEGIN');
+      try { box.querySelectorAll('[data-pair]').forEach(c => { const p = pairs[+c.dataset.pair]; if (c.checked) { linkTransfer(p.o, p.i); n++; } else no.push(p.o.uid + '|' + p.i.uid); }); db.exec('COMMIT'); }
+      catch (er) { db.exec('ROLLBACK'); return bad('Could not link: ' + er.message); }
+      setSetting('xfer_no', JSON.stringify(no.slice(-500))); save(); closeSheet(); toast(n ? `${n} transfer${n > 1 ? 's' : ''} linked` : 'Noted: not transfers'); render(); };
+  });
+}
+/* "BR TO BR" and the like with no partner in any of your accounts: you say where it went */
+function looseTransfers(accountId) {
+  let ok = []; try { ok = JSON.parse(getSetting('xfer_ok', '[]')); } catch (e) { ok = []; } const OK = new Set(ok), xc = transferCat();
+  const paired = new Set(findTransfers().flatMap(p => [p.o.id, p.i.id]));
+  return q("SELECT t.* FROM transactions t JOIN accounts a ON a.id=t.account_id WHERE t.kind<>'transfer' AND a.type<>'credit'" + (accountId ? ' AND t.account_id=?' : '') + ' ORDER BY t.date DESC', accountId ? [accountId] : [])
+    .filter(t => !OK.has(t.uid) && !paired.has(t.id) && ((XFER_RE.test((t.payee || '') + ' ' + (t.note || '')) && !ETR_RE.test((t.payee || '') + ' ' + (t.note || ''))) || (xc && t.category_id === xc)));
+}
+function looseHtml(list) {
+  if (!list.length) return '';
+  const A = Object.fromEntries(q('SELECT * FROM accounts').map(a => [a.id, a]));
+  return `<h2 class="sect">Transfers with no other side <span class="sub">${list.length}</span></h2><div class="card"><p class="sub" style="margin-top:0">Money moved, but none of your other accounts shows it arriving (or leaving). Say where it went: another account, your cash, or leave it as spending or income.</p>
+    <div class="txns" style="margin-top:0">${list.map(t => { const a = A[t.account_id] || {}, c = a.currency || home();
+      const opts = Object.values(A).filter(x => x.id !== t.account_id && (x.currency || home()) === c).map(x => `<option value="${x.id}">${t.kind === 'out' ? 'Went to' : 'Came from'} ${esc(x.name)}</option>`).join('');
+      return `<div class="txn"><div class="txn-top"><span class="txn-date">${fmtDate(t.date)}</span><span class="txn-desc">${esc(t.payee || '')} · ${esc(a.name || '')}</span></div>
+        <div class="txn-body"><select class="loosesel" id="loose${t.id}">${opts}<option value="keep">Not a transfer: keep as ${t.kind === 'out' ? 'spending' : 'income'}</option></select>
+        <div class="r"><div class="strongv ${t.kind === 'in' ? 'up' : 'down'}">${t.kind === 'in' ? '+' : '−'}${money(t.amount, c)}</div></div></div>
+        <div class="btns" style="margin-top:6px"><button class="btn light" data-act="xfer-apply" data-id="${t.id}">Apply</button></div></div>`; }).join('')}</div></div>`;
+}
+function applyLoose(id) {
+  const t = q('SELECT * FROM transactions WHERE id=?', [id])[0], el = document.getElementById('loose' + id); if (!t || !el) return;
+  if (el.value === 'keep') { let ok = []; try { ok = JSON.parse(getSetting('xfer_ok', '[]')); } catch (e) { ok = []; } ok.push(t.uid); setSetting('xfer_ok', JSON.stringify(ok.slice(-2000)));
+    if (t.category_id && t.category_id === transferCat()) run('UPDATE transactions SET category_id=NULL WHERE id=?', [id]);
+    save(); toast(t.category_id === transferCat() ? 'Kept; give it a category under Cash flow' : 'Kept as it is'); return render(); }
+  const z = +el.value, note = [t.note, t.payee].filter(Boolean).join(' · ').slice(0, 200);
+  if (t.kind === 'out') run("UPDATE transactions SET kind='transfer', to_account_id=?, category_id=NULL, note=? WHERE id=?", [z, note, id]);
+  else run("UPDATE transactions SET kind='transfer', account_id=?, to_account_id=?, category_id=NULL, note=?, import_id2=COALESCE(import_id2, import_id), import_id=NULL, bank_ok=NULL WHERE id=?", [z, t.account_id, note, id]);
+  if (t.payee && normPayee(t.payee).length >= 4 && !/\d{4,}/.test(t.payee)) learnRule(t.payee, null, z);
+  save(); toast('Linked as a transfer'); render();
+}
+/* the Reconcile page: all accounts, or one */
+function renderRecon(id) {
+  const H = home();
+  if (!id) {
+    setTitle('Reconcile', true);
+    const as = q("SELECT * FROM accounts ORDER BY CASE type WHEN 'cash' THEN 2 WHEN 'credit' THEN 1 ELSE 0 END, name");
+    let h = `<div class="card"><p class="sub" style="margin:0">Each balance from your bank (or each cash count) is compared with your transactions since the one before. A difference means something is missing, doubled or wrong in that period. Tap an account to see it month by month.</p>
+      <div class="btns"><button class="btn light" data-act="find-xfer">Find transfers between accounts</button></div></div><h2 class="sect">Accounts</h2><div class="card">`;
+    h += as.map(a => { const ps = reconPeriods(a), off = ps.filter(p => p.diff), tot = off.reduce((s, p) => s + p.diff, 0), c = a.currency || home(), last = ps[ps.length - 1];
+      const waits = q('SELECT * FROM transactions WHERE account_id=? OR to_account_id=?', [a.id, a.id]).filter(t => isWaiting(t, a.id)).length;
+      const st = !ps.length ? '<span class="sub">needs two balances to compare</span>' : off.length ? `<span class="down">${off.length} period${off.length > 1 ? 's' : ''} off · ${tot > 0 ? '+' : tot < 0 ? '−' : ''}${money(Math.abs(tot), c)} in all</span>` : '<span class="up">✓ all agree</span>';
+      return `<div class="arowx" data-act="recon" data-id="${a.id}"><div class="al"><div class="an">${esc(a.name)}</div><div class="sub">${st}</div><div class="sub">${last ? 'last balance ' + fmtDate(last.check.date) : ''}${waits ? (last ? ' · ' : '') + waits + ' not in bank yet' : ''}</div></div><div class="ar"><span class="chev">›</span></div></div>`; }).join('') + '</div>';
+    h += looseHtml(looseTransfers());
+    view().innerHTML = h; return;
+  }
+  const a = q('SELECT * FROM accounts WHERE id=?', [id])[0]; if (!a) { state.reconId = null; return renderRecon(null); }
+  setTitle(a.name + ' · Reconcile', true);
+  const c = a.currency || home(), cr = a.type === 'credit', isCash = a.type === 'cash', ps = reconPeriods(a), months = monthsOf(ps), b = acctBalance(id);
+  const off = months.filter(m => m.diff), tot = ps.reduce((s, p) => s + p.diff, 0), fixes = ps.reduce((s, p) => s + p.fix, 0);
+  const show = v => cr ? money(Math.abs(v), c) : money(v, c), sgn = v => (v > 0 ? '+' : v < 0 ? '−' : '') + money(Math.abs(v), c);
+  let h = `<div class="card hero"><div class="label">${isCash ? 'Cash counts' : cr ? 'Statements' : 'Bank balances'} compared with your transactions</div>
+    <div class="big ${tot ? 'down' : 'up'}">${ps.length ? (tot ? sgn(tot) : '✓') : '—'}</div>
+    <div class="sub">${!ps.length ? `Add ${isCash ? 'two cash counts' : 'two balances (import bank files, or Update balance)'} to compare.` : tot ? `left unexplained in ${off.length} month${off.length > 1 ? 's' : ''}` : 'every period agrees with the bank'}${fixes ? ` · corrections recorded: ${sgn(fixes)}` : ''}</div>
+    <div class="btns">${isCash ? `<button class="btn light" data-act="add-balance" data-id="${a.id}">Count your cash</button>` : `<button class="btn light" data-act="bank-import" data-id="${a.id}">Import a bank file</button><button class="btn light" data-act="add-balance" data-id="${a.id}">Add a balance</button>`}</div></div>`;
+  if (months.length) {
+    let yr = null;
+    h += `<h2 class="sect">Month by month <span class="sub">tap one to see why</span></h2><div class="card"><div class="rtab"><div class="rth"><span>Month</span><span>${cr ? 'Owed' : isCash ? 'Counted' : 'Bank'}</span><span>Difference</span></div>`;
+    const years = {}; for (const m of months) { const y = m.ym.slice(0, 4); years[y] = (years[y] || 0) + m.diff; }
+    for (const m of months) { const y = m.ym.slice(0, 4);
+      if (y !== yr) { yr = y; h += `<div class="rty"><span>${y}</span><span></span><span class="${years[y] ? 'down' : 'up'}">${years[y] ? sgn(years[y]) : '✓'}</span></div>`; }
+      h += `<div class="rtr tap" data-act="recon-month" data-id="${a.id}" data-ym="${m.ym}"><span>${new Date(m.ym + '-15T12:00:00').toLocaleDateString('en-CA', { month: 'long' })}</span><span>${show(m.bank)}</span><span class="${m.diff ? 'down' : 'up'}">${m.diff ? sgn(m.diff) : '✓'}</span></div>`; }
+    h += `<div class="rty tot"><span>All</span><span></span><span class="${tot ? 'down' : 'up'}">${tot ? sgn(tot) : '✓'}</span></div></div>
+      <p class="sub" style="margin:8px 0 0">${cr ? 'A plus means you owe less than your transactions say' : 'A plus means the bank shows more than your transactions add up to'}; a minus, ${cr ? 'more' : 'less'}.</p></div>`;
+  }
+  const waits = q('SELECT * FROM transactions WHERE account_id=? OR to_account_id=? ORDER BY date DESC, id DESC', [id, id]).filter(t => isWaiting(t, id));
+  if (waits.length) { const A = Object.fromEntries(q('SELECT * FROM accounts').map(x => [x.id, x]));
+    h += `<h2 class="sect">Not in a bank file yet <span class="sub">${waits.length}</span></h2><div class="card"><p class="sub" style="margin-top:0">You entered these; the next bank file should confirm them. One still waiting after a month or two may be a mistake or a duplicate.</p><div class="txlist">${waits.map(t => txRow(t, A, true)).join('')}</div></div>`; }
+  h += looseHtml(looseTransfers(id));
+  h += `<div class="btns"><button class="btn light" data-act="find-xfer">Find transfers between accounts</button></div>`;
+  view().innerHTML = h;
+}
+/* one month: the bank, your transactions, what may be wrong, and a correction in one tap */
+function reconMonth(id, ym) {
+  const a = q('SELECT * FROM accounts WHERE id=?', [id])[0]; if (!a) return;
+  const c = a.currency || home(), cr = a.type === 'credit', ps = reconPeriods(a).filter(p => p.ym === ym), A = Object.fromEntries(q('SELECT * FROM accounts').map(x => [x.id, x]));
+  const sgn = v => (v > 0 ? '+' : v < 0 ? '−' : '') + money(Math.abs(v), c), show = v => cr ? money(Math.abs(v), c) : money(v, c);
+  const all = ps.flatMap(p => p.txs), dupIds = new Set();
+  for (const t of all) for (const u of all) if (t.id < u.id && Math.abs(t.amount - u.amount) < 0.005 && t.kind === u.kind && Math.abs(dnum(t.date) - dnum(u.date)) <= 3) { dupIds.add(t.id); dupIds.add(u.id); }
+  const blocks = ps.map((p, k) => `<div class="rblock"><div class="rrow"><span>${fmtDate(p.prev.date)} → ${fmtDate(p.check.date)}</span></div>
+    <div class="rrow"><span>${a.type === 'cash' ? 'You counted' : cr ? 'Statement says you owe' : 'The bank says'}</span><b>${show(p.bank)}</b></div>
+    <div class="rrow"><span>Your transactions say</span><b>${show(p.expected)}</b></div>
+    <div class="rrow"><span>Difference</span><b class="${p.diff ? 'down' : 'up'}">${p.diff ? sgn(p.diff) : '✓ none'}</b></div>
+    ${p.diff ? `<div class="btns"><button class="btn" data-f="fix" data-k="${k}">Add a correction of ${sgn(p.diff)}</button></div>` : ''}</div>`).join('');
+  const dups = all.filter(t => dupIds.has(t.id)), waits = all.filter(t => isWaiting(t, id) && !dupIds.has(t.id));
+  openSheet(`<h2>${ymLabel(ym)} · ${esc(a.name)}</h2>${blocks}
+    ${ps.some(p => p.diff) ? `<p class="hint">First look for the cause: ${dups.length ? 'entries that may be doubled, ' : ''}${waits.length ? 'entries no bank file has shown, ' : ''}a missing entry (import this month's bank file: only what is missing is added), or a wrong amount. If you cannot find it, add a correction so the balance continues from the bank's figure; it is kept under "Balance corrections" and not counted as spending.</p>` : ''}
+    ${dups.length ? `<h3 class="ieh">Same amount within 3 days: doubled?</h3><div class="txlist">${dups.map(t => txRow(t, A, true)).join('')}</div>` : ''}
+    ${waits.length ? `<h3 class="ieh">Not in a bank file</h3><div class="txlist">${waits.map(t => txRow(t, A, true)).join('')}</div>` : ''}
+    <div class="btns">${a.type === 'cash' ? '' : '<button class="btn light" data-f="imp">Import a bank file</button>'}<button class="btn light" data-f="list">All ${all.length} transactions</button></div>
+    <div class="btns"><button class="btn light" data-f="cancel">Close</button></div>`, box => {
+    box.onclick = e => { const tx = e.target.closest('[data-tx]'); if (tx) { closeSheet(); return txForm(+tx.dataset.tx); }
+      const f = (e.target.closest('[data-f]') || {}).dataset; if (!f || !f.f) return;
+      if (f.f === 'cancel') return closeSheet();
+      if (f.f === 'imp') { closeSheet(); return bankImport(id); }
+      if (f.f === 'list') { closeSheet(); state.tab = 'money'; state.msec = 'tx'; state.txAcct = String(id); state.txMonth = ym; render(); view().scrollTop = 0; return; }
+      if (f.f === 'fix') { const p = ps[+f.k];
+        run('INSERT INTO transactions(account_id,date,kind,amount,category_id,payee,note,created,bank_ok) VALUES(?,?,?,?,?,?,?,?,1)',
+          [id, p.check.date, p.diff > 0 ? 'in' : 'out', +Math.abs(p.diff).toFixed(2), corrCat(), 'Balance correction', `Reconcile: the ${a.type === 'cash' ? 'count' : 'bank'} showed ${show(p.bank)} on ${fmtDate(p.check.date)}`, (p.check.created || 0) - 1]);
+        save(); toast('Correction added'); render(); reconMonth(id, ym); } };
   });
 }
 
@@ -3293,8 +3501,8 @@ view().addEventListener('contextmenu', e => {
 
 /* ---------------- 1.10: Back goes to the page you saw before ---------------- */
 const NAVH = []; let navLast = null, navRestoring = false;
-const NAVKEYS = ['tab', 'msec', 'propertyId', 'accountId', 'assetId', 'loanId', 'txAcct', 'txMonth'];
-const navKey = s => ['tab', 'msec', 'propertyId', 'accountId', 'assetId', 'loanId'].map(k => s[k] == null ? '' : s[k]).join('|');
+const NAVKEYS = ['tab', 'msec', 'propertyId', 'accountId', 'assetId', 'loanId', 'txAcct', 'txMonth', 'reconId'];
+const navKey = s => ['tab', 'msec', 'propertyId', 'accountId', 'assetId', 'loanId', 'reconId'].map(k => s[k] == null ? '' : s[k]).join('|');
 function navSnap() { const s = {}; for (const k of NAVKEYS) s[k] = state[k] == null ? null : state[k]; return s; }
 function navBefore() {   /* called at the start of every render */
   const cur = navSnap();
@@ -3729,6 +3937,9 @@ function mmexDo(m, info, map, opt) {
       }
     }
   } finally { ins.free(); }
+  /* 1.18: what you marked as reconciled in MMEX counts as confirmed by the bank */
+  if (tc.includes('STATUS')) for (const t of qd(m, `SELECT TRANSID FROM CHECKINGACCOUNT_V1 WHERE STATUS='R' AND ${info.live}`))
+    run("UPDATE transactions SET bank_ok=COALESCE(bank_ok,1) WHERE import_id=? OR import_id LIKE ?", ['mmex:' + t.TRANSID, 'mmex:' + t.TRANSID + ':%']);
   /* payees remember their category */
   if (opt.payees) for (const p of Object.values(payees)) { if (!(p.CATEGID > 0) || !p.PAYEENAME) continue; const c = ensureCat(p.CATEGID, p.SUBCATEGID); const pat = normPayee(p.PAYEENAME);
     if (c && pat && !q('SELECT id FROM payee_rules WHERE pattern=?', [pat]).length) { run('INSERT INTO payee_rules(pattern,category_id,created) VALUES(?,?,?)', [pat, c, B]); st.rules++; } }
