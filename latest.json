@@ -1,0 +1,13 @@
+{
+  "android": {
+    "version": "1.6",
+    "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-android.apk",
+    "sha256": "48071e2ea5b577d8219ab13b78db86a21530de726ff59228d7391be12e5d2a29",
+    "notes": "Income and expenses; the app now updates itself"
+  },
+  "linux": {
+    "version": "1.6",
+    "page": "https://biblecorner-kjt.github.io/kjt-invest/",
+    "notes": "Income and expenses; updates through GNOME Software"
+  }
+}
