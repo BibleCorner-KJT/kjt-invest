@@ -2,7 +2,7 @@
  "android": {
   "version": "1.17",
   "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-android.apk",
-  "sha256": "2f3ba50488a2b330113a39820069d5e47a8abdb2137c892b656beb2545e73a2d",
+  "sha256": "43d97727ef70c8cef7f49529d5f7de258dcb361fd16b6c422cc262f4779f055f",
   "notes": "The eye button hides every amount. Prices page: favourite currencies first, metal prices per gram, tola and more, gold and silver pictures. Option to block screenshots."
  },
  "linux": {
@@ -19,7 +19,7 @@
   },
   "zip": {
    "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.zip",
-   "sha256": "ed1bb6808bf49dd1b1358b06eafca41ab6f114e74bfa05ba6ff4081f91bb1350"
+   "sha256": "c2a47f2c13d3ee4ee4578a3742f551346554c665ffb15364fcee8ec711c792ce"
   }
  }
 }
