@@ -1,25 +1,25 @@
 {
   "android": {
-    "version": "1.10",
+    "version": "1.11",
     "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-android.apk",
-    "sha256": "cfd995a9f41a7938e34593f3867998fc6f85330d547a6abb862084e04c8cc9ba",
-    "notes": "One bank file for all your accounts. Select several transactions. Balance checks compared. Clearer dates and headings; Back returns to where you were."
+    "sha256": "6e6a906c5f30fb4229815db1601f7211f68e6896eaa071583a373eb8e81b41a4",
+    "notes": "Sort and filter transactions. ATM withdrawals go to your cash in hand. The app remembers each payee."
   },
   "linux": {
-    "version": "1.10",
+    "version": "1.11",
     "page": "https://github.com/BibleCorner-KJT/kjt-invest/tree/releases",
-    "notes": "One bank file for all your accounts. Select several transactions. Balance checks compared. Clearer dates and headings; Back returns to where you were.",
+    "notes": "Sort and filter transactions. ATM withdrawals go to your cash in hand. The app remembers each payee.",
     "x86_64": {
       "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.flatpak",
-      "sha256": "f56c125351746adc7d9fa4cd1e4c9b37c1a84d8f62a9ec66ded701888e2ae5c1"
+      "sha256": "27da5e9c2affda72d31aac8cad07303983494d581dff40133de55e328d7c9383"
     },
     "aarch64": {
       "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux-arm.flatpak",
-      "sha256": "03ac3b237903017a4b5ae42da17b56859bc07ce714f828213c8218920cf86ba3"
+      "sha256": "cb83fe0ae1f808039130c2c739052c31f85b07cfa3857e4b849342cd77b3b78f"
     },
     "zip": {
       "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.zip",
-      "sha256": "8a5ed1fdd1c21c3899ef4204595678d5a523b90df7a67f41223404272511f2fe"
+      "sha256": "d6c52a12518c4a1b626fbc48689265ea3adab7f8dc7e828ef643e894a0dc5105"
     }
   }
 }
