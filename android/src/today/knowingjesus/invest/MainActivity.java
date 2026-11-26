@@ -158,7 +158,7 @@ public class MainActivity extends Activity {
             HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
             c.setConnectTimeout(15000);
             c.setReadTimeout(20000);
-            c.setRequestProperty("User-Agent", a.optString("ua", "KJTInvest/1.4"));
+            c.setRequestProperty("User-Agent", a.optString("ua", "KJTInvest/1.5"));
             c.setRequestProperty("Accept", "application/json, application/xml, text/xml");
             int status = c.getResponseCode();
             InputStream in = status < 400 ? c.getInputStream() : c.getErrorStream();
@@ -186,6 +186,24 @@ public class MainActivity extends Activity {
                 public void run() {
                     if (on) getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
                     else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
+                }
+            });
+            o.put("ok", true);
+            reply(id, o);
+        } else if ("statusBar".equals(cmd)) {
+            /* the phone's top and bottom bars take the colours of the chosen theme */
+            final String top = a.optString("color", ""), bottom = a.optString("nav", "");
+            final boolean dark = a.optBoolean("dark");
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        getWindow().setStatusBarColor(android.graphics.Color.parseColor(top));
+                        getWindow().setNavigationBarColor(android.graphics.Color.parseColor(bottom));
+                        int flags = getWindow().getDecorView().getSystemUiVisibility();
+                        if (Build.VERSION.SDK_INT >= 26) flags = dark ? (flags & ~0x10) : (flags | 0x10);   // dark buttons on a light bottom bar
+                        getWindow().getDecorView().setSystemUiVisibility(flags);
+                    } catch (Throwable ignored) { }
                 }
             });
             o.put("ok", true);

@@ -1,4 +1,4 @@
-/* Investment Tracker - colours: light by default, dark on request or following the system */
+/* KJT Invest - themes: KJT purple (default), Navy & Gold, Ledger, Sepia; each light or dark (data-mode) */
 :root {
   --bg: #f5f1ec; --card: #ffffff; --ink: #1c1420; --muted: #5a4f5c; --line: #e2d8de; --soft: #f1e8ef;
   --brand: #5b1f61; --brand-ink: #ffffff; --head: #3e093f; --head-ink: #f8ecd0; --cream: #f3e2b8;
@@ -8,22 +8,29 @@
   --safe-top: env(safe-area-inset-top, 0px); --safe-bottom: env(safe-area-inset-bottom, 0px);
   font-size: 17px;
 }
-:root[data-theme="dark"] {
+/* dark mode (any theme): chart and category colours, warnings */
+:root[data-mode="dark"] {
   --bg: #120d13; --card: #1d161f; --ink: #f6eff5; --muted: #c2b4c3; --line: #3b2f3d; --soft: #2a2030;
   --brand: #dcb0e3; --brand-ink: #1c0d1e; --head: #2a0a2c; --head-ink: #f3e2b8;
   --cat-m: #c08a12; --cat-p: #b06cc0; --cat-c: #2fb397; --cat-o: #6f95d6;
   --up: #6fd49a; --down: #ff8f84; --c1: #2fb397; --c2: #b98a1e;
   --warn-bg: #3b3013; --warn-ink: #f6dc93; --shadow: none;
 }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #120d13; --card: #1d161f; --ink: #f6eff5; --muted: #c2b4c3; --line: #3b2f3d; --soft: #2a2030;
-    --brand: #dcb0e3; --brand-ink: #1c0d1e; --head: #2a0a2c; --head-ink: #f3e2b8;
-    --cat-m: #c08a12; --cat-p: #b06cc0; --cat-c: #2fb397; --cat-o: #6f95d6;
-    --up: #6fd49a; --down: #ff8f84; --c1: #2fb397; --c2: #b98a1e;
-    --warn-bg: #3b3013; --warn-ink: #f6dc93; --shadow: none;
-  }
-}
+/* Navy & Gold */
+:root[data-palette="navy"] { --bg: #f2f5f9; --card: #ffffff; --ink: #0f1a28; --muted: #4a5869; --line: #d5deea; --soft: #e7eef7;
+  --brand: #17375f; --brand-ink: #ffffff; --head: #0f2a4a; --head-ink: #f2d27a; }
+:root[data-palette="navy"][data-mode="dark"] { --bg: #0a1220; --card: #121d2f; --ink: #eef2f8; --muted: #a9b6c8; --line: #2b3a51; --soft: #1b2940;
+  --brand: #e8c766; --brand-ink: #10223a; --head: #0a1a2f; --head-ink: #e8c766; }
+/* Ledger: graphite and emerald, for modern money management */
+:root[data-palette="ledger"] { --bg: #f3f5f4; --card: #ffffff; --ink: #111614; --muted: #4c5753; --line: #d6dfdb; --soft: #e4eeea;
+  --brand: #0d7a5c; --brand-ink: #ffffff; --head: #1b2321; --head-ink: #ffffff; }
+:root[data-palette="ledger"][data-mode="dark"] { --bg: #0a0e0d; --card: #141a18; --ink: #eef4f1; --muted: #a6b4af; --line: #2a3532; --soft: #1c2623;
+  --brand: #3ccb9f; --brand-ink: #06140f; --head: #101614; --head-ink: #eef4f1; }
+/* Sepia: warm paper, like a Bible reader's sepia page */
+:root[data-palette="sepia"] { --bg: #f3ead5; --card: #fbf5e6; --ink: #3a2e1d; --muted: #6c5b41; --line: #e0d1ad; --soft: #eee1c4;
+  --brand: #7a5230; --brand-ink: #fffaf0; --head: #6b4a2b; --head-ink: #fbf1d8; --shadow: none; }
+:root[data-palette="sepia"][data-mode="dark"] { --bg: #1a1510; --card: #231c14; --ink: #ecdec2; --muted: #b9a98b; --line: #3d3223; --soft: #2d2419;
+  --brand: #ddb57c; --brand-ink: #20180f; --head: #2a2016; --head-ink: #ecd8ac; }
 :root[data-size="large"] { font-size: 19px; }
 :root[data-size="larger"] { font-size: 21px; }
 
@@ -264,3 +271,30 @@ svg.chart .dot2 { fill: var(--c2); stroke: var(--card); stroke-width: 2; }
 .yrow .yn { margin-left: auto; font-weight: 750; font-variant-numeric: tabular-nums; }
 .ystats { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 6px; font-size: .84rem; color: var(--muted); }
 .ystats b { font-variant-numeric: tabular-nums; }
+
+/* 1.5 */
+h2.sect { font-size: .82rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 18px 4px 8px; font-weight: 750; }
+h2.sect:first-child { margin-top: 4px; }
+h2.sect .sub { text-transform: none; letter-spacing: 0; font-weight: 500; margin-left: 6px; }
+nav#tabs button { font-size: .66rem; }
+.pals { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px; }
+.pal { border: 1.5px solid var(--line); background: var(--card); border-radius: 12px; padding: 8px 4px; font-size: .78rem; font-weight: 600; color: var(--ink); cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.pal.on { border-color: var(--brand); box-shadow: 0 0 0 2px var(--brand) inset; }
+.pal .pv { width: 100%; height: 40px; border-radius: 8px; position: relative; overflow: hidden; border: 1px solid rgba(0,0,0,.08); }
+.pal .pv i { position: absolute; left: 0; right: 0; top: 0; height: 14px; }
+.pal .pv b { position: absolute; left: 8px; bottom: 7px; width: 40%; height: 9px; border-radius: 5px; }
+@media (max-width: 360px) { .pals { grid-template-columns: repeat(2, 1fr); } }
+.convrow { display: grid; grid-template-columns: 1fr auto 1fr; gap: 8px; align-items: end; }
+.convrow .swap { margin-bottom: 14px; border: 1px solid var(--line); color: var(--brand); }
+.cursel { width: 100%; }
+.convres { text-align: center; padding: 6px 0 2px; }
+.convres .big { font-size: 1.9rem; font-weight: 750; font-variant-numeric: tabular-nums; }
+.list .item.nolink { cursor: default; align-items: center; }
+.item .r small { display: block; font-weight: 500; }
+.item.fav { grid-template-columns: 1fr auto auto; }
+.star { color: var(--c2); font-size: 1.3rem; width: 40px; height: 40px; }
+.addfav select { width: 100%; padding: 11px 12px; border: 1.5px dashed var(--line); border-radius: 10px; background: var(--bg); margin-top: 8px; }
+.srcgrid { display: grid; grid-template-columns: 1.1fr repeat(var(--n), 1fr); gap: 6px 8px; font-size: .84rem; font-variant-numeric: tabular-nums; margin-top: 8px; }
+.srcgrid .sh { font-size: .72rem; color: var(--muted); text-align: right; font-weight: 600; }
+.srcgrid .sm { font-weight: 650; } .srcgrid .sm small { display: block; font-weight: 500; color: var(--muted); font-size: .7rem; }
+.srcgrid .sv { text-align: right; }

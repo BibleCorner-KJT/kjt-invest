@@ -1,13 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5a1a60"/><stop offset="1" stop-color="#3e093f"/></linearGradient>
-    <linearGradient id="au" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f6d77a"/><stop offset="1" stop-color="#c8971f"/></linearGradient>
-  </defs>
+  <defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5a1a60"/><stop offset="1" stop-color="#3e093f"/></linearGradient><linearGradient id="au" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f6d77a"/><stop offset="1" stop-color="#c8971f"/></linearGradient></defs>
   <rect width="512" height="512" rx="112" fill="url(#bg)"/>
-  <path d="M86 232 L256 98 L426 232" fill="none" stroke="#f3e2b8" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
-  <text x="256" y="268" text-anchor="middle" font-family="DejaVu Serif, Georgia, 'Times New Roman', serif" font-weight="700" font-size="84" fill="#f3e2b8">KJT</text>
-  <rect x="146" y="342" width="58" height="68" rx="9" fill="url(#au)"/>
-  <rect x="227" y="314" width="58" height="96" rx="9" fill="url(#au)"/>
-  <rect x="308" y="286" width="58" height="124" rx="9" fill="url(#au)"/>
-  <rect x="128" y="414" width="256" height="14" rx="7" fill="#f3e2b8"/>
+  <path d="M52 232 L256 66 L460 232" fill="none" stroke="#f3e2b8" stroke-width="38" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="256" y="268" text-anchor="middle" font-family="DejaVu Serif, Georgia, 'Times New Roman', serif" font-weight="700" font-size="118" fill="#f3e2b8">KJT</text>
+  <rect x="112" y="368" width="78" height="84" rx="11" fill="url(#au)"/>
+  <rect x="217" y="326" width="78" height="126" rx="11" fill="url(#au)"/>
+  <rect x="322" y="290" width="78" height="162" rx="11" fill="url(#au)"/>
+  <rect x="92" y="462" width="328" height="18" rx="9" fill="#f3e2b8"/>
 </svg>

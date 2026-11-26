@@ -1,10 +1,10 @@
-/* KJT Invest 1.4 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
+/* KJT Invest 1.5 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
    All data stays in one SQLite file on the device. The only network calls are the
    price updates (metal prices from gold-api.com, exchange rates from the European Central Bank). */
 'use strict';
 
-const APP_VERSION = '1.4';
-const SCHEMA = 5;
+const APP_VERSION = '1.5';
+const SCHEMA = 6;
 const OZT_G = 31.1034768;
 const METALS = [
   { sym: 'XAU', name: 'Gold', purity: 0.9999 },
@@ -64,7 +64,7 @@ async function browserNative(id, cmd, a) {
     else if (cmd === 'saveDb') { localStorage.setItem('it-db', a.b64); reply({ ok: true }); }
     else if (cmd === 'getPrefs') reply({ json: localStorage.getItem('it-prefs') || '{}' });
     else if (cmd === 'setPrefs') { localStorage.setItem('it-prefs', a.json); reply({ ok: true }); }
-    else if (cmd === 'secure' || cmd === 'bioDisable') reply({ ok: true });
+    else if (cmd === 'secure' || cmd === 'bioDisable' || cmd === 'statusBar') reply({ ok: true });
     else if (cmd === 'bioAvailable') reply({ available: false });
     else if (cmd === 'httpGet') { const r = await fetch(a.url); reply({ status: r.status, body: await r.text() }); }
     else if (cmd === 'exportDb') {
@@ -101,6 +101,8 @@ CREATE TABLE IF NOT EXISTS accounts (id INTEGER PRIMARY KEY, name TEXT NOT NULL,
   interest_rate REAL, owners INTEGER DEFAULT 1, notes TEXT);
 CREATE TABLE IF NOT EXISTS account_balances (id INTEGER PRIMARY KEY, account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
   date TEXT NOT NULL, balance REAL NOT NULL, note TEXT);
+CREATE TABLE IF NOT EXISTS source_quotes (source TEXT NOT NULL, kind TEXT NOT NULL, code TEXT NOT NULL, value REAL NOT NULL, updated TEXT,
+  PRIMARY KEY(source, kind, code));
 CREATE TABLE IF NOT EXISTS property_items (id INTEGER PRIMARY KEY, property_id INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
   kind TEXT NOT NULL, amount REAL NOT NULL, freq TEXT NOT NULL, start_date TEXT, end_date TEXT, note TEXT);
 CREATE TABLE IF NOT EXISTS property_values (id INTEGER PRIMARY KEY, property_id INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
@@ -367,44 +369,113 @@ function totals() {
 }
 
 /* ---------------- price updates ---------------- */
+/* ---------------- several sources for every price ----------------
+   Each source is asked for its numbers; they are kept side by side (table source_quotes) and the app uses
+   the middle value (the median), so one wrong or late source cannot pull your totals off. You can also pick one source.
+   Currencies are kept as "units per 1 US dollar"; metals as "US dollars per troy ounce". */
+const FX_SOURCES = [
+  { id: 'ecb', name: 'European Central Bank', url: 'https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml',
+    parse: b => { const r = {}, re = /currency=['"]([A-Z]{3})['"]\s+rate=['"]([\d.]+)['"]/g; let m; while ((m = re.exec(b))) r[m[1]] = +m[2];
+      if (!r.USD) return null; const out = { EUR: 1 / r.USD }; for (const [c, v] of Object.entries(r)) out[c] = v / r.USD; out.USD = 1; return out; } },
+  { id: 'boc', name: 'Bank of Canada', url: 'https://www.bankofcanada.ca/valet/observations/group/FX_RATES_DAILY/json?recent=1',
+    parse: b => { const o = JSON.parse(b).observations; const last = o && o[o.length - 1]; if (!last || !last.FXUSDCAD) return null;
+      const usd = +last.FXUSDCAD.v, out = { CAD: usd, USD: 1 };
+      for (const [k, v] of Object.entries(last)) { const m = /^FX([A-Z]{3})CAD$/.exec(k); if (m && v && +v.v > 0) out[m[1]] = usd / +v.v; }
+      out.USD = 1; return out; } },
+  { id: 'erapi', name: 'ExchangeRate-API', url: 'https://open.er-api.com/v6/latest/USD',
+    parse: b => { const d = JSON.parse(b); return d.result === 'success' && d.rates ? Object.assign({}, d.rates, { USD: 1 }) : null; } },
+  { id: 'fawaz', name: 'Currency API', url: 'https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.min.json',
+    alt: 'https://latest.currency-api.pages.dev/v1/currencies/usd.min.json',
+    parse: b => { const d = JSON.parse(b).usd; if (!d) return null; const out = { USD: 1 };
+      for (const [c, v] of Object.entries(d)) if (/^[a-z]{3}$/.test(c) && v > 0 && !['xau', 'xag', 'xpt', 'xpd', 'btc', 'eth'].includes(c)) out[c.toUpperCase()] = v; return out; } },
+];
+const METAL_SOURCES = [
+  { id: 'goldapi', name: 'gold-api.com' },
+  { id: 'yahoo', name: 'Yahoo Finance (futures)' },
+  { id: 'fawaz', name: 'Currency API' },
+];
+const SRC_NAME = Object.fromEntries(FX_SOURCES.concat(METAL_SOURCES).map(s => [s.id, s.name]));
+let fawazCache = null;
+async function getText(url, alt, ua) {
+  let r = await native('httpGet', { url, ua });
+  if ((r.status !== 200 || !r.body) && alt) r = await native('httpGet', { url: alt, ua });
+  return r.status === 200 ? r.body : null;
+}
+async function fetchFxSource(s) {
+  try { const b = await getText(s.url, s.alt); if (!b) return null; if (s.id === 'fawaz') fawazCache = b; return s.parse(b); } catch (e) { return null; }
+}
+async function fetchMetalSource(id) {
+  const out = {};
+  try {
+    if (id === 'goldapi') {
+      for (const m of METALS) { const b = await getText('https://api.gold-api.com/price/' + m.sym); if (!b) continue;
+        const d = JSON.parse(b); if (d.price > 0 && (d.currency || 'USD') === 'USD') out[m.sym] = +d.price; }
+    } else if (id === 'yahoo') {
+      for (const m of METALS) { const b = await getText(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(YAHOO[m.sym])}?range=1d&interval=1d`, null, 'Mozilla/5.0'); if (!b) continue;
+        const meta = JSON.parse(b).chart.result[0].meta; if (meta.regularMarketPrice > 0) out[m.sym] = +meta.regularMarketPrice; }
+    } else if (id === 'fawaz') {
+      const b = fawazCache || await getText(FX_SOURCES[3].url, FX_SOURCES[3].alt); if (!b) return out;
+      const d = JSON.parse(b).usd || {}; for (const m of METALS) { const v = d[m.sym.toLowerCase()]; if (v > 0) out[m.sym] = 1 / v; }
+    }
+  } catch (e) { /* this source not now */ }
+  return out;
+}
+function median(a) { const s = a.filter(x => x > 0).sort((x, y) => x - y); if (!s.length) return null; const i = s.length >> 1; return s.length % 2 ? s[i] : (s[i - 1] + s[i]) / 2; }
+function quotes(kind) {   /* { code: { source: value } } */
+  const out = {};
+  for (const r of q('SELECT source, code, value, updated FROM source_quotes WHERE kind=?', [kind])) (out[r.code] = out[r.code] || {})[r.source] = r.value;
+  return out;
+}
+/* from the kept quotes: the numbers the app uses (median, or the chosen source when it has the number) */
+function applyQuotes(now) {
+  const fxPick = getSetting('fx_source', 'auto'), mPick = getSetting('metal_source', 'auto');
+  const fx = quotes('fx'), mt = quotes('metal');
+  const use = (byS, pick) => pick !== 'auto' && byS[pick] > 0 ? byS[pick] : median(Object.values(byS));
+  const perUsd = {}; for (const [c, byS] of Object.entries(fx)) { const v = use(byS, fxPick); if (v > 0) perUsd[c] = v; }
+  perUsd.USD = 1;
+  if (perUsd.EUR > 0) {
+    const rows = Object.entries(perUsd).map(([c, v]) => [c, v / perUsd.EUR, now, fxPick === 'auto' ? 'middle of the sources' : SRC_NAME[fxPick]]);
+    bulk('INSERT INTO fx(currency,per_eur,updated,source) VALUES(?,?,?,?) ON CONFLICT(currency) DO UPDATE SET per_eur=excluded.per_eur, updated=excluded.updated, source=excluded.source', rows);
+    bulk('INSERT OR REPLACE INTO fx_history(currency,date,per_eur) VALUES(?,?,?)', rows.map(r => [r[0], now.slice(0, 10), r[1]]));
+  }
+  for (const [sym, byS] of Object.entries(mt)) { const v = use(byS, mPick); if (!(v > 0)) continue;
+    run('INSERT INTO prices(symbol,price,currency,updated,source) VALUES(?,?,?,?,?) ON CONFLICT(symbol) DO UPDATE SET price=excluded.price, currency=excluded.currency, updated=excluded.updated, source=excluded.source',
+      [sym, v, 'USD', now, mPick === 'auto' ? 'middle of the sources' : SRC_NAME[mPick]]);
+    run('INSERT OR REPLACE INTO price_history(symbol,date,price,source) VALUES(?,?,?,?)', [sym, now.slice(0, 10), v, 'app (daily)']); }
+  loadFx();
+}
 let updating = false;
 async function updatePrices(quiet) {
   if (updating) return; updating = true;
   const btn = document.getElementById('refresh'); btn.classList.add('spin');
-  const now = new Date().toISOString(); let ok = 0, fail = [];
+  const now = new Date().toISOString(); const got = [];
   try {
-    for (const m of METALS) {
-      const r = await native('httpGet', { url: 'https://api.gold-api.com/price/' + m.sym });
-      try {
-        const d = JSON.parse(r.body || ''); const p = Number(d.price);
-        if (r.status === 200 && p > 0) {
-          run('INSERT INTO prices(symbol,price,currency,updated,source) VALUES(?,?,?,?,?) ON CONFLICT(symbol) DO UPDATE SET price=excluded.price, currency=excluded.currency, updated=excluded.updated, source=excluded.source',
-            [m.sym, p, d.currency || 'USD', now, 'gold-api.com']); ok++;
-          if ((d.currency || 'USD') === 'USD') run('INSERT OR REPLACE INTO price_history(symbol,date,price,source) VALUES(?,?,?,?)', [m.sym, now.slice(0, 10), p, 'gold-api.com']);
-        } else fail.push(m.name);
-      } catch (e) { fail.push(m.name); }
+    fawazCache = null;
+    const fxRes = await Promise.all(FX_SOURCES.map(fetchFxSource));
+    const mRes = [];
+    for (const s of METAL_SOURCES) mRes.push(await fetchMetalSource(s.id));
+    const rows = [];
+    FX_SOURCES.forEach((s, i) => { const r = fxRes[i]; if (!r) return; got.push(s.name); for (const [c, v] of Object.entries(r)) if (v > 0) rows.push([s.id, 'fx', c, v, now]); });
+    METAL_SOURCES.forEach((s, i) => { const r = mRes[i]; if (!r || !Object.keys(r).length) return; got.push(s.name + ' (metals)'); for (const [c, v] of Object.entries(r)) rows.push([s.id, 'metal', c, v, now]); });
+    if (rows.length) {
+      bulk('INSERT OR REPLACE INTO source_quotes(source,kind,code,value,updated) VALUES(?,?,?,?,?)', rows);
+      applyQuotes(now); setSetting('prices_updated', now); save();
     }
-    let rates = null, src = '';
-    const ecb = await native('httpGet', { url: 'https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml' });
-    if (ecb.status === 200 && ecb.body) {
-      rates = {}; const re = /currency=['"]([A-Z]{3})['"]\s+rate=['"]([\d.]+)['"]/g; let m;
-      while ((m = re.exec(ecb.body))) rates[m[1]] = Number(m[2]);
-      if (!Object.keys(rates).length) rates = null; else src = 'European Central Bank';
-    }
-    if (!rates) {
-      const fr = await native('httpGet', { url: 'https://api.frankfurter.dev/v1/latest' });
-      try { const d = JSON.parse(fr.body || ''); if (d.rates) { rates = d.rates; src = 'Frankfurter (ECB data)'; } } catch (e) { /* none */ }
-    }
-    if (rates) { for (const [c, v] of Object.entries(rates)) if (v > 0)
-      { run('INSERT INTO fx(currency,per_eur,updated,source) VALUES(?,?,?,?) ON CONFLICT(currency) DO UPDATE SET per_eur=excluded.per_eur, updated=excluded.updated, source=excluded.source', [c, v, now, src]);
-        run('INSERT OR REPLACE INTO fx_history(currency,date,per_eur) VALUES(?,?,?)', [c, now.slice(0, 10), v]); } }
-    else fail.push('exchange rates');
-    if (ok || rates) { setSetting('prices_updated', now); loadFx(); save(); }
-    if (!quiet || fail.length) toast(fail.length ? (ok || rates ? 'Updated, except ' + fail.join(', ') : 'No connection: prices not updated') : 'Prices updated');
+    const nf = FX_SOURCES.length + METAL_SOURCES.length;
+    if (!quiet || !rows.length) toast(rows.length ? `Prices updated from ${got.length} of ${nf} sources` : 'No connection: prices not updated');
   } finally { updating = false; btn.classList.remove('spin'); clearHist(); render(); }
   if (!getSetting('history_loaded') && getSetting('auto_prices', '1') === '1') loadHistory(true);
   else if (getSetting('auto_prices', '1') === '1') { const dl = getSetting('daily_loaded');
     if (!dl || Date.now() - new Date(dl) > 2 * 864e5) loadDaily(dl ? '1mo' : '5y').then(n => { if (n) { save(); clearHist(); render(); } }); }
+}
+/* the numbers of each source next to each other */
+function spreadOf(byS) { const v = Object.values(byS).filter(x => x > 0); if (v.length < 2) return null; return (Math.max(...v) - Math.min(...v)) / median(v); }
+function metalSourcesHtml() {
+  const mt = quotes('metal'), M = mcur();
+  if (!Object.keys(mt).length) return '<p class="sub">No sources yet: press ↻ when you are online.</p>';
+  return `<div class="srcgrid" style="--n:${METAL_SOURCES.length}"><span></span>${METAL_SOURCES.map(s => `<span class="sh">${esc(s.name.replace(' (futures)', ''))}</span>`).join('')}` +
+    METALS.map(m => { const byS = mt[m.sym] || {}, sp = spreadOf(byS);
+      return `<span class="sm">${m.name}${sp != null ? `<small>${(sp * 100).toFixed(1)}% apart</small>` : ''}</span>` + METAL_SOURCES.map(s => `<span class="sv">${byS[s.id] ? money(conv(byS[s.id], 'USD', M), M, { dec: 0 }) : '—'}</span>`).join(''); }).join('') + `</div>`;
 }
 
 /* ---------------- price history ----------------
@@ -512,6 +583,7 @@ function render() {
   else if (state.tab === 'property') state.propertyId ? renderProperty(state.propertyId) : renderProperties();
   else if (state.tab === 'accounts') state.accountId ? renderAccount(state.accountId) : renderAccounts();
   else if (state.tab === 'assets') state.assetId ? renderAsset(state.assetId) : renderAssets();
+  else if (state.tab === 'currency') renderCurrency();
   else renderMore();
 }
 function priceStrip() {
@@ -528,13 +600,13 @@ function renderOverview() {
   setTitle('KJT Invest');
   const t = totals(), H = home();
   const nAll = ['metal_holdings', 'properties', 'accounts', 'other_assets'].reduce((n, tb) => n + q(`SELECT COUNT(*) n FROM ${tb}`)[0].n, 0);
-  let h = missingWarn() + heroHtml(t);
+  let h = missingWarn() + `<h2 class="sect">Summary <span class="sub">swipe the box for more</span></h2>` + heroHtml(t);
   if (!nAll) {
     h += `<div class="card"><h2>Welcome</h2><p class="sub">Add what you own. Everything stays on this device, in one file you can export at any time.</p>
       <div class="btns"><button class="btn" data-act="add-metal">Add precious metal</button><button class="btn" data-act="add-property">Add property</button><button class="btn" data-act="add-account">Add bank account</button><button class="btn" data-act="add-asset">Add other asset</button></div></div>`;
   }
   const M = mcur(), mGain = t.metalsM - t.metalsCostM;
-  h += `<div class="card tap" data-go="metals"><div class="phead"><span class="pbadge">${metalIcon('XAU', 'bar', 28)}</span><h2 style="margin:0">Precious metals${M !== H ? ' (' + M + ')' : ''}</h2></div>
+  h += `<h2 class="sect">What you own</h2><div class="card tap" data-go="metals"><div class="phead"><span class="pbadge">${metalIcon('XAU', 'bar', 28)}</span><h2 style="margin:0">Precious metals${M !== H ? ' (' + M + ')' : ''}</h2></div>
     <div class="row strong"><span class="k">Value</span><span class="v">${whole(t.metalsM, M)}</span></div>
     <div class="row"><span class="k">Paid (fees included)</span><span class="v">${whole(t.metalsCostM, M)}</span></div>
     <div class="row"><span class="k">Gain</span><span class="v ${signCls(mGain)}">${whole(mGain, M)} ${t.metalsCostM ? '(' + pct(mGain / t.metalsCostM) + ')' : ''}</span></div>
@@ -550,7 +622,7 @@ function renderOverview() {
   h += `<div class="card tap" data-go="assets"><div class="phead"><span class="pbadge">${assetIcon('car')}</span><h2 style="margin:0">Other assets</h2></div>
     <div class="row strong"><span class="k">Value (your estimate)</span><span class="v">${whole(t.other, H)}</span></div>
     ${t.otherCost ? `<div class="row"><span class="k">Paid</span><span class="v">${whole(t.otherCost, H)}</span></div>` : ''}</div>`;
-  h += `<div class="card"><h2>Market prices (${mcur()})</h2>${priceStrip()}</div>`;
+  h += `<h2 class="sect">Current prices <span class="sub">${mcur()} per troy ounce</span></h2><div class="card">${priceStrip()}</div>`;
   view().innerHTML = h; bindHero(); bindChart();
 }
 /* ---------------- 1.3: metal pictures, other assets, overview pages ---------------- */
@@ -598,8 +670,9 @@ function renderAssets() {
       <div class="txn-body"><div class="sub">${(ASSET_TYPES[a.type] || ASSET_TYPES.other)[0]}${cost != null ? ' · paid ' + money(cost, c, { dec: 0 }) : ''}${a.owners > 1 ? ' · your share 1/' + a.owners : ''}</div>
       <div class="r"><div class="strongv">${val == null ? '—' : money(val, c, { dec: 0 })}</div><div class="sub ${signCls(ch)}">${pct(ch)}</div></div></div></div>`;
   }
-  let h = `<div class="card hero"><div class="label">Other assets (${H})</div><div class="big">${whole(total, H)}</div>
+  let h = `<h2 class="sect">Total</h2><div class="card hero"><div class="label">Other assets (${H})</div><div class="big">${whole(total, H)}</div>
     ${paid ? `<div class="sub">Paid ${whole(paid, H)} · <span class="${signCls(total - paid)}">${pct(total / paid - 1)}</span></div>` : ''}</div>`;
+  h += `<h2 class="sect">Your assets</h2>`;
   h += as.length ? `<div class="card"><div class="txns" style="margin-top:0">${body}</div></div>` : `<div class="card empty">No other assets yet: cars, boats, trailers, jewellery, art, collections, equipment…</div>`;
   h += `<button class="btn wide" data-act="add-asset">+ Add asset</button>`;
   view().innerHTML = h;
@@ -864,7 +937,9 @@ function chartCard() {
 function renderMetals() {
   setTitle('Precious metals');
   const H = mcur(), hs = q("SELECT * FROM metal_holdings ORDER BY metal, COALESCE(purchase_date,'') DESC, description");
-  let h = missingWarn() + `<div class="card">${priceStrip()}</div>` + chartCard();
+  let h = missingWarn() + `<h2 class="sect">Current prices <span class="sub">${H} per troy ounce</span></h2><div class="card">${priceStrip()}
+    <details class="fold"><summary><h2>Compare the sources</h2></summary>${metalSourcesHtml()}</details></div>`
+    + `<h2 class="sect">Price over time</h2>` + chartCard() + `<h2 class="sect">Your holdings</h2>`;
   if (!hs.length) h += `<div class="card empty">No metals yet.</div>`;
   for (const m of METALS) {
     const mine = hs.filter(x => x.metal === m.sym); if (!mine.length) continue;
@@ -885,7 +960,7 @@ function renderMetals() {
 function renderProperties() {
   setTitle('Real estate');
   const ps = q('SELECT * FROM properties ORDER BY name');
-  let h = missingWarn();
+  let h = missingWarn() + `<h2 class="sect">Your properties</h2>`;
   if (!ps.length) h += `<div class="card empty">No properties yet.</div>`;
   for (const p of ps) {
     const s = propertyStats(p), c = p.currency || home(), k = s.share;
@@ -917,7 +992,7 @@ function renderProperty(id) {
     ${s.annual != null ? `<div class="row"><span class="k">Per year, on average</span><span class="v ${signCls(s.annual)}">${pct(s.annual)}</span></div>` : ''}
     ${p.purchase_date ? `<div class="sub" style="margin-top:6px">Bought ${fmtDate(p.purchase_date)}${c !== home() ? ' · amounts in ' + c : ''}</div>` : ''}
     <div class="btns"><button class="btn light" data-act="edit-property" data-id="${p.id}">Edit</button><button class="btn light" data-act="dup-property" data-id="${p.id}">Duplicate</button></div></div>`;
-  h += cashflowCard(p, s, c, k);
+  h = `<h2 class="sect">Summary</h2>` + h + `<h2 class="sect">Cashflow <span class="sub">swipe for Monthly · Yearly · Costs</span></h2>` + cashflowCard(p, s, c, k).replace('<h2>Cashflow</h2>', '') + `<h2 class="sect">Money in and out</h2>`;
   /* rent periods */
   h += `<div class="card"><h2>Rent</h2>`;
   if (!s.periods.length) h += `<p class="sub">Add each rental: from when, to when (leave the end empty while it is still rented) and the rent per month. Months without rent show as empty.</p>`;
@@ -936,7 +1011,7 @@ function renderProperty(id) {
   h += `<button class="btn wide light" data-act="add-item" data-id="${p.id}">+ Add cost or income</button></div>`;
   /* value history */
   const vals = q('SELECT * FROM property_values WHERE property_id=? ORDER BY date DESC, id DESC', [p.id]);
-  h += `<div class="card"><h2>Value</h2>` + (vals.length ? `<div class="txns">` + vals.map(r => `<div class="txn" data-pval="${r.id}"><div class="txn-top"><span class="txn-date">${fmtDate(r.date)}</span><span class="txn-desc">${esc(r.note || 'Your estimate')}</span></div>
+  h += `<h2 class="sect">Value over time</h2><div class="card">` + (vals.length ? `<div class="txns">` + vals.map(r => `<div class="txn" data-pval="${r.id}"><div class="txn-top"><span class="txn-date">${fmtDate(r.date)}</span><span class="txn-desc">${esc(r.note || 'Your estimate')}</span></div>
       <div class="txn-body"><div class="sub">${s.owners > 1 ? 'whole property' : ''}</div><div class="r"><div class="strongv">${money(r.value, c, { dec: 0 })}</div></div></div></div>`).join('') + `</div>` : '<p class="sub">Add what you think it is worth now and then; the value between dates is drawn as a straight line.</p>') +
     `<button class="btn wide light" data-act="add-pvalue" data-id="${p.id}">+ Update value</button></div>`;
   view().innerHTML = h; bindCashflow();
@@ -1051,8 +1126,9 @@ function renderAccounts() {
         <div class="txn-body"><div class="sub">${esc(a.institution || label)}${a.interest_rate ? ' · ' + a.interest_rate + '% interest' : ''}${a.owners > 1 ? ' · your share 1/' + a.owners : ''}</div>
         <div class="r"><div class="strongv">${mine == null ? '—' : money(mine, c)}</div></div></div></div>`; }).join('') + `</div></div>`;
   }
-  h += `<div class="card hero"><div class="label">Total (${H})</div><div class="big">${whole(total, H)}</div>
+  h += `<h2 class="sect">Total</h2><div class="card hero"><div class="label">Cash & bank (${H})</div><div class="big">${whole(total, H)}</div>
     ${yearly ? `<div class="sub">About ${whole(yearly, H)} interest a year</div>` : ''}</div>`;
+  h += `<h2 class="sect">Your accounts</h2>`;
   h += as.length ? body : `<div class="card empty">No accounts yet. Add your chequing and savings accounts, and cash on hand.</div>`;
   h += `<button class="btn wide" data-act="add-account">+ Add account</button>`;
   view().innerHTML = h;
@@ -1125,41 +1201,103 @@ function balanceForm(accountId, balId) {
   });
 }
 
+/* ---------------- Currency: convert, favourites, and the sources side by side ---------------- */
+let curNames = null;
+function curName(c) {
+  try { curNames = curNames || new Intl.DisplayNames(['en-CA'], { type: 'currency' }); return curNames.of(c); } catch (e) { return c; }
+}
+function allCurrencies() {
+  const set = new Set(COMMON_CUR.concat(Object.keys(FX)).concat([home(), mcur()]));
+  return Array.from(set).filter(c => /^[A-Z]{3}$/.test(c)).sort();
+}
+function favs() { try { const f = JSON.parse(getSetting('fav_currencies', '') || 'null'); if (Array.isArray(f)) return f; } catch (e) { /* none */ } return ['USD', 'EUR', 'GBP', 'CHF'].filter(c => c !== home()); }
+function setFavs(f) { setSetting('fav_currencies', JSON.stringify(f)); save(); }
+function curSelect(name, sel) {
+  const f = favs().concat([home()]), all = allCurrencies();
+  const opt = c => `<option value="${c}"${c === sel ? ' selected' : ''}>${c} · ${esc(curName(c))}</option>`;
+  return `<select id="${name}" class="cursel"><optgroup label="Favourites">${Array.from(new Set(f)).filter(c => all.includes(c)).map(opt).join('')}</optgroup><optgroup label="All currencies">${all.map(opt).join('')}</optgroup></select>`;
+}
+function renderCurrency() {
+  setTitle('Currency');
+  const from = getSetting('conv_from', 'USD'), to = getSetting('conv_to', home()), amt = num(getSetting('conv_amt', '100')) || 0;
+  const r1 = conv(1, from, to), res = conv(amt, from, to);
+  const dec = c => ['JPY', 'KRW', 'IDR', 'HUF', 'ISK', 'CLP', 'VND'].includes(c) ? 0 : 2;
+  let h = missingWarn();
+  h += `<h2 class="sect">Convert</h2><div class="card conv">
+    <label class="f"><span>Amount</span><input id="cv-amt" value="${esc(fmtNum(amt))}" inputmode="decimal" autocomplete="off"></label>
+    <div class="convrow"><label class="f"><span>From</span>${curSelect('cv-from', from)}</label>
+      <button class="iconbtn swap" id="cv-swap" aria-label="Swap"><svg viewBox="0 0 24 24"><path d="M7 4v16M3 8l4-4 4 4M17 20V4M13 16l4 4 4-4"/></svg></button>
+      <label class="f"><span>To</span>${curSelect('cv-to', to)}</label></div>
+    <div class="convres"><div class="big">${res == null ? '—' : money(res, to, { dec: dec(to) })}</div>
+      <div class="sub">${r1 == null ? 'No rate for this pair yet.' : `1 ${from} = ${fmtNum(r1, 6)} ${to} · 1 ${to} = ${fmtNum(1 / r1, 6)} ${from}`}</div></div></div>`;
+  /* sources for this pair */
+  const fx = quotes('fx');
+  const rows = FX_SOURCES.map(s => { const a = (fx[from] || {})[s.id], b = (fx[to] || {})[s.id]; return [s, a > 0 && b > 0 ? b / a : null]; });
+  const vals = rows.map(r => r[1]).filter(Boolean), md = median(vals);
+  h += `<h2 class="sect">Sources for ${from} → ${to}</h2><div class="card"><div class="list">${rows.map(([s, v]) => `<div class="item nolink"><span>${esc(s.name)}</span><span class="r">${v == null ? '<span class="sub">no rate</span>' : fmtNum(v, 6)}${v != null && md ? `<small class="sub"> ${((v / md - 1) * 100 >= 0 ? '+' : '')}${((v / md - 1) * 100).toFixed(2)}%</small>` : ''}</span></div>`).join('')}</div>
+    <p class="sub" style="margin:8px 0 0">${vals.length === 1 ? 'Only ' + esc(rows.find(r => r[1])[0].name) + ' has a rate for this pair. ' : ''}${vals.length > 1 ? `The app uses ${getSetting('fx_source', 'auto') === 'auto' ? 'the middle value of the ' + vals.length + ' sources' : esc(SRC_NAME[getSetting('fx_source')])} (change it in Settings).` : vals.length ? '' : 'Press ↻ when you are online to compare the sources.'} Updated ${when(getSetting('prices_updated'))}.</p></div>`;
+  /* favourites */
+  const f = favs(), H = home();
+  h += `<h2 class="sect">Favourites <span class="sub">value of 1 ${H}</span></h2><div class="card"><div class="list">` +
+    (f.length ? f.map(c => { const v = conv(1, H, c), inv = conv(1, c, H); return `<div class="item nolink fav"><span><b>${c}</b> <span class="sub">${esc(curName(c))}</span></span>
+      <span class="r">${v == null ? '—' : fmtNum(v, 4)}<small class="sub">1 ${c} = ${inv == null ? '—' : money(inv, H, { dec: 4 })}</small></span>
+      <button class="iconbtn star on" data-unfav="${c}" aria-label="Remove ${c} from favourites">★</button></div>`; }).join('') : '<p class="sub">No favourites yet.</p>') +
+    `</div><div class="addfav"><select id="fav-add"><option value="">+ Add a favourite currency…</option>${allCurrencies().filter(c => !f.includes(c) && c !== H).map(c => `<option value="${c}">${c} · ${esc(curName(c))}</option>`).join('')}</select></div></div>`;
+  view().innerHTML = h;
+  const keep = () => { setSetting('conv_from', document.getElementById('cv-from').value); setSetting('conv_to', document.getElementById('cv-to').value); save(); };
+  document.getElementById('cv-from').onchange = () => { keep(); render(); };
+  document.getElementById('cv-to').onchange = () => { keep(); render(); };
+  document.getElementById('cv-swap').onclick = () => { setSetting('conv_from', to); setSetting('conv_to', from); save(); render(); };
+  const ai = document.getElementById('cv-amt');
+  ai.oninput = () => { const n = num(ai.value); if (n == null || Number.isNaN(n)) return; setSetting('conv_amt', String(n));
+    const v = conv(n, from, to); document.querySelector('.convres .big').textContent = v == null ? '—' : money(v, to, { dec: dec(to) }); };
+  ai.onblur = () => { save(); const n = num(ai.value); if (n != null && !Number.isNaN(n)) ai.value = fmtNum(n); };
+  document.getElementById('fav-add').onchange = e => { if (!e.target.value) return; setFavs(favs().concat([e.target.value])); render(); };
+}
+
 function renderMore() {
   setTitle('Settings');
   const H = home(), fxRows = q('SELECT * FROM fx ORDER BY currency');
-  let h = `<div class="card"><h2>Settings</h2>
+  const PALS = [['purple', 'KJT Purple', '#3e093f', '#f3e2b8', '#f5f1ec'], ['navy', 'Navy & Gold', '#0f2a4a', '#f2d27a', '#f2f5f9'], ['ledger', 'Ledger', '#1b2321', '#0d7a5c', '#f3f5f4'], ['sepia', 'Sepia', '#6b4a2b', '#fbf1d8', '#f3ead5']];
+  let h = `<h2 class="sect">Look</h2><div class="card"><div class="pals">${PALS.map(([k, l, a, b, c]) => `<button class="pal${(PREFS.palette || 'purple') === k ? ' on' : ''}" data-pal="${k}"><span class="pv" style="background:${c}"><i style="background:${a}"></i><b style="background:${b}"></b></span>${l}</button>`).join('')}</div>
+    <div class="f2"><label class="f"><span>Light or dark</span><select id="set-theme">${[['', 'Same as device'], ['light', 'Light'], ['dark', 'Dark']].map(([v, l]) => `<option value="${v}"${(PREFS.theme || '') === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+    <label class="f"><span>Text size</span><select id="set-size">${[['', 'Normal'], ['large', 'Large'], ['larger', 'Larger']].map(([v, l]) => `<option value="${v}"${(PREFS.size || '') === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label></div></div>`;
+  h += `<h2 class="sect">Currencies</h2><div class="card">
     <label class="f"><span>Home currency (for totals)</span><select id="set-home">${curOptions(H)}</select></label>
-    <label class="f"><span>Currency for precious metals</span><select id="set-mcur">${curOptions(mcur())}</select></label>
-    <div class="switch"><span>Update prices when the app opens</span><input type="checkbox" id="set-auto"${getSetting('auto_prices', '1') === '1' ? ' checked' : ''}></div></div>`;
-  h += `<div class="card"><h2>Prices</h2><p class="sub">Updated ${when(getSetting('prices_updated'))}. Tap one to enter it yourself (the next update replaces it).</p><div class="list">`;
-  for (const m of METALS) { const s = spot(m.sym);
-    h += `<div class="item" data-price="${m.sym}"><span>${m.name} (per troy oz)</span><span class="r">${s ? money(s.price, s.currency) : '—'}</span></div>`; }
-  h += `</div><details class="fold"><summary><h2>Exchange rates</h2><span class="sub">${fxRows.length ? 'Value of 1 ' + H + ' in other currencies' : 'none yet'}</span></summary><div class="list">`;
-  const shown = new Set(COMMON_CUR.concat(fxRows.map(r => r.currency)));
-  for (const c of Array.from(shown).sort()) { if (c === H) continue;
-    const r = conv(1, H, c);
-    h += `<div class="item" data-fx="${c}"><span>${c}</span><span class="r">${r == null ? '—' : r.toFixed(4)}</span></div>`; }
-  h += `</div></details><div class="btns"><button class="btn" data-act="update">Update now</button></div></div>`;
+    <label class="f"><span>Currency for precious metals</span><select id="set-mcur">${curOptions(mcur())}</select></label></div>`;
+  h += `<h2 class="sect">Price sources</h2><div class="card">
+    <div class="switch"><span>Update prices when the app opens</span><input type="checkbox" id="set-auto"${getSetting('auto_prices', '1') === '1' ? ' checked' : ''}></div>
+    <label class="f"><span>Metal prices from</span><select id="set-msrc"><option value="auto">The middle of all sources (recommended)</option>${METAL_SOURCES.map(x => `<option value="${x.id}"${getSetting('metal_source', 'auto') === x.id ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
+    <label class="f"><span>Exchange rates from</span><select id="set-fsrc"><option value="auto">The middle of all sources (recommended)</option>${FX_SOURCES.map(x => `<option value="${x.id}"${getSetting('fx_source', 'auto') === x.id ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
+    <p class="sub">With the middle value, one late or wrong source cannot change your totals. Every source is shown on the Metals and Currency pages. Updated ${when(getSetting('prices_updated'))}.</p>
+    <div class="btns"><button class="btn" data-act="update">Update now</button></div>
+    <details class="fold"><summary><h2>Enter a price yourself</h2></summary><p class="sub">For when there is no internet; the next update replaces it.</p><div class="list">`;
+  for (const m of METALS) { const sp = spot(m.sym);
+    h += `<div class="item" data-price="${m.sym}"><span>${m.name} (per troy oz)</span><span class="r">${sp ? money(sp.price, sp.currency) : '—'}</span></div>`; }
+  const shown = new Set(COMMON_CUR.concat(favs()));
+  for (const c of Array.from(shown).sort()) { if (c === H) continue; const r = conv(1, H, c);
+    h += `<div class="item" data-fx="${c}"><span>1 ${H} in ${c}</span><span class="r">${r == null ? '—' : r.toFixed(4)}</span></div>`; }
+  h += `</div></details></div>`;
   const nh = q('SELECT COUNT(*) n, MIN(date) d FROM price_history')[0];
-  h += `<div class="card"><h2>Price history</h2><p class="sub">${nh.n ? nh.n.toLocaleString('en-CA') + ' prices kept, from ' + esc(nh.d.slice(0, 4)) + '. Past years are monthly (DataHub); from the first update on, the app keeps each day\'s prices itself.' : 'No price history yet.'}${getSetting('daily_loaded') ? ' Daily prices updated ' + when(getSetting('daily_loaded')) + '.' : ''}</p>
+  h += `<h2 class="sect">Price history</h2><div class="card"><p class="sub">${nh.n ? nh.n.toLocaleString('en-CA') + ' prices kept, from ' + esc(nh.d.slice(0, 4)) + '. Daily for the last years (Yahoo Finance), monthly before that (DataHub), and each day the app updates.' : 'No price history yet.'}${getSetting('daily_loaded') ? ' Daily prices updated ' + when(getSetting('daily_loaded')) + '.' : ''}</p>
     <div class="btns"><button class="btn light" data-act="history">${getSetting('history_loaded') ? 'Refresh past prices' : 'Load past prices'}</button></div></div>`;
-  h += `<div class="card"><h2>Appearance</h2>
-    <div class="f2"><label class="f"><span>Colours</span><select id="set-theme">${[['', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([v, l]) => `<option value="${v}"${(PREFS.theme || '') === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
-    <label class="f"><span>Text size</span><select id="set-size">${[['', 'Normal'], ['large', 'Large'], ['larger', 'Larger']].map(([v, l]) => `<option value="${v}"${(PREFS.size || '') === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label></div></div>
-    <div id="sec"></div>`;
-  h += `<div class="card"><h2>Your data</h2>
+  h += `<h2 class="sect">Security</h2><div id="sec"></div>`;
+  h += `<h2 class="sect">Your data</h2><div class="card">
     <p class="sub">Everything is kept in one SQLite database file on this device. Export it to back it up or to move it to another phone or computer; import it there.</p>
     <div class="btns"><button class="btn" data-act="export">Export database</button><button class="btn light" data-act="import">Import database</button></div></div>`;
-  h += `<div class="card"><h2>About</h2><p class="sub">KJT Invest ${APP_VERSION}, by Knowing Jesus Today (knowingjesus.today). Open source (GPL-2.0-or-later), no accounts, no analytics, no tracking.
-    The app only goes online to update prices: metal prices from gold-api.com, exchange rates from the European Central Bank, past prices from DataHub, Yahoo Finance and Frankfurter. Nothing about you or your holdings is sent.</p></div>`;
+  h += `<h2 class="sect">About</h2><div class="card"><p class="sub">KJT Invest ${APP_VERSION}, by Knowing Jesus Today (knowingjesus.today). Open source (GPL-2.0-or-later), no accounts, no analytics, no tracking.
+    The app only goes online to update prices. Metals: gold-api.com, Yahoo Finance, Currency API. Exchange rates: European Central Bank, Bank of Canada, ExchangeRate-API (exchangerate-api.com), Currency API. Past prices: DataHub, Yahoo Finance, Frankfurter. Nothing about you or your holdings is sent.</p></div>`;
   view().innerHTML = h;
-  document.getElementById('set-home').onchange = e => { setSetting('home_currency', e.target.value); save(); render(); };
-  document.getElementById('set-theme').onchange = e => { PREFS.theme = e.target.value; applyLook(); savePrefs(); };
-  document.getElementById('set-size').onchange = e => { PREFS.size = e.target.value; applyLook(); savePrefs(); };
-  securityCard().then(html => { const el = document.getElementById('sec'); if (el) { el.outerHTML = html; bindSecurity(); } });
-  document.getElementById('set-mcur').onchange = e => { setSetting('metal_currency', e.target.value); save(); render(); };
-  document.getElementById('set-auto').onchange = e => { setSetting('auto_prices', e.target.checked ? '1' : '0'); save(); };
+  const on = (id, f) => { const el = document.getElementById(id); if (el) el.onchange = f; };
+  on('set-home', e => { setSetting('home_currency', e.target.value); save(); render(); });
+  on('set-mcur', e => { setSetting('metal_currency', e.target.value); save(); render(); });
+  on('set-auto', e => { setSetting('auto_prices', e.target.checked ? '1' : '0'); save(); });
+  on('set-theme', e => { PREFS.theme = e.target.value; applyLook(); savePrefs(); });
+  on('set-size', e => { PREFS.size = e.target.value; applyLook(); savePrefs(); });
+  on('set-msrc', e => { setSetting('metal_source', e.target.value); applyQuotes(getSetting('prices_updated') || new Date().toISOString()); save(); render(); });
+  on('set-fsrc', e => { setSetting('fx_source', e.target.value); applyQuotes(getSetting('prices_updated') || new Date().toISOString()); save(); render(); });
+  view().querySelectorAll('[data-pal]').forEach(b => b.onclick = () => { PREFS.palette = b.dataset.pal; applyLook(); savePrefs(); render(); });
+  securityCard().then(html => { const el = document.getElementById('sec'); if (el) { el.outerHTML = html.replace('<h2>Security</h2>', ''); bindSecurity(); } });
 }
 
 /* ---------------- forms ---------------- */
@@ -1385,7 +1523,7 @@ function goBack() {
 }
 window.__onBack = () => goBack();
 view().addEventListener('click', e => {
-  const el = e.target.closest('[data-act],[data-go],[data-metal],[data-prop],[data-item],[data-pval],[data-cfy],[data-cfp],[data-rent],[data-price],[data-fx],[data-chart],[data-range],[data-acct],[data-bal],[data-asset],[data-aval],[data-hpage],[data-prange]'); if (!el) return;
+  const el = e.target.closest('[data-act],[data-go],[data-metal],[data-prop],[data-item],[data-pval],[data-cfy],[data-cfp],[data-rent],[data-price],[data-fx],[data-chart],[data-range],[data-acct],[data-bal],[data-asset],[data-aval],[data-hpage],[data-prange],[data-unfav]'); if (!el) return;
   const d = el.dataset;
   if (d.chart) { state.chart = d.chart; const st = view().scrollTop; render(); view().scrollTop = st; }
   else if (d.range) { state.range = d.range; const st = view().scrollTop; render(); view().scrollTop = st; }
@@ -1397,6 +1535,7 @@ view().addEventListener('click', e => {
   else if (d.cfy) { state.cfYear = +d.cfy; if (el.classList.contains('yrow')) state.cfPage = 0; const st = view().scrollTop; render(); view().scrollTop = st; }
   else if (d.cfp) { state.cfPage = +d.cfp; const sc = document.getElementById('cfS'); if (sc) sc.scrollTo({ left: +d.cfp * sc.clientWidth, behavior: 'smooth' }); document.querySelectorAll('.cftabs .seg').forEach((b, j) => b.classList.toggle('on', j === +d.cfp)); }
   else if (d.rent) rentForm(state.propertyId, +d.rent);
+  else if (d.unfav) { setFavs(favs().filter(c => c !== d.unfav)); render(); }
   else if (d.hpage) { const sc = document.getElementById('heroS'); if (sc) sc.scrollTo({ left: +d.hpage * sc.clientWidth, behavior: 'smooth' }); }
   else if (d.prange) { state.prange = d.prange; const st = view().scrollTop; render(); view().scrollTop = st; }
   else if (d.asset) { state.assetId = +d.asset; render(); view().scrollTop = 0; }
@@ -1481,9 +1620,14 @@ async function checkPasscode(pass) {
 }
 async function loadPrefs() { const r = await native('getPrefs', {}); try { PREFS = JSON.parse(r.json || '{}') || {}; } catch (e) { PREFS = {}; } applyLook(); }
 function savePrefs() { return native('setPrefs', { json: JSON.stringify(PREFS) }); }
+const darkQuery = window.matchMedia ? matchMedia('(prefers-color-scheme: dark)') : null;
+if (darkQuery && darkQuery.addEventListener) darkQuery.addEventListener('change', () => applyLook());
 function applyLook() {
   const de = document.documentElement;
-  if (PREFS.theme === 'light' || PREFS.theme === 'dark') de.dataset.theme = PREFS.theme; else delete de.dataset.theme;
+  de.dataset.palette = PREFS.palette || 'purple';
+  const dark = PREFS.theme === 'dark' || (PREFS.theme !== 'light' && darkQuery && darkQuery.matches);
+  de.dataset.mode = dark ? 'dark' : 'light';
+  setTimeout(() => { const cs = getComputedStyle(de); native('statusBar', { color: cs.getPropertyValue('--head').trim(), nav: cs.getPropertyValue('--card').trim(), dark }); }, 0);
   if (PREFS.size === 'large' || PREFS.size === 'larger') de.dataset.size = PREFS.size; else delete de.dataset.size;
 }
 
