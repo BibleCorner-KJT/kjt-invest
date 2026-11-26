@@ -1,5 +1,5 @@
 #!/bin/sh
-# KJT Invest (Knowing Jesus Today) for Linux - installs (or updates) the app for the current user.
+# KJT Finance (Knowing Jesus Today) for Linux - installs (or updates) the app for the current user.
 # Your data is kept in ~/.local/share/kjt-invest and is never touched by an update.
 set -e
 SRC="$(cd "$(dirname "$0")" && pwd)"
@@ -46,7 +46,7 @@ rm -rf "$HOME/.local/share/investment-tracker-app"; rm -f "$APPS/app.investmentt
 cat > "$APPS/today.knowingjesus.Invest.desktop" <<DESK
 [Desktop Entry]
 Type=Application
-Name=KJT Invest
+Name=KJT Finance
 Comment=Private tracker for precious metals, real estate, cash and other assets
 Exec=python3 "$DEST/kjt_invest.py"
 Icon=today.knowingjesus.Invest
@@ -59,4 +59,4 @@ X-Purism-FormFactor=Workstation;Mobile;
 DESK
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$APPS" >/dev/null 2>&1 || true
 command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -q -t "$ICONS" >/dev/null 2>&1 || true
-echo "KJT Invest $(sed -n "s/^VERSION = '\(.*\)'/\1/p" "$DEST/kjt_invest.py") is installed. Open it from your apps."
+echo "KJT Finance $(sed -n "s/^VERSION = '\(.*\)'/\1/p" "$DEST/kjt_invest.py") is installed. Open it from your apps."

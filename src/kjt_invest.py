@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""KJT Invest for Linux (desktop and Linux phones such as postmarketOS). By Knowing Jesus Today (knowingjesus.today).
+"""KJT Finance for Linux (desktop and Linux phones such as postmarketOS). By Knowing Jesus Today (knowingjesus.today).
 
 A window that shows the app screens (www/) and gives them a few native abilities:
 keep the database file, fetch prices, export and import the database.
@@ -20,7 +20,7 @@ import urllib.request
 import gi
 
 APP_ID = 'today.knowingjesus.Invest'
-VERSION = '1.11'
+VERSION = '1.12'
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(os.environ.get('XDG_DATA_HOME') or os.path.expanduser('~/.local/share'), 'kjt-invest')
 OLD_DIR = os.path.join(os.path.expanduser('~/.local/share'), 'investment-tracker')   # where 1.0-1.2 (Investment Tracker) kept the data
@@ -53,7 +53,7 @@ class Tracker:
             except Exception:
                 pass
         os.makedirs(DATA_DIR, exist_ok=True)
-        self.win = Gtk.ApplicationWindow(application=app, title='KJT Invest')
+        self.win = Gtk.ApplicationWindow(application=app, title='KJT Finance')
         self.win.set_default_size(440, 820)
         self.view = self.make_view()
         s = self.view.get_settings()
@@ -185,7 +185,7 @@ class Tracker:
     def http_get(self, msg_id, url, ua=None):
         if not url.startswith('https://'):
             return self.reply(msg_id, {'error': 'only https'})
-        req = urllib.request.Request(url, headers={'User-Agent': ua or ('KJTInvest/' + VERSION),
+        req = urllib.request.Request(url, headers={'User-Agent': ua or ('KJTFinance/' + VERSION),
                                                    'Accept': 'application/json, application/xml, text/xml'})
         try:
             with urllib.request.urlopen(req, timeout=20) as r:
@@ -245,7 +245,7 @@ class Tracker:
         schema = Secret.Schema.new('today.knowingjesus.Invest', Secret.SchemaFlags.NONE, {'app': Secret.SchemaAttributeType.STRING, 'key': Secret.SchemaAttributeType.STRING})
         attrs = {'app': 'kjt-invest', 'key': 'unlock'}
         if op == 'store':
-            return Secret.password_store_sync(schema, attrs, Secret.COLLECTION_DEFAULT, 'KJT Invest unlock key', value, None)
+            return Secret.password_store_sync(schema, attrs, Secret.COLLECTION_DEFAULT, 'KJT Finance unlock key', value, None)
         if op == 'lookup':
             return Secret.password_lookup_sync(schema, attrs, None)
         return Secret.password_clear_sync(schema, attrs, None)
@@ -280,7 +280,7 @@ class Tracker:
             if not self.finger_ok():
                 return self.reply(msg_id, {'error': 'cancelled'})
             if cmd == 'bioEnable':
-                code, out = self.run(['secret-tool', 'store', '--label=KJT Invest unlock key'] + SECRET, data=args.get('dek', ''), timeout=20)
+                code, out = self.run(['secret-tool', 'store', '--label=KJT Finance unlock key'] + SECRET, data=args.get('dek', ''), timeout=20)
                 return self.reply(msg_id, {'ok': True} if code == 0 else {'error': 'the keyring did not accept it'})
             r = subprocess.run(['secret-tool', 'lookup'] + SECRET, capture_output=True, text=True, timeout=20)
             dek = r.stdout.strip() if r.returncode == 0 else ''
@@ -315,14 +315,14 @@ class Tracker:
     # fingerprint, and opened in Software (GNOME Software), where you press Install. Your data stays.
     # ---------- updates ----------
     # The new version comes only from the project's GitHub and must match its published SHA-256.
-    # Flatpak: installed quietly through Flatpak's update portal (app installed from the KJT Invest channel),
+    # Flatpak: installed quietly through Flatpak's update portal (app installed from the KJT Finance channel),
     # otherwise the checked file opens in Software, where you press Install.
     # Zip install: the app's own files in ~/.local/share/kjt-invest-app are replaced. Your data is never touched.
     @staticmethod
     def fetch_checked(url, sha):
         if not url.startswith('https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/'):
-            raise Exception('not from the KJT Invest project')
-        req = urllib.request.Request(url, headers={'User-Agent': 'KJTInvest/' + VERSION})
+            raise Exception('not from the KJT Finance project')
+        req = urllib.request.Request(url, headers={'User-Agent': 'KJTFinance/' + VERSION})
         with urllib.request.urlopen(req, timeout=180) as r:
             data = r.read()
         if not sha or hashlib.sha256(data).hexdigest().lower() != sha.lower():
@@ -330,7 +330,7 @@ class Tracker:
         return data
 
     def portal_update(self):
-        """Flatpak's own update portal: no extra permission; works when the app came from the KJT Invest channel.
+        """Flatpak's own update portal: no extra permission; works when the app came from the KJT Finance channel.
         Returns True when the new version was installed."""
         bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
         name, base = 'org.freedesktop.portal.Flatpak', '/org/freedesktop/portal/Flatpak'
@@ -369,7 +369,7 @@ class Tracker:
                 data = self.fetch_checked(f.get('url', ''), f.get('sha256', ''))
                 folder = os.path.join(DATA_DIR, 'update')
                 os.makedirs(folder, exist_ok=True)
-                path = os.path.join(folder, 'KJT Invest update.flatpak')
+                path = os.path.join(folder, 'KJT Finance update.flatpak')
                 with open(path, 'wb') as fh:
                     fh.write(data)
                 GLib.idle_add(self.open_file, path)
@@ -456,7 +456,7 @@ class Tracker:
                 f.set_name('Bank files (OFX, QFX, QIF, CSV)')
                 pats = ('*.ofx', '*.qfx', '*.qbo', '*.qif', '*.csv', '*.OFX', '*.QFX', '*.QBO', '*.QIF', '*.CSV', '*.txt')
             else:
-                f.set_name('KJT Invest database')
+                f.set_name('KJT Finance database')
                 pats = ('*.sqlite', '*.db', '*.sqlite3', '*.itdb')
             for pat in pats:
                 f.add_pattern(pat)

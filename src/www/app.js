@@ -1,9 +1,9 @@
-/* KJT Invest 1.11 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
+/* KJT Finance 1.12 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
    All data stays in one SQLite file on the device. The only network calls are the
    price updates (metal prices from gold-api.com, exchange rates from the European Central Bank). */
 'use strict';
 
-const APP_VERSION = '1.11';
+const APP_VERSION = '1.12';
 const SCHEMA = 10;
 const OZT_G = 31.1034768;
 const METALS = [
@@ -695,7 +695,7 @@ function missingWarn() {
   return `<div class="warn">No exchange rates yet. Press <b>↻</b> (top right) when you are online, or enter rates under Settings (⚙) › Prices.</div>`;
 }
 function renderOverview() {
-  setTitle('KJT Invest');
+  setTitle('KJT Finance');
   const t = totals(), H = home();
   const nAll = ['metal_holdings', 'properties', 'accounts', 'other_assets', 'loans'].reduce((n, tb) => n + q(`SELECT COUNT(*) n FROM ${tb}`)[0].n, 0);
   let h = missingWarn() + `<h2 class="sect">Summary <span class="sub">swipe the box for more</span></h2>` + heroHtml(t);
@@ -1275,6 +1275,7 @@ function reconLine(acct, rc) {
   const c = acct.currency || home(), cr = acct.type === 'credit';
   if (Math.abs(rc.diff) < 0.01) return `<div class="recon ok">✓ Agrees with your ${rc.n} transaction${rc.n > 1 ? 's' : ''} since the check before</div>`;
   const more = cr ? rc.diff < 0 : rc.diff > 0;
+  if (acct.type === 'cash') return `<div class="recon bad">You counted ${money(Math.abs(rc.diff), c)} ${more ? 'more' : 'less'} than your records${more ? '' : ': cash spent and not written down?'}</div>`;
   return `<div class="recon bad">${cr ? 'The bank says you owe' : 'The bank shows'} ${money(Math.abs(rc.diff), c)} ${more ? 'more' : 'less'} than your transactions add up to: one may be missing or entered twice.</div>`;
 }
 /* you counted your wallet and have less than your records say: record the gap as cash spending, in one tap */
@@ -1293,6 +1294,7 @@ function lastReconText(accountId) {   /* for the message after a new balance che
   const a = q('SELECT * FROM accounts WHERE id=?', [accountId])[0]; if (!a) return '';
   const bs = q('SELECT * FROM account_balances WHERE account_id=? ORDER BY date DESC, id DESC LIMIT 2', [accountId]);
   const rc = reconcile(a, bs[0], bs[1]); if (!rc) return '';
+  if (a.type === 'cash') return Math.abs(rc.diff) < 0.01 ? ' · matches your records ✓' : '';
   return Math.abs(rc.diff) < 0.01 ? ' · agrees with your transactions ✓' : ` · differs by ${money(Math.abs(rc.diff), a.currency || home())} from your transactions`;
 }
 function limitBar(used) { const u = Math.max(0, Math.min(1, used)); return `<div class="limitbar${used > .7 ? ' hi' : ''}"><i style="width:${(u * 100).toFixed(1)}%"></i></div>`; }
@@ -1300,7 +1302,7 @@ function renderAccount(id) {
   const a = q('SELECT * FROM accounts WHERE id=?', [id])[0];
   if (!a) { state.accountId = null; return renderAccounts(); }
   setTitle(a.name, true);
-  const c = a.currency || home(), cr = a.type === 'credit', bs = q('SELECT * FROM account_balances WHERE account_id=? ORDER BY date DESC, id DESC', [id]);
+  const c = a.currency || home(), cr = a.type === 'credit', isCash = a.type === 'cash', bs = q('SELECT * FROM account_balances WHERE account_id=? ORDER BY date DESC, id DESC', [id]);
   const share = shareOf(a), b = acctBalance(id);
   let h;
   if (cr) {
@@ -1316,8 +1318,9 @@ function renderAccount(id) {
     h = `<div class="card hero"><div class="label">${esc(ACCT_TYPES[a.type] || 'Account')}${a.institution ? ' · ' + esc(a.institution) : ''}</div>
       <div class="big">${b ? money(b.balance * share, c) : '—'}</div>
       <div class="sub">${b ? 'as of ' + fmtDate(b.date) : 'no balance yet'}${share < 1 ? ' · your share (' + shareLbl(a) + ') of ' + money(b ? b.balance : 0, c) : ''}${a.interest_rate ? ' · ' + a.interest_rate + '% interest' : ''}</div>
-      <div class="btns"><button class="btn" data-act="add-tx" data-acct-id="${a.id}">+ Transaction</button><button class="btn light" data-act="add-balance" data-id="${a.id}">Update balance</button></div>
-      <div class="btns"><button class="btn light" data-act="bank-import" data-id="${a.id}">Import bank file</button><button class="btn light" data-act="edit-account" data-id="${a.id}">Edit</button></div></div>`;
+      <div class="btns"><button class="btn" data-act="add-tx" data-acct-id="${a.id}">+ ${isCash ? 'Cash spent or received' : 'Transaction'}</button><button class="btn light" data-act="add-balance" data-id="${a.id}">${isCash ? 'Count your cash' : 'Update balance'}</button></div>
+      <div class="btns">${isCash ? '' : `<button class="btn light" data-act="bank-import" data-id="${a.id}">Import bank file</button>`}<button class="btn light" data-act="edit-account" data-id="${a.id}">Edit</button></div>
+      ${isCash ? '<p class="sub" style="margin:8px 0 0">Money taken out at an ATM comes in here by itself. Counting your cash is optional: do it now and then, and any difference can be recorded as cash spending.</p>' : ''}</div>`;
   }
   const txs = q('SELECT * FROM transactions WHERE account_id=? OR to_account_id=? ORDER BY date DESC, id DESC LIMIT 60', [id, id]);
   if (txs.length) {
@@ -1325,12 +1328,13 @@ function renderAccount(id) {
     h += `<h2 class="sect">Transactions <span class="sub">latest</span></h2><div class="card"><div class="txlist">` + txs.map(t => `<div class="txday small">${fmtDate(t.date)}</div>` + txRow(t, A)).join('') + `</div>
       <div class="btns"><button class="btn light" data-act="tx-of" data-id="${a.id}">All of them under Cash flow</button></div></div>`;
   }
-  h += `<h2 class="sect">${cr ? 'Statements' : 'Balance checks'} <span class="sub">${cr ? 'what you owed' : 'the real balance from your bank'}</span></h2><div class="card">`;
+  if (isCash && !bs.length) { view().innerHTML = h; return; }   /* nothing to show until you count your cash once */
+  h += `<h2 class="sect">${cr ? 'Statements' : isCash ? 'Cash counts' : 'Balance checks'} <span class="sub">${cr ? 'what you owed' : isCash ? 'what you counted in your wallet' : 'the real balance from your bank'}</span></h2><div class="card">`;
   if (!bs.length) h += `<p class="sub">None yet.</p>`;
   else h += `<div class="txns" style="margin-top:0">` + bs.map((r, i) => { const prev = bs[i + 1], ch = prev ? r.balance - prev.balance : null;
     return `<div class="txn" data-bal="${r.id}"><div class="txn-top"><span class="txn-date">${fmtDate(r.date)}</span><span class="txn-desc">${esc(r.note || '')}</span></div>
       <div class="txn-body"><div class="sub ${cr ? signCls(ch == null ? null : -ch) : signCls(ch)}">${ch == null ? '' : (ch >= 0 ? '+' : '') + money(ch, c)}</div><div class="r"><div class="strongv">${money(cr ? Math.abs(r.balance) : r.balance, c)}</div></div></div>${reconLine(a, reconcile(a, r, prev))}</div>`; }).join('') + `</div>`;
-  h += `<p class="sub" style="margin:8px 0 0">The balance is the last ${cr ? 'statement' : 'balance check'} plus the transactions after it.</p></div>`;
+  h += `<p class="sub" style="margin:8px 0 0">The balance is the last ${cr ? 'statement' : isCash ? 'count' : 'balance check'} plus the transactions after it.</p></div>`;
   view().innerHTML = h;
 }
 function accountForm(id, copyOf) {
@@ -1349,7 +1353,7 @@ function accountForm(id, copyOf) {
     ${id ? '<div class="btns"><button class="btn light" data-f="dup">Duplicate</button><button class="btn danger" data-f="delete">Delete account</button></div>' : ''}`, box => {
     const ts = box.querySelector('[name=type]'), sync = () => { const cr = ts.value === 'credit';
       box.querySelector('#limit-wrap').style.display = cr ? '' : 'none';
-      const bl = box.querySelector('#bal-wrap span'); if (bl) bl.textContent = cr ? 'What you owe today' : 'Balance today';
+      const bl = box.querySelector('#bal-wrap span'); if (bl) bl.textContent = cr ? 'What you owe today' : ts.value === 'cash' ? 'Cash you have now (optional)' : 'Balance today';
       const ir = box.querySelector('[name=interest_rate]').closest('label').querySelector('span'); ir.textContent = cr ? 'Interest % a year (optional)' : 'Interest % a year (optional)'; };
     ts.onchange = sync; sync();
     box.onclick = e => { const f = e.target.dataset.f; if (!f) return;
@@ -1367,7 +1371,7 @@ function accountForm(id, copyOf) {
       if (id) run('UPDATE accounts SET name=?,type=?,institution=?,currency=?,interest_rate=?,owners=?,notes=?,share_pct=?,co_owners=?,credit_limit=? WHERE id=?', vals.concat([id]));
       else { run('INSERT INTO accounts(name,type,institution,currency,interest_rate,owners,notes,share_pct,co_owners,credit_limit) VALUES(?,?,?,?,?,?,?,?,?,?)', vals);
         const nid = q('SELECT last_insert_rowid() id')[0].id;
-        if (bal != null) run('INSERT INTO account_balances(account_id,date,balance,note,created) VALUES(?,?,?,?,?)', [nid, today(), bal, 'Opening balance', Date.now()]);
+        if (bal != null) run('INSERT INTO account_balances(account_id,date,balance,note,created) VALUES(?,?,?,?,?)', [nid, today(), bal, d.type === 'cash' ? 'First count' : 'Opening balance', Date.now()]);
         state.tab = 'accounts'; state.accountId = nid; }
       save(); closeSheet(); render(); };
   });
@@ -1375,8 +1379,8 @@ function accountForm(id, copyOf) {
 function balanceForm(accountId, balId) {
   const a = q('SELECT * FROM accounts WHERE id=?', [accountId])[0]; if (!a) return;
   const r = balId ? q('SELECT * FROM account_balances WHERE id=?', [balId])[0] : { date: today() };
-  openSheet(`<h2>${esc(a.name)}: ${balId ? 'edit' : 'new'} balance</h2>
-    <div class="f2">${field('date', 'Date', r.date, 'type="date"')}${field('balance', (a.type === 'credit' ? 'What you owe (' : 'Balance (') + (a.currency || home()) + ', whole account)', a.type === 'credit' && r.balance != null ? Math.abs(r.balance) : r.balance)}</div>
+  openSheet(`<h2>${esc(a.name)}: ${a.type === 'cash' ? (balId ? 'edit the count' : 'count your cash') : (balId ? 'edit' : 'new') + ' balance'}</h2>
+    <div class="f2">${field('date', 'Date', r.date, 'type="date"')}${field('balance', (a.type === 'credit' ? 'What you owe (' : a.type === 'cash' ? 'Cash you have (' : 'Balance (') + (a.currency || home()) + ', whole account)', a.type === 'credit' && r.balance != null ? Math.abs(r.balance) : r.balance)}</div>
     ${field('note', 'Note (optional)', r.note, 'autocomplete="off" placeholder="e.g. interest paid, transfer"')}
     <div class="btns"><button class="btn" data-f="save">Save</button><button class="btn light" data-f="cancel">Cancel</button></div>
     ${balId ? '<div class="btns"><button class="btn danger" data-f="delete">Delete</button></div>' : ''}`, box => {
@@ -1389,7 +1393,7 @@ function balanceForm(accountId, balId) {
       if (a.type === 'credit' && v < 0) return bad('Enter what you owe as a positive amount.');
       if (balId) run('UPDATE account_balances SET date=?,balance=?,note=? WHERE id=?', [d.date, v, d.note.trim(), balId]);
       else run('INSERT INTO account_balances(account_id,date,balance,note,created) VALUES(?,?,?,?,?)', [accountId, d.date, v, d.note.trim(), Date.now()]);
-      save(); closeSheet(); render(); if (!balId) { const rt = lastReconText(accountId); toast('Balance saved' + rt); if (a.type === 'cash') offerCashSpending(accountId); } };
+      save(); closeSheet(); render(); if (!balId) { const rt = lastReconText(accountId); toast((a.type === 'cash' ? 'Count saved' : 'Balance saved') + rt); if (a.type === 'cash') offerCashSpending(accountId); } };
   });
 }
 
@@ -1494,7 +1498,7 @@ function renderMore() {
     <div class="btns"><button class="btn" data-act="print-report">Print or save as PDF</button></div>
     <h3 class="ieh">For a spreadsheet (CSV)</h3><p class="sub">Opens in LibreOffice Calc, Excel or Google Sheets. Amounts in each item's own currency, with your share.</p>
     <div class="btns"><button class="btn light" data-act="csv" data-which="tx">Transactions</button><button class="btn light" data-act="csv" data-which="assets">Assets</button><button class="btn light" data-act="csv" data-which="propcf">Property cashflow</button></div></div>`;
-  h += `<h2 class="sect">About</h2><div class="card"><p class="sub">KJT Invest ${APP_VERSION}, by Knowing Jesus Today (knowingjesus.today). Open source (GPL-2.0-or-later), no accounts, no analytics, no tracking.
+  h += `<h2 class="sect">About</h2><div class="card"><p class="sub">KJT Finance ${APP_VERSION}, by Knowing Jesus Today (knowingjesus.today). Open source (GPL-2.0-or-later), no accounts, no analytics, no tracking.
     The app only goes online to update prices and to look for app updates. Metals: gold-api.com, Yahoo Finance, Currency API. Exchange rates: European Central Bank, Bank of Canada, ExchangeRate-API (exchangerate-api.com), Currency API. Past prices: DataHub, Yahoo Finance, Frankfurter. Nothing about you or your holdings is sent.</p></div>`;
   view().innerHTML = h;
   const on = (id, f) => { const el = document.getElementById(id); if (el) el.onchange = f; };
@@ -1681,7 +1685,7 @@ function fxForm(cur) {
 /* ---------------- export / import ---------------- */
 async function exportDb() {
   await saveNow();
-  const r = await native('exportDb', { b64: bytesToB64(await fileBytes()), name: 'kjt-invest-' + today() + (CRYPT ? '-encrypted.itdb' : '.sqlite') });
+  const r = await native('exportDb', { b64: bytesToB64(await fileBytes()), name: 'kjt-finance-' + today() + (CRYPT ? '-encrypted.itdb' : '.sqlite') });
   if (r.ok) toast('Exported' + (r.where ? ' to ' + r.where : ''));
   else if (r.error) toast('Export failed: ' + r.error);
 }
@@ -1699,7 +1703,7 @@ async function importDb() {
     hideLock(); if (!o) return; bytes = o.plain;
   }
   try { cand = new SQL.Database(bytes); } catch (e) { return toast('That file is not a database.'); }
-  if (!isOurDb(cand)) { cand.close(); return toast('That file is not a KJT Invest database.'); }
+  if (!isOurDb(cand)) { cand.close(); return toast('That file is not a KJT Finance database.'); }
   if (!await ask('Replace everything in the app with the imported database? Export first if you want to keep what is here now.', 'Replace')) { cand.close(); return; }
   db.close(); db = cand; prepareDb(); loadFx(); await saveNow();
   state.propertyId = null; toast('Database imported'); render();
@@ -2518,7 +2522,7 @@ async function exportCsv(which) {
     const A = Object.fromEntries(q('SELECT * FROM accounts').map(a => [a.id, a]));
     rows = [['Date', 'Type', 'Amount', 'Currency', 'Account', 'To account', 'Category', 'Paid to / from', 'Note', 'Linked to']].concat(
       q('SELECT * FROM transactions ORDER BY date, id').map(t => [t.date, KIND_NAME[t.kind], t.amount, (A[t.account_id] || {}).currency || H, (A[t.account_id] || {}).name, t.to_account_id ? (A[t.to_account_id] || {}).name : '', t.kind === 'transfer' ? '' : cats().label(t.category_id), t.payee, t.note, t.link ? linkLabel(t.link) : '']));
-    name = 'kjt-invest-transactions-' + today() + '.csv';
+    name = 'kjt-finance-transactions-' + today() + '.csv';
   } else if (which === 'assets') {
     rows = [['Kind', 'Name', 'Detail', 'Currency', 'Paid', 'Value now', 'Your share %', 'Your value in ' + H]];
     for (const h of q('SELECT * FROM metal_holdings')) { const s = holdingStats(h); rows.push(['Precious metal', h.description || METAL[h.metal].name, `${METAL[h.metal].name}, ${FORMS[h.form] || 'Coin'}, ${s.oz.toFixed(4)} oz pure, bought ${h.purchase_date || ''}`, h.currency, s.cost != null ? s.cost.toFixed(2) : '', s.value != null ? s.value.toFixed(2) : '', 100, s.valueHome != null ? s.valueHome.toFixed(2) : '']); }
@@ -2526,12 +2530,12 @@ async function exportCsv(which) {
     for (const a of q('SELECT * FROM accounts')) { const b = acctBalance(a.id), k = shareOf(a); rows.push([a.type === 'credit' ? 'Credit card' : 'Account', a.name, (ACCT_TYPES[a.type] || '') + (a.institution ? ', ' + a.institution : ''), a.currency, '', b ? b.balance.toFixed(2) : '', (k * 100).toFixed(2), b ? (conv(b.balance * k, a.currency, H) || 0).toFixed(2) : '']); }
     for (const o of q('SELECT * FROM other_assets')) { const v = assetValue(o.id), k = shareOf(o); rows.push(['Other asset', o.name, (ASSET_TYPES[o.type] || ASSET_TYPES.other)[0], o.currency, o.purchase_price, v ? v.value : '', (k * 100).toFixed(2), v ? (conv(v.value * k, o.currency, H) || 0).toFixed(2) : '']); }
     for (const l of q('SELECT * FROM loans')) { const s = loanStats(l); rows.push(['Loan you made', l.person, 'lent ' + l.date + (l.due_date ? ', due ' + l.due_date : '') + (l.closed ? ', repaid' : ''), l.currency, l.amount, s.owed.toFixed(2), 100, (conv(s.owed, l.currency || H, H) || 0).toFixed(2)]); }
-    name = 'kjt-invest-assets-' + today() + '.csv';
+    name = 'kjt-finance-assets-' + today() + '.csv';
   } else {
     rows = [['Property', 'Month', 'Rent', 'Other income', 'Costs', 'Net', 'Months empty', 'Your share %', 'Currency']];
     for (const p of q('SELECT * FROM properties')) { const s = propertyStats(p);
       for (const yr of s.rows) for (const f of yr.months) if (f.owned && !f.future) rows.push([p.name, `${f.y}-${String(f.m + 1).padStart(2, '0')}`, f.rent.toFixed(2), f.income.toFixed(2), f.costs.toFixed(2), f.net.toFixed(2), f.empty.toFixed(2), (s.share * 100).toFixed(2), p.currency]); }
-    name = 'kjt-invest-property-cashflow-' + today() + '.csv';
+    name = 'kjt-finance-property-cashflow-' + today() + '.csv';
   }
   const bytes = new TextEncoder().encode(toCsv(rows));
   const r = await native('exportDb', { b64: bytesToB64(bytes), name });
@@ -2546,7 +2550,7 @@ function printReport() {
   const m = v => v == null ? '—' : whole(v, H), td = (v, cls) => `<td class="n${cls ? ' ' + cls : ''}">${v}</td>`;
   const sgn = v => v == null ? '' : v >= 0 ? 'up' : 'down';
   let h = `<header class="ph"><div><h1>Financial report</h1><div class="pmeta">${new Date(now + 'T12:00:00').toLocaleDateString('en-CA', { year: 'numeric', month: 'long', day: 'numeric' })} · amounts in ${H}, your share</div></div>
-    <div class="plogo">KJT Invest</div></header>`;
+    <div class="plogo">KJT Finance</div></header>`;
   /* net worth */
   const debt = t.debt || 0, cashOnly = t.cash + debt;
   h += `<h2>Net worth</h2><table><tbody>
@@ -2626,9 +2630,9 @@ function printReport() {
     h += `<h2>Coming in the next 30 days</h2><table><thead><tr><th>Date</th><th>What</th><th>Account</th><th class="n">Amount</th></tr></thead><tbody>` +
       due.map(r => `<tr><td>${fmtDate(r.next_date)}</td><td>${esc(r.kind === 'transfer' ? 'Transfer' : (r.payee || cats().label(r.category_id)))}<div class="psub">${esc(FREQS[r.freq] || '')}</div></td><td>${esc((A[r.account_id] || {}).name || '')}</td>${td((r.kind === 'in' ? '+' : r.kind === 'out' ? '−' : '') + money(r.amount, (A[r.account_id] || {}).currency || H), r.kind === 'in' ? 'up' : '')}</tr>`).join('') + `</tbody></table>`;
   }
-  h += `<footer class="pf">Made with KJT Invest ${APP_VERSION} · knowingjesus.today · printed from your own device; nothing was sent anywhere.</footer>`;
+  h += `<footer class="pf">Made with KJT Finance ${APP_VERSION} · knowingjesus.today · printed from your own device; nothing was sent anywhere.</footer>`;
   document.getElementById('print').innerHTML = h;
-  native('print', { title: 'KJT Invest report ' + now }).then(r => {
+  native('print', { title: 'KJT Finance report ' + now }).then(r => {
     if (r && r.error === 'unknown command') window.print();
     else if (r && r.error) toast('Could not print: ' + r.error);
   });
@@ -3221,7 +3225,7 @@ async function checkUpdate(manual) {
     const fresh = !updateInfo || updateInfo.version !== it.version;
     updateInfo = Object.assign({ platform: plat }, it, fresh ? {} : { state: updateInfo.state });
     showUpdateBar();
-    if (manual) toast('KJT Invest ' + it.version + ' is available');
+    if (manual) toast('KJT Finance ' + it.version + ' is available');
     else if (fresh && getSetting('auto_update', '1') === '1') autoInstall();
   } else { updateInfo = null; showUpdateBar(); if (manual) toast('You have the newest version (' + APP_VERSION + ')'); }
 }
@@ -3248,11 +3252,11 @@ function showUpdateBar() {
   if (!updateInfo) { b.hidden = true; return; }
   const v = esc(updateInfo.version), st = updateInfo.state;
   let msg, btn = '';
-  if (st === 'downloading') msg = `Downloading KJT Invest <b>${v}</b>…`;
-  else if (st === 'waiting') { msg = `<b>KJT Invest ${v}</b> is ready. It installs by itself when you leave the app.`; btn = 'Install now'; }
-  else if (st === 'installed') { msg = `<b>KJT Invest ${v}</b> is installed. Restart to use it.`; btn = 'Restart'; }
+  if (st === 'downloading') msg = `Downloading KJT Finance <b>${v}</b>…`;
+  else if (st === 'waiting') { msg = `<b>KJT Finance ${v}</b> is ready. It installs by itself when you leave the app.`; btn = 'Install now'; }
+  else if (st === 'installed') { msg = `<b>KJT Finance ${v}</b> is installed. Restart to use it.`; btn = 'Restart'; }
   else if (st === 'opened') msg = `Press <b>Install</b> in Software to finish updating to ${v}.`;
-  else { msg = `<b>KJT Invest ${v}</b> is ready${updateInfo.notes ? ': ' + esc(updateInfo.notes) : ''}`; btn = 'Update'; }
+  else { msg = `<b>KJT Finance ${v}</b> is ready${updateInfo.notes ? ': ' + esc(updateInfo.notes) : ''}`; btn = 'Update'; }
   b.innerHTML = `<span>${msg}</span>${btn ? `<button class="btn" id="upd-go">${btn}</button>` : ''}`;
   b.hidden = false;
   const g = document.getElementById('upd-go'); if (g) g.onclick = installUpdate;
@@ -3305,7 +3309,7 @@ window.__updateStatus = msg => toast(msg);
       }
       /* a file that cannot be opened is never overwritten */
       try { opened = new SQL.Database(bytes); } catch (e) { throw new Error('The data file could not be opened. It was not changed. A copy of it from the last start is kept as portfolio.backup.sqlite.'); }
-      if (!isOurDb(opened)) throw new Error('The data file is not a KJT Invest database. It was not changed.');
+      if (!isOurDb(opened)) throw new Error('The data file is not a KJT Finance database. It was not changed.');
     }
     db = opened || new SQL.Database();
     native('secure', { on: !!CRYPT });

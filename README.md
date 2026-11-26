@@ -1,4 +1,4 @@
-# KJT Invest (Knowing Jesus Today)
+# KJT Finance (Knowing Jesus Today)
 
 A private tracker for what you own, for Android and Linux (PCs and Linux phones):
 precious metals (coins, bars, rounds; live prices and price history), real estate (rent periods, costs,

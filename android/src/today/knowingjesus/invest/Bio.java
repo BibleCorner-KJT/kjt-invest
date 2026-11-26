@@ -108,7 +108,7 @@ final class Bio {
         try {
             Cipher c = Cipher.getInstance("AES/GCM/NoPadding");
             c.init(Cipher.DECRYPT_MODE, key(false), new GCMParameterSpec(128, Base64.decode(iv, Base64.DEFAULT)));
-            prompt(a, c, "Unlock KJT Invest", new Done() {
+            prompt(a, c, "Unlock KJT Finance", new Done() {
                 @Override
                 public void result(String ignored, String error) {
                     if (error != null) { done.result(null, error); return; }

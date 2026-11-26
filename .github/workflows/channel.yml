@@ -1,4 +1,4 @@
-# KJT Invest for Linux. Every change on main:
+# KJT Finance for Linux. Every change on main:
 #  1. builds the app for PCs (x86_64) and for Linux phones / ARM devices (aarch64);
 #  2. when the secret FLATPAK_GPG_KEY is set: signs both and publishes the app's own update channel at
 #     https://biblecorner-kjt.github.io/kjt-invest/ (GNOME Software then updates installed copies by itself);
@@ -86,14 +86,14 @@ jobs:
                 flatpak build-commit-from --src-repo="src-repos/$a/repo" --gpg-sign="$FPR" --gpg-homedir="$GNUPGHOME" --no-update-summary repo "$R"
               done
             done
-            flatpak build-update-repo --generate-static-deltas --prune --title="KJT Invest" --default-branch=stable \
+            flatpak build-update-repo --generate-static-deltas --prune --title="KJT Finance" --default-branch=stable \
               --gpg-sign="$FPR" --gpg-homedir="$GNUPGHOME" repo
             KEY=$(base64 -w0 channel-key.gpg)
             mkdir -p site && cp -r repo site/repo && cp channel/index.html channel/icon.png site/ && cp channel-key.gpg site/kjt-invest-channel.gpg
-            printf '[Flatpak Repo]\nTitle=KJT Invest\nUrl=%s/repo/\nHomepage=https://knowingjesus.today/\nComment=KJT Invest for Linux (Knowing Jesus Today)\nIcon=%s/icon.png\nDefaultBranch=stable\nGPGKey=%s\n' "$URL" "$URL" "$KEY" > site/kjt-invest.flatpakrepo
-            printf '[Flatpak Ref]\nName=%s\nBranch=stable\nTitle=KJT Invest\nUrl=%s/repo/\nSuggestRemoteName=kjt-invest\nHomepage=https://knowingjesus.today/\nIcon=%s/icon.png\nRuntimeRepo=%s\nIsRuntime=false\nGPGKey=%s\n' "$APP" "$URL" "$URL" "$RT" "$KEY" > site/kjt-invest.flatpakref
+            printf '[Flatpak Repo]\nTitle=KJT Finance\nUrl=%s/repo/\nHomepage=https://knowingjesus.today/\nComment=KJT Finance for Linux (Knowing Jesus Today)\nIcon=%s/icon.png\nDefaultBranch=stable\nGPGKey=%s\n' "$URL" "$URL" "$KEY" > site/kjt-invest.flatpakrepo
+            printf '[Flatpak Ref]\nName=%s\nBranch=stable\nTitle=KJT Finance\nUrl=%s/repo/\nSuggestRemoteName=kjt-invest\nHomepage=https://knowingjesus.today/\nIcon=%s/icon.png\nRuntimeRepo=%s\nIsRuntime=false\nGPGKey=%s\n' "$APP" "$URL" "$URL" "$RT" "$KEY" > site/kjt-invest.flatpakref
             for a in $(ls src-repos); do
-              F="KJT Invest $VER ($(label $a)).flatpak"
+              F="KJT Finance $VER ($(label $a)).flatpak"
               flatpak build-bundle --arch=$a --repo-url=$URL/repo/ --runtime-repo=$RT --gpg-keys=channel-key.gpg repo "out/$F" $APP stable
               if [ "$a" = aarch64 ]; then cp "out/$F" site/kjt-invest-linux-arm.flatpak; else cp "out/$F" site/kjt-invest-linux.flatpak; fi
             done
@@ -103,12 +103,12 @@ jobs:
           else
             echo "No FLATPAK_GPG_KEY secret yet: one-file installers only (no update channel)."
             for a in $(ls src-repos); do
-              flatpak build-bundle --arch=$a --runtime-repo=$RT "src-repos/$a/repo" "out/KJT Invest $VER ($(label $a)).flatpak" $APP stable
+              flatpak build-bundle --arch=$a --runtime-repo=$RT "src-repos/$a/repo" "out/KJT Finance $VER ($(label $a)).flatpak" $APP stable
             done
             echo "signed=0" >> "$GITHUB_OUTPUT"
           fi
           ls -la out
-          cd out && git init -q -b bundle && git add -A && git -c user.email=ci@local -c user.name=CI commit -qm "KJT Invest $VER Linux installers" \
+          cd out && git init -q -b bundle && git add -A && git -c user.email=ci@local -c user.name=CI commit -qm "KJT Finance $VER Linux installers" \
             && git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" bundle
       - if: steps.pub.outputs.signed == '1'
         uses: actions/upload-pages-artifact@v3

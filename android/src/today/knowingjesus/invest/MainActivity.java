@@ -29,7 +29,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 
 /**
- * KJT Invest (Knowing Jesus Today) for Android: a window that shows the app screens (assets/www) and gives them
+ * KJT Finance (Knowing Jesus Today) for Android: a window that shows the app screens (assets/www) and gives them
  * a few native abilities: keep the database file, fetch prices, export and import the database.
  * No analytics, no accounts, no other network use.
  */
@@ -212,7 +212,7 @@ public class MainActivity extends Activity {
             HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
             c.setConnectTimeout(15000);
             c.setReadTimeout(20000);
-            c.setRequestProperty("User-Agent", a.optString("ua", "KJTInvest/1.11"));
+            c.setRequestProperty("User-Agent", a.optString("ua", "KJTFinance/1.12"));
             c.setRequestProperty("Accept", "application/json, application/xml, text/xml");
             int status = c.getResponseCode();
             InputStream in = status < 400 ? c.getInputStream() : c.getErrorStream();
@@ -253,7 +253,7 @@ public class MainActivity extends Activity {
             reply(id, o);
         } else if ("print".equals(cmd)) {
             /* the printable report: Android's print screen, where "Save as PDF" is one of the printers */
-            final String title = a.optString("title", "KJT Invest report");
+            final String title = a.optString("title", "KJT Finance report");
             runOnUiThread(new Runnable() {
                 @Override
                 public void run() {
@@ -277,7 +277,7 @@ public class MainActivity extends Activity {
                and Android itself refuses it unless it is signed with the same key as this app; the phone asks to confirm */
             String url = a.getString("url"), sha = a.optString("sha256", "");
             if (!url.startsWith("https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/") && !url.startsWith("https://github.com/BibleCorner-KJT/kjt-invest/"))
-                throw new Exception("not from the KJT Invest project");
+                throw new Exception("not from the KJT Finance project");
             HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
             c.setConnectTimeout(20000);
             c.setReadTimeout(60000);

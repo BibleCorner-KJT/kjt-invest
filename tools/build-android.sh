@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds the KJT Invest APK.
+# Builds the KJT Finance APK.
 # Needs (Ubuntu/Debian): sudo apt install aapt dalvik-exchange zipalign apksigner android-sdk-platform-23 default-jdk
 # Usage: tools/build-android.sh <version> <keystore> <password-file>
 set -e
