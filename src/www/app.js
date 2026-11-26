@@ -1,10 +1,10 @@
-/* KJT Invest 1.3 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
+/* KJT Invest 1.4 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
    All data stays in one SQLite file on the device. The only network calls are the
    price updates (metal prices from gold-api.com, exchange rates from the European Central Bank). */
 'use strict';
 
-const APP_VERSION = '1.3';
-const SCHEMA = 4;
+const APP_VERSION = '1.4';
+const SCHEMA = 5;
 const OZT_G = 31.1034768;
 const METALS = [
   { sym: 'XAU', name: 'Gold', purity: 0.9999 },
@@ -101,6 +101,10 @@ CREATE TABLE IF NOT EXISTS accounts (id INTEGER PRIMARY KEY, name TEXT NOT NULL,
   interest_rate REAL, owners INTEGER DEFAULT 1, notes TEXT);
 CREATE TABLE IF NOT EXISTS account_balances (id INTEGER PRIMARY KEY, account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
   date TEXT NOT NULL, balance REAL NOT NULL, note TEXT);
+CREATE TABLE IF NOT EXISTS property_items (id INTEGER PRIMARY KEY, property_id INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL, amount REAL NOT NULL, freq TEXT NOT NULL, start_date TEXT, end_date TEXT, note TEXT);
+CREATE TABLE IF NOT EXISTS property_values (id INTEGER PRIMARY KEY, property_id INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+  date TEXT NOT NULL, value REAL NOT NULL, note TEXT);
 CREATE TABLE IF NOT EXISTS other_assets (id INTEGER PRIMARY KEY, name TEXT NOT NULL, type TEXT DEFAULT 'other', purchase_date TEXT,
   purchase_price REAL, currency TEXT, owners INTEGER DEFAULT 1, notes TEXT);
 CREATE TABLE IF NOT EXISTS asset_values (id INTEGER PRIMARY KEY, asset_id INTEGER NOT NULL REFERENCES other_assets(id) ON DELETE CASCADE,
@@ -133,6 +137,18 @@ function prepareDb() {
   const pcols = q('PRAGMA table_info(properties)').map(r => r.name);
   if (!pcols.includes('owners')) run('ALTER TABLE properties ADD COLUMN owners INTEGER DEFAULT 1');
   if (!pcols.includes('type')) run("ALTER TABLE properties ADD COLUMN type TEXT DEFAULT 'house'");
+  /* 1.4: the yearly amounts of earlier versions become yearly items for that year; year-end values become value entries */
+  if (!getSetting('items_migrated')) {
+    for (const y of q('SELECT * FROM property_years')) {
+      const a = y.year + '-01-01', b = y.year + '-12-31';
+      for (const [col, kind] of [['condo_fees', 'condo_fees'], ['insurance', 'insurance'], ['municipal_tax', 'municipal_tax'], ['school_tax', 'school_tax'], ['other_costs', 'other_cost'], ['rent', 'other_income']])
+        if (y[col] > 0) run('INSERT INTO property_items(property_id,kind,amount,freq,start_date,end_date,note) VALUES(?,?,?,?,?,?,?)', [y.property_id, kind, y[col], 'yearly', a, b, 'from ' + y.year + ' (earlier version)']);
+      if (y.value_end != null) run('INSERT INTO property_values(property_id,date,value,note) VALUES(?,?,?,?)', [y.property_id, b, y.value_end, 'Year-end value']);
+    }
+    for (const p of q('SELECT * FROM properties WHERE current_value IS NOT NULL'))
+      if (!q('SELECT id FROM property_values WHERE property_id=? AND date>=?', [p.id, today()]).length) run('INSERT INTO property_values(property_id,date,value,note) VALUES(?,?,?,?)', [p.id, today(), p.current_value, 'Your estimate']);
+    setSetting('items_migrated', '1');
+  }
   if (+getSetting('schema', 1) < SCHEMA) setSetting('schema', SCHEMA);
 }
 function isOurDb(candidate) {
@@ -220,7 +236,6 @@ function holdingStats(h) {
     valueHome: conv(value, h.currency, home()), costHome: conv(cost, h.currency, home()),
     valueM: conv(value, h.currency, mcur()), costM: conv(cost, h.currency, mcur()) };
 }
-function yearCosts(y) { return COSTS.reduce((s, [k]) => s + (y[k] || 0), 0); }
 /* dates as 'YYYY-MM-DD' strings; day numbers for counting */
 const dnum = s => Math.floor(Date.UTC(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10)) / 864e5);
 const dstr = n => new Date(n * 864e5).toISOString().slice(0, 10);
@@ -228,58 +243,94 @@ function fmtDate(s, short) {
   if (!s) return '';
   return new Date(s + 'T12:00:00').toLocaleDateString('en-CA', short ? { year: 'numeric', month: 'short' } : { year: 'numeric', month: 'short', day: 'numeric' });
 }
-/* rent of one year from the rent periods: whole months and part months, and the months it stood empty */
-function rentForYear(p, periods, year) {
-  const own0 = p.purchase_date ? dnum(p.purchase_date) : -Infinity;
-  let rent = 0, empty = 0, ownedMonths = 0, open = false;
-  for (let m = 0; m < 12; m++) {
-    const a = dnum(`${year}-${String(m + 1).padStart(2, '0')}-01`);
-    const b = dnum(m === 11 ? `${year + 1}-01-01` : `${year}-${String(m + 2).padStart(2, '0')}-01`) - 1;   // last day
-    const days = b - a + 1, oa = Math.max(a, own0); if (oa > b) continue;
-    const owned = b - oa + 1; let rented = 0;
-    for (const r of periods) {
-      const s = dnum(r.start_date), e = r.end_date ? dnum(r.end_date) : Infinity;
-      if (!r.end_date && e >= a) open = true;
-      const lo = Math.max(oa, s), hi = Math.min(b, e); if (hi < lo) continue;
-      rent += (r.monthly_rent || 0) * (hi - lo + 1) / days; rented += hi - lo + 1;
-    }
-    ownedMonths += owned / days; empty += Math.max(0, owned - rented) / days;
+/* ---------------- real estate: money in and out, month by month ----------------
+   Rent comes from the rent periods (a monthly rent between two dates). Every other cost or income is an
+   item with how often it is paid: monthly (e.g. condo fees, due whether the unit is rented or not),
+   yearly (e.g. insurance, taxes: spread over the months), or once (e.g. a repair, in its month). */
+const PITEMS = {
+  condo_fees: ['Condo fees', 'cost', 'monthly'], insurance: ['Insurance', 'cost', 'yearly'],
+  municipal_tax: ['Municipal taxes', 'cost', 'yearly'], school_tax: ['School taxes', 'cost', 'yearly'],
+  utilities: ['Utilities (heat, power, water)', 'cost', 'monthly'], management: ['Management fees', 'cost', 'monthly'],
+  repairs: ['Repairs & maintenance', 'cost', 'once'], other_cost: ['Other cost', 'cost', 'monthly'],
+  other_income: ['Other income (parking, laundry…)', 'income', 'monthly'],
+};
+const FREQ = { monthly: 'a month', yearly: 'a year', once: 'once' };
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function monthBounds(y, m) {   /* m 0-11 -> first and last day numbers */
+  const a = dnum(`${y}-${String(m + 1).padStart(2, '0')}-01`);
+  const b = dnum(m === 11 ? `${y + 1}-01-01` : `${y}-${String(m + 2).padStart(2, '0')}-01`) - 1;
+  return [a, b];
+}
+function monthFlow(p, periods, items, y, m) {
+  const [a, b] = monthBounds(y, m), days = b - a + 1;
+  const own0 = p.purchase_date ? dnum(p.purchase_date) : -Infinity, oa = Math.max(a, own0);
+  const out = { y, m, owned: 0, rent: 0, rented: 0, income: 0, costs: 0, byKind: {}, future: a > dnum(today()) };
+  if (oa > b) return out;
+  out.owned = (b - oa + 1) / days;
+  for (const r of periods) {
+    const s = dnum(r.start_date), e = r.end_date ? dnum(r.end_date) : Infinity;
+    const lo = Math.max(oa, s), hi = Math.min(b, e); if (hi < lo) continue;
+    out.rent += (r.monthly_rent || 0) * (hi - lo + 1) / days; out.rented += (hi - lo + 1) / days;
   }
-  return { rent, empty, ownedMonths, open };
+  for (const it of items) {
+    const meta = PITEMS[it.kind] || PITEMS.other_cost, s = it.start_date ? dnum(it.start_date) : own0, e = it.end_date ? dnum(it.end_date) : Infinity;
+    let v = 0;
+    if (it.freq === 'once') { if (s >= oa && s <= b) v = it.amount || 0; }
+    else { const lo = Math.max(oa, s), hi = Math.min(b, e); if (hi >= lo) v = (it.amount || 0) * (it.freq === 'yearly' ? 1 / 12 : 1) * (hi - lo + 1) / days; }
+    if (!v) continue;
+    if (meta[1] === 'income') out.income += v; else out.costs += v;
+    out.byKind[it.kind] = (out.byKind[it.kind] || 0) + v;
+  }
+  out.empty = Math.max(0, out.owned - out.rented);
+  out.net = out.rent + out.income - out.costs;
+  return out;
+}
+function propertyValues(p) {   /* [[date, value]]: the purchase, then your estimates */
+  const an = [[p.purchase_date || '0000-01-01', p.purchase_price || 0]];
+  for (const r of q('SELECT date, value FROM property_values WHERE property_id=? ORDER BY date, id', [p.id])) an.push([r.date, r.value]);
+  if (an.length === 1 && p.current_value != null) an.push([today(), p.current_value]);   /* a value typed in before 1.4 */
+  return an.sort((x, z) => x[0] < z[0] ? -1 : x[0] > z[0] ? 1 : 0);
 }
 function propertyStats(p) {
-  const rows0 = q('SELECT * FROM property_years WHERE property_id=? ORDER BY year', [p.id]);
   const periods = q('SELECT * FROM rent_periods WHERE property_id=? ORDER BY start_date', [p.id]);
+  const items = q('SELECT * FROM property_items WHERE property_id=? ORDER BY start_date', [p.id]);
   const owners = Math.max(1, p.owners || 1), share = 1 / owners;
   const invested = (p.purchase_price || 0) + (p.purchase_costs || 0);
-  const nowY = new Date().getFullYear();
-  /* the years to show: years with costs entered, and years with rent */
-  const years = new Set(rows0.map(y => y.year));
-  for (const r of periods) {
-    const y0 = +r.start_date.slice(0, 4), y1 = r.end_date ? +r.end_date.slice(0, 4) : nowY;
-    for (let y = y0; y <= Math.min(y1, nowY); y++) years.add(y);
+  const anchors = propertyValues(p), now = today(), nowY = +now.slice(0, 4), nowM = +now.slice(5, 7) - 1;
+  let y0 = p.purchase_date ? +p.purchase_date.slice(0, 4) : nowY;
+  for (const r of periods) y0 = Math.min(y0, +r.start_date.slice(0, 4));
+  for (const it of items) if (it.start_date) y0 = Math.min(y0, +it.start_date.slice(0, 4));
+  const years = []; let sumNet = 0;
+  for (let y = y0; y <= nowY; y++) {
+    const months = MONTHS.map((_, m) => monthFlow(p, periods, items, y, m));
+    const done = months.filter(f => !f.future);
+    const add = (list, k) => list.reduce((s, f) => s + f[k], 0);
+    const yr = { year: y, months, current: y === nowY,
+      rent: add(done, 'rent'), income: add(done, 'income'), costs: add(done, 'costs'), empty: add(done, 'empty'),
+      fullRent: add(months, 'rent'), fullIncome: add(months, 'income'), fullCosts: add(months, 'costs') };
+    yr.net = yr.rent + yr.income - yr.costs; yr.fullNet = yr.fullRent + yr.fullIncome - yr.fullCosts;
+    yr.byKind = {}; for (const f of done) for (const [k, v] of Object.entries(f.byKind)) yr.byKind[k] = (yr.byKind[k] || 0) + v;
+    if (!done.some(f => f.owned) && !yr.rent && !yr.costs) continue;
+    const startD = p.purchase_date && p.purchase_date > `${y}-01-01` ? p.purchase_date : `${y - 1}-12-31`;
+    const endD = y === nowY ? now : `${y}-12-31`;
+    yr.valueStart = interp(anchors, startD) || (p.purchase_price || 0); yr.valueEnd = interp(anchors, endD);
+    yr.valChange = anchors.length > 1 ? yr.valueEnd - yr.valueStart : null;
+    yr.cash = invested ? yr.net / invested : null;
+    yr.total = yr.valChange == null || !invested ? null : (yr.net + yr.valChange) / invested;
+    sumNet += yr.net; years.push(yr);
   }
-  let prev = p.purchase_price || 0, sumNet = 0;
-  const rows = Array.from(years).sort((a, b) => a - b).map(year => {
-    const y = rows0.find(r => r.year === year) || { year, rent: 0, id: null };
-    const rr = rentForYear(p, periods, year);
-    const rent = rr.rent + (y.rent || 0), costs = yearCosts(y), net = rent - costs;
-    const valChange = y.value_end == null ? null : y.value_end - prev;
-    if (y.value_end != null) prev = y.value_end;
-    sumNet += net;
-    return { y, year, rent, periodRent: rr.rent, empty: rr.empty, expected: year === nowY && rr.open, noCosts: !y.id,
-      costs, net, cash: invested ? net / invested : null, valChange,
-      total: valChange == null || !invested ? null : (net + valChange) / invested };
-  });
-  const value = p.current_value != null ? p.current_value : prev;
+  const value = anchors.length > 1 ? anchors[anchors.length - 1][1] : (p.current_value != null ? p.current_value : p.purchase_price || 0);
   const valueGain = value - (p.purchase_price || 0);
   const gain = sumNet + valueGain - (p.purchase_costs || 0);
   const overall = invested ? gain / invested : null;
   let yearsHeld = null, annual = null;
   if (p.purchase_date) { yearsHeld = (Date.now() - new Date(p.purchase_date)) / (365.25 * 864e5); if (yearsHeld >= 1 && overall > -1) annual = Math.pow(1 + overall, 1 / yearsHeld) - 1; }
-  const done = rows.filter(r => !r.expected), last = done.length ? done[done.length - 1] : rows.length ? rows[rows.length - 1] : null;
-  return { rows, periods, owners, share, invested, value, valueGain, sumNet, gain, overall, annual, yearsHeld, last,
-    avgCash: done.length ? done.reduce((s, r) => s + (r.cash || 0), 0) / done.length : null };
+  const full = years.filter(r => !r.current), last = full.length ? full[full.length - 1] : years.length ? years[years.length - 1] : null;
+  /* the last 12 months, for a "per month" figure */
+  const last12 = []; for (const yr of years) for (const f of yr.months) if (!f.future && f.owned) last12.push(f);
+  const l12 = last12.slice(-12), perMonth = l12.length ? l12.reduce((s, f) => s + f.net, 0) / l12.length : null;
+  return { rows: years, periods, items, anchors, owners, share, invested, value, valueGain, sumNet, gain, overall, annual, yearsHeld, last, perMonth,
+    avgCash: full.length ? full.reduce((s, r) => s + (r.cash || 0), 0) / full.length : null };
 }
 function acctBalance(id) { const r = q('SELECT * FROM account_balances WHERE account_id=? ORDER BY date DESC, id DESC LIMIT 1', [id]); return r[0] || null; }
 function totals() {
@@ -352,6 +403,8 @@ async function updatePrices(quiet) {
     if (!quiet || fail.length) toast(fail.length ? (ok || rates ? 'Updated, except ' + fail.join(', ') : 'No connection: prices not updated') : 'Prices updated');
   } finally { updating = false; btn.classList.remove('spin'); clearHist(); render(); }
   if (!getSetting('history_loaded') && getSetting('auto_prices', '1') === '1') loadHistory(true);
+  else if (getSetting('auto_prices', '1') === '1') { const dl = getSetting('daily_loaded');
+    if (!dl || Date.now() - new Date(dl) > 2 * 864e5) loadDaily(dl ? '1mo' : '5y').then(n => { if (n) { save(); clearHist(); render(); } }); }
 }
 
 /* ---------------- price history ----------------
@@ -364,6 +417,20 @@ const HIST_SRC = {
   XPT: 'https://datahub.io/energy-and-commodities/precious-metals-prices/_r/-/data/platinum.csv',
   XPD: 'https://datahub.io/energy-and-commodities/precious-metals-prices/_r/-/data/palladium.csv',
 };
+const YAHOO = { XAU: 'GC=F', XAG: 'SI=F', XPT: 'PL=F', XPD: 'PA=F' };
+async function loadDaily(range) {   /* daily closing prices (futures, USD per troy ounce) from Yahoo Finance; no account needed */
+  let n = 0;
+  for (const m of METALS) {
+    const r = await native('httpGet', { url: `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(YAHOO[m.sym])}?range=${range}&interval=1d`, ua: 'Mozilla/5.0' });
+    try {
+      const res = JSON.parse(r.body || '').chart.result[0], ts = res.timestamp || [], cl = res.indicators.quote[0].close || [];
+      const rows = []; for (let i = 0; i < ts.length; i++) if (cl[i] > 0) rows.push([m.sym, new Date(ts[i] * 1000).toISOString().slice(0, 10), cl[i], 'Yahoo Finance (daily)']);
+      if (rows.length) { bulk('INSERT OR REPLACE INTO price_history(symbol,date,price,source) VALUES(?,?,?,?)', rows); n += rows.length; }
+    } catch (e) { /* this metal not now */ }
+  }
+  if (n) setSetting('daily_loaded', new Date().toISOString());
+  return n;
+}
 let loadingHist = false;
 async function loadHistory(quiet) {
   if (loadingHist) return; loadingHist = true;
@@ -383,6 +450,7 @@ async function loadHistory(quiet) {
       if (rows.length) bulk('INSERT OR IGNORE INTO price_history(symbol,date,price,source) VALUES(?,?,?,?)', rows);
       (rows.length ? done : fail).push(m.name);
     }
+    if (await loadDaily('5y')) done.push('daily prices');
     const curs = new Set(['USD', 'CAD', home(), mcur()]);
     q('SELECT DISTINCT currency FROM metal_holdings UNION SELECT DISTINCT currency FROM properties').forEach(r => r.currency && curs.add(r.currency));
     curs.delete('EUR');
@@ -617,10 +685,7 @@ function worthModel() {
     items.push({ kind: 'm', from: h.purchase_date || '0000', at: d => { const p = d >= now ? spotIn(h.metal, H) : priceOn(h.metal, d, H); return p == null ? null : s.oz * p; },
       paid: d => convOn(s.cost || 0, h.currency || H, H, h.purchase_date || d) }); }
   for (const p of q('SELECT * FROM properties')) { const st = propertyStats(p), k = st.share, c = p.currency || H;
-    const an = [[p.purchase_date || '0000-01-01', p.purchase_price || 0]];
-    for (const r of st.rows) if (r.y.value_end != null) an.push([r.year + '-12-31', r.y.value_end]);
-    if (p.current_value != null) an.push([now, p.current_value]);
-    an.sort((a, b) => a[0] < b[0] ? -1 : 1);
+    const an = st.anchors;
     items.push({ kind: 'p', from: p.purchase_date || '0000', at: d => convOn(interp(an, d) * k, c, H, d), paid: d => convOn(st.invested * k, c, H, p.purchase_date || d) }); }
   for (const a of q('SELECT * FROM accounts')) { const k = 1 / Math.max(1, a.owners || 1), c = a.currency || H;
     const bs = q('SELECT date, balance FROM account_balances WHERE account_id=? ORDER BY date, id', [a.id]).map(r => [r.date, r.balance]);
@@ -735,7 +800,7 @@ function bindHero() {
 }
 
 /* ---------------- price history chart ---------------- */
-const RANGES = [['1M', 31], ['6M', 183], ['1Y', 366], ['5Y', 1827], ['20Y', 7305], ['All', 0]];
+const RANGES = [['1W', 8], ['1M', 31], ['6M', 183], ['1Y', 366], ['5Y', 1827], ['20Y', 7305], ['All', 0]];
 function dayStr(d) { return d.toISOString().slice(0, 10); }
 function chartData(key) {
   const M = mcur(), days = (RANGES.find(r => r[0] === state.range) || RANGES[2])[1];
@@ -791,8 +856,8 @@ function chartCard() {
     const f = pts[0][1], l = pts[pts.length - 1][1], ch = f ? l / f - 1 : null;
     body = `<div class="chart-head"><div><div class="big2">${money(l, M)}</div><div class="sub">${two ? 'value of your metals' : 'per troy ounce'}</div></div>
       <div class="r"><div class="${signCls(ch)}">${pct(ch)}</div><div class="sub">over ${state.range}</div></div></div>
-      ${lineChart('metals', pts, two, M, state.range === '1M' || state.range === '6M', ['Value', 'Paid (fees included)'])}
-      <p class="sub" style="margin:6px 0 0">${state.range === '1M' || state.range === '6M' ? 'Daily prices are kept from the day you started the app; older years are monthly.' : 'Monthly prices for past years; daily since you started using the app.'}</p>`;
+      ${lineChart('metals', pts, two, M, state.range === '1W' || state.range === '1M' || state.range === '6M', ['Value', 'Paid (fees included)'])}
+      <p class="sub" style="margin:6px 0 0">Daily prices for the last years (Yahoo Finance), monthly before that (DataHub).</p>`;
   }
   return `<div class="card"><div class="segs">${tabs}</div><div class="segs">${ranges}</div>${body}</div>`;
 }
@@ -829,7 +894,7 @@ function renderProperties() {
       <div class="grid2" style="margin-top:10px">
         <div class="stat"><div class="k">Value${s.owners > 1 ? ' (your share)' : ''}</div><div class="v">${whole(s.value * k, c)}</div></div>
         <div class="stat"><div class="k">Invested${s.owners > 1 ? ' (your share)' : ''}</div><div class="v">${whole(s.invested * k, c)}</div></div>
-        <div class="stat"><div class="k">${s.last ? 'Cash return ' + s.last.year : 'Cash return'}</div><div class="v ${signCls(s.last && s.last.cash)}">${s.last ? pct(s.last.cash) : '—'}</div></div>
+        <div class="stat"><div class="k">Net per month</div><div class="v ${signCls(s.perMonth)}">${s.perMonth == null ? '—' : whole(s.perMonth * k, c)}</div></div>
         <div class="stat"><div class="k">${s.annual != null ? 'Per year, overall' : 'Overall return'}</div><div class="v ${signCls(s.overall)}">${pct(s.annual != null ? s.annual : s.overall)}</div></div>
       </div></div>`;
   }
@@ -841,37 +906,133 @@ function renderProperty(id) {
   if (!p) { state.propertyId = null; return renderProperties(); }
   setTitle(p.name, true);
   const s = propertyStats(p), c = p.currency || home(), k = s.share, sh = v => whole(v * k, c);
-  let h = `<div class="card"><div class="phead"><span class="pbadge">${propIcon(p.type)}</span><div><h3>${(PROP_TYPES[p.type] || PROP_TYPES.house)[0]}</h3>${p.address ? `<div class="sub">${esc(p.address)}</div>` : ''}</div></div>${s.owners > 1 ? `<div class="note">Owned by ${s.owners} people: amounts show your share (1/${s.owners}). Whole property value ${whole(s.value, c)}.</div>` : ''}
-    <div class="row strong"><span class="k">Value (your estimate)</span><span class="v">${sh(s.value)}</span></div>
-    <div class="row"><span class="k">Purchase price</span><span class="v">${sh(p.purchase_price)}</span></div>
-    ${p.purchase_costs ? `<div class="row"><span class="k">Purchase costs</span><span class="v">${sh(p.purchase_costs)}</span></div>` : ''}
+  let h = `<div class="card"><div class="phead"><span class="pbadge">${propIcon(p.type)}</span><div><h3>${(PROP_TYPES[p.type] || PROP_TYPES.house)[0]}</h3>${p.address ? `<div class="sub">${esc(p.address)}</div>` : ''}</div></div>
+    ${s.owners > 1 ? `<div class="note" style="margin-top:10px">Owned by ${s.owners} people: amounts show your share (1/${s.owners}). Whole property value ${whole(s.value, c)}.</div>` : ''}
+    <div class="row strong" style="margin-top:6px"><span class="k">Value (your estimate)</span><span class="v">${sh(s.value)}</span></div>
+    <div class="row"><span class="k">Purchase price${p.purchase_costs ? ' + costs' : ''}</span><span class="v">${sh(s.invested)}</span></div>
     <div class="row"><span class="k">Value gain</span><span class="v ${signCls(s.valueGain)}">${sh(s.valueGain)}</span></div>
-    <div class="row"><span class="k">Net income, all years</span><span class="v ${signCls(s.sumNet)}">${sh(s.sumNet)}</span></div>
+    <div class="row"><span class="k">Net cashflow, all time</span><span class="v ${signCls(s.sumNet)}">${sh(s.sumNet)}</span></div>
+    ${s.perMonth != null ? `<div class="row"><span class="k">Net cashflow per month (last 12)</span><span class="v ${signCls(s.perMonth)}">${sh(s.perMonth)}</span></div>` : ''}
     <div class="row strong"><span class="k">Total return</span><span class="v ${signCls(s.gain)}">${sh(s.gain)} (${pct(s.overall)})</span></div>
     ${s.annual != null ? `<div class="row"><span class="k">Per year, on average</span><span class="v ${signCls(s.annual)}">${pct(s.annual)}</span></div>` : ''}
-    ${s.avgCash != null ? `<div class="row"><span class="k">Average cash return</span><span class="v ${signCls(s.avgCash)}">${pct(s.avgCash)}</span></div>` : ''}
     ${p.purchase_date ? `<div class="sub" style="margin-top:6px">Bought ${fmtDate(p.purchase_date)}${c !== home() ? ' · amounts in ' + c : ''}</div>` : ''}
     <div class="btns"><button class="btn light" data-act="edit-property" data-id="${p.id}">Edit</button><button class="btn light" data-act="dup-property" data-id="${p.id}">Duplicate</button></div></div>`;
+  h += cashflowCard(p, s, c, k);
   /* rent periods */
   h += `<div class="card"><h2>Rent</h2>`;
-  if (!s.periods.length) h += `<p class="sub">Add each rental: from when, to when (leave the end empty while it is still rented) and the monthly rent. Months without rent show as empty.</p>`;
+  if (!s.periods.length) h += `<p class="sub">Add each rental: from when, to when (leave the end empty while it is still rented) and the rent per month. Months without rent show as empty.</p>`;
   else h += `<div class="txns">` + s.periods.slice().reverse().map(r => `<div class="txn" data-rent="${r.id}">
       <div class="txn-top"><span class="txn-date">${fmtDate(r.start_date)} – ${r.end_date ? fmtDate(r.end_date) : 'still rented'}</span><span class="txn-desc">${esc(r.tenant || 'Rental')}</span></div>
-      <div class="txn-body"><div class="sub">${money(r.monthly_rent, c, { dec: 0 })} a month${s.owners > 1 ? ' (whole property)' : ''}</div></div></div>`).join('') + `</div>`;
+      <div class="txn-body"><div class="sub">Rent${s.owners > 1 ? ' (whole property)' : ''}</div><div class="r"><div class="strongv">${money(r.monthly_rent, c, { dec: 0 })} <span class="freq">a month</span></div></div></div></div>`).join('') + `</div>`;
   h += `<button class="btn wide light" data-act="add-rent" data-id="${p.id}">+ Add rent period</button></div>`;
-  /* year by year */
-  h += `<div class="card"><h2>Year by year</h2>`;
-  if (!s.rows.length) h += `<p class="sub">Add rent periods and each year's costs to see the real return.</p>`;
-  else {
-    h += `<table class="years"><tr><th>Year</th><th>Rent</th><th>Net</th><th>Cash</th><th>Total</th></tr>`;
-    for (const r of s.rows.slice().reverse())
-      h += `<tr class="tap" data-year="${r.y.id || ''}" data-yr="${r.year}"><td><b>${r.year}</b>${r.expected ? '<div class="sub">expected</div>' : ''}${r.empty >= 0.05 ? `<div class="sub warn-t">${r.empty.toFixed(1).replace('.0', '')} mo empty</div>` : ''}${r.noCosts ? '<div class="sub warn-t">no costs yet</div>' : ''}</td>
-        <td>${sh(r.rent)}</td><td class="${signCls(r.net)}">${sh(r.net)}</td><td>${pct(r.cash)}</td><td class="${signCls(r.total)}">${pct(r.total)}</td></tr>`;
-    h += `</table><p class="sub">Cash = net income ÷ invested. Total also counts that year's value change. Tap a year to enter its costs.</p>`;
-  }
-  h += `<button class="btn wide light" data-act="add-year" data-id="${p.id}">+ Add year's costs</button></div>`;
-  view().innerHTML = h;
+  /* costs and other income */
+  h += `<div class="card"><h2>Costs & other income</h2>`;
+  if (!s.items.length) h += `<p class="sub">Add what this property costs: condo fees, insurance, taxes, repairs… For each one you choose whether it is paid every month, every year, or once.</p>`;
+  else h += `<div class="txns">` + s.items.slice().sort((a, b) => (b.start_date || '') < (a.start_date || '') ? -1 : 1).map(it => { const meta = PITEMS[it.kind] || PITEMS.other_cost, inc = meta[1] === 'income';
+    return `<div class="txn${inc ? ' inc' : ' cost'}" data-item="${it.id}">
+      <div class="txn-top"><span class="txn-date">${it.freq === 'once' ? fmtDate(it.start_date) : (it.start_date ? 'from ' + fmtDate(it.start_date, true) : 'from purchase') + (it.end_date ? ' to ' + fmtDate(it.end_date, true) : '')}</span><span class="txn-desc">${esc(meta[0])}</span></div>
+      <div class="txn-body"><div class="sub">${esc(it.note || (inc ? 'Income' : 'Cost'))}${it.freq === 'yearly' ? ' · ' + money(it.amount / 12, c, { dec: 0 }) + ' a month' : it.freq === 'monthly' ? ' · ' + money(it.amount * 12, c, { dec: 0 }) + ' a year' : ''}</div>
+      <div class="r"><div class="strongv ${inc ? 'up' : ''}">${inc ? '+' : '−'}${money(it.amount, c, { dec: 0 })} <span class="freq">${FREQ[it.freq] || ''}</span></div></div></div></div>`; }).join('') + `</div>`;
+  h += `<button class="btn wide light" data-act="add-item" data-id="${p.id}">+ Add cost or income</button></div>`;
+  /* value history */
+  const vals = q('SELECT * FROM property_values WHERE property_id=? ORDER BY date DESC, id DESC', [p.id]);
+  h += `<div class="card"><h2>Value</h2>` + (vals.length ? `<div class="txns">` + vals.map(r => `<div class="txn" data-pval="${r.id}"><div class="txn-top"><span class="txn-date">${fmtDate(r.date)}</span><span class="txn-desc">${esc(r.note || 'Your estimate')}</span></div>
+      <div class="txn-body"><div class="sub">${s.owners > 1 ? 'whole property' : ''}</div><div class="r"><div class="strongv">${money(r.value, c, { dec: 0 })}</div></div></div></div>`).join('') + `</div>` : '<p class="sub">Add what you think it is worth now and then; the value between dates is drawn as a straight line.</p>') +
+    `<button class="btn wide light" data-act="add-pvalue" data-id="${p.id}">+ Update value</button></div>`;
+  view().innerHTML = h; bindCashflow();
 }
+/* Cashflow box: Monthly / Yearly / Costs pages, swiped or chosen above */
+function cashflowCard(p, s, c, k) {
+  if (!s.rows.length) return `<div class="card"><h2>Cashflow</h2><p class="sub">Add rent periods and costs below to see the money coming in and going out, month by month and year by year.</p></div>`;
+  const years = s.rows.map(r => r.year), nowY = new Date().getFullYear();
+  if (!state.cfYear || !years.includes(state.cfYear)) state.cfYear = years.includes(nowY) ? nowY : years[years.length - 1];
+  const yr = s.rows.find(r => r.year === state.cfYear), sh = v => whole(v * k, c), i = years.indexOf(state.cfYear);
+  const ysel = `<div class="ysel"><button data-cfy="${years[i - 1] || ''}"${i > 0 ? '' : ' disabled'} aria-label="Previous year">‹</button><b>${state.cfYear}</b><button data-cfy="${years[i + 1] || ''}"${i < years.length - 1 ? '' : ' disabled'} aria-label="Next year">›</button></div>`;
+  /* monthly */
+  const maxAbs = Math.max(1, ...yr.months.map(f => Math.abs(f.net)));
+  const bars = `<div class="mbars">${yr.months.map((f, m) => `<div class="mb${f.future ? ' fut' : ''}${!f.owned ? ' none' : ''}"><div class="mbt">${f.net > 0 ? `<i class="pos" style="height:${(f.net / maxAbs * 100).toFixed(1)}%"></i>` : ''}</div><div class="mbb">${f.net < 0 ? `<i class="neg" style="height:${(-f.net / maxAbs * 100).toFixed(1)}%"></i>` : ''}</div><span>${MONTHS[m][0]}</span></div>`).join('')}</div>`;
+  const mrows = yr.months.map((f, m) => !f.owned ? '' : `<div class="cfrow${f.future ? ' fut' : ''}"><span class="cfm">${MONTHS[m]}${f.future ? '<small>expected</small>' : ''}${f.empty >= 0.05 ? `<small class="warn-t">${f.empty >= 0.95 ? 'empty' : Math.round(f.empty * 100) + '% empty'}</small>` : ''}</span>
+      <span class="cfin">${sh(f.rent + f.income)}</span><span class="cfout">−${sh(f.costs).replace('-', '')}</span><span class="cfnet ${signCls(f.net)}">${sh(f.net)}</span></div>`).join('');
+  const monthly = `${ysel}${bars}<div class="cfhead"><span></span><span>In</span><span>Out</span><span>Net</span></div>${mrows}
+    <div class="cfrow tot"><span class="cfm">${yr.current ? 'So far' : 'Year'}</span><span class="cfin">${sh(yr.rent + yr.income)}</span><span class="cfout">−${sh(yr.costs).replace('-', '')}</span><span class="cfnet ${signCls(yr.net)}">${sh(yr.net)}</span></div>
+    ${yr.current ? `<p class="sub" style="margin:6px 0 0">Whole year expected: net ${sh(yr.fullNet)}.</p>` : ''}`;
+  /* yearly */
+  const yearly = s.rows.slice().reverse().map(r => `<div class="yrow" data-cfy="${r.year}">
+      <div class="yt"><b>${r.year}</b>${r.current ? '<span class="sub"> so far</span>' : ''}<span class="yn ${signCls(r.net)}">${sh(r.net)}</span></div>
+      <div class="sub">In ${sh(r.rent + r.income)} · Out ${sh(r.costs)}${r.empty >= 0.05 ? ` · <span class="warn-t">${r.empty.toFixed(1).replace('.0', '')} mo empty</span>` : ''}</div>
+      <div class="ystats"><span>Cash return <b class="${signCls(r.cash)}">${pct(r.cash)}</b></span><span>Value <b class="${signCls(r.valChange)}">${r.valChange == null ? '—' : (r.valChange >= 0 ? '+' : '') + sh(r.valChange)}</b></span><span>Total <b class="${signCls(r.total)}">${pct(r.total)}</b></span></div></div>`).join('');
+  /* where the money goes (selected year) */
+  const kinds = Object.entries(yr.byKind).filter(([kk]) => (PITEMS[kk] || PITEMS.other_cost)[1] === 'cost').sort((a, b) => b[1] - a[1]);
+  const totalCost = kinds.reduce((a, [, v]) => a + v, 0) || 1;
+  const costs = `${ysel}<div class="alloc">${kinds.length ? kinds.map(([kk, v]) => `<div class="arow"><span class="sw cat-p" style="opacity:${0.35 + 0.65 * v / totalCost}"></span><span class="al">${esc((PITEMS[kk] || PITEMS.other_cost)[0])}<span class="sub">${sh(v / 12)} a month on average</span></span><span class="av">${sh(v)}</span><span class="ap">${Math.round(v / totalCost * 100)}%</span></div>`).join('') : '<p class="sub">No costs entered for this year.</p>'}</div>`;
+  const pages = [['Monthly', monthly], ['Yearly', `<div class="ylist">${yearly}</div><p class="sub" style="margin:8px 0 0">Cash return = net ÷ what you invested. Total also counts the change in value.</p>`], ['Costs', costs]];
+  state.cfPage = state.cfPage || 0;
+  return `<div class="card cfc"><h2>Cashflow</h2><div class="segs cftabs">${pages.map(([l], j) => `<button class="seg${j === state.cfPage ? ' on' : ''}" data-cfp="${j}">${l}</button>`).join('')}</div>
+    <div class="hero-scroll" id="cfS">${pages.map(([, body]) => `<section class="cfpage">${body}</section>`).join('')}</div></div>`;
+}
+function bindCashflow() {
+  const s = document.getElementById('cfS'); if (!s) return;
+  s.scrollLeft = (state.cfPage || 0) * s.clientWidth;
+  s.addEventListener('scroll', () => { const i = Math.round(s.scrollLeft / s.clientWidth); if (i !== state.cfPage) { state.cfPage = i;
+    document.querySelectorAll('.cftabs .seg').forEach((b, j) => b.classList.toggle('on', j === i)); } }, { passive: true });
+}
+function itemForm(propertyId, itemId, copyOf) {
+  const p = q('SELECT * FROM properties WHERE id=?', [propertyId])[0]; if (!p) return;
+  const it = itemId ? q('SELECT * FROM property_items WHERE id=?', [itemId])[0] : copyOf || { kind: 'condo_fees', freq: null, start_date: p.purchase_date || today() };
+  const c = p.currency || home();
+  openSheet(`<h2>${itemId ? 'Edit' : 'Add'} cost or income</h2>
+    <label class="f"><span>What is it?</span><select name="kind">${Object.entries(PITEMS).map(([kk, [l]]) => `<option value="${kk}"${kk === it.kind ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+    ${field('amount', 'Amount (' + c + ', whole property)', it.amount)}
+    <div class="f"><span class="flabel">How often is it paid?</span><div class="freqs">${Object.entries({ monthly: 'Every month', yearly: 'Every year', once: 'Once' }).map(([f, l]) => `<label class="freqo"><input type="radio" name="freq" value="${f}"${f === it.freq ? ' checked' : ''}><span>${l}</span></label>`).join('')}</div></div>
+    <div class="f2" id="dates">${field('start_date', 'From', it.start_date, 'type="date"')}${field('end_date', 'Until (empty: still paid)', it.end_date, 'type="date"')}</div>
+    ${field('note', 'Note (optional)', it.note, 'autocomplete="off"')}
+    <div class="preview" id="pv"></div>
+    <div class="btns"><button class="btn" data-f="save">Save</button><button class="btn light" data-f="cancel">Cancel</button></div>
+    ${itemId ? '<div class="btns"><button class="btn light" data-f="dup">Duplicate</button><button class="btn danger" data-f="delete">Delete</button></div>' : ''}`, box => {
+    const sync = () => { const d = formData(box), once = d.freq === 'once';
+      box.querySelector('#dates').querySelectorAll('label.f')[0].querySelector('span').textContent = once ? 'Date paid' : 'From';
+      box.querySelector('#dates').querySelectorAll('label.f')[1].style.display = once ? 'none' : '';
+      const a = num(d.amount);
+      box.querySelector('#pv').innerHTML = !d.freq ? '<b>Choose how often it is paid.</b>' : !(a > 0) ? 'Enter the amount.'
+        : d.freq === 'monthly' ? `${money(a, c, { dec: 0 })} every month = ${money(a * 12, c, { dec: 0 })} a year`
+        : d.freq === 'yearly' ? `${money(a, c, { dec: 0 })} a year = about ${money(a / 12, c, { dec: 0 })} a month`
+        : `${money(a, c, { dec: 0 })} once, counted in the month it was paid`; };
+    box.oninput = sync; box.onchange = sync; sync();
+    box.onclick = e => { const a = e.target.dataset.f; if (!a) return;
+      if (a === 'cancel') return closeSheet();
+      if (a === 'dup') { const cp = Object.assign({}, it); delete cp.id; return itemForm(propertyId, null, cp); }
+      if (a === 'delete') { ask('Delete this item?').then(y => { if (!y) return; run('DELETE FROM property_items WHERE id=?', [itemId]); save(); closeSheet(); render(); }); return; }
+      const d = formData(box), amt = num(d.amount);
+      if (!d.freq) return bad('Choose how often it is paid: every month, every year or once.');
+      if (!(amt > 0)) return bad('Enter the amount.');
+      if (d.freq === 'once' && !/^\d{4}-\d{2}-\d{2}$/.test(d.start_date)) return bad('Enter the date it was paid.');
+      if (d.end_date && d.start_date && d.end_date < d.start_date) return bad('The end date is before the start date.');
+      const vals = [d.kind, amt, d.freq, d.start_date || null, d.freq === 'once' ? null : (d.end_date || null), d.note.trim()];
+      if (itemId) run('UPDATE property_items SET kind=?,amount=?,freq=?,start_date=?,end_date=?,note=? WHERE id=?', vals.concat([itemId]));
+      else run('INSERT INTO property_items(property_id,kind,amount,freq,start_date,end_date,note) VALUES(?,?,?,?,?,?,?)', [propertyId].concat(vals));
+      save(); closeSheet(); render(); };
+  });
+}
+function propertyValueForm(propertyId, valId) {
+  const p = q('SELECT * FROM properties WHERE id=?', [propertyId])[0]; if (!p) return;
+  const r = valId ? q('SELECT * FROM property_values WHERE id=?', [valId])[0] : { date: today() };
+  openSheet(`<h2>${esc(p.name)}: ${valId ? 'edit' : 'new'} value</h2>
+    <div class="f2">${field('date', 'Date', r.date, 'type="date"')}${field('value', 'Worth (' + (p.currency || home()) + ', whole property)', r.value)}</div>
+    ${field('note', 'Note (optional)', r.note, 'autocomplete="off" placeholder="e.g. municipal assessment, agent estimate"')}
+    <div class="btns"><button class="btn" data-f="save">Save</button><button class="btn light" data-f="cancel">Cancel</button></div>
+    ${valId ? '<div class="btns"><button class="btn danger" data-f="delete">Delete</button></div>' : ''}`, box => {
+    box.onclick = e => { const f = e.target.dataset.f; if (!f) return;
+      if (f === 'cancel') return closeSheet();
+      if (f === 'delete') { ask('Delete this value?').then(y => { if (!y) return; run('DELETE FROM property_values WHERE id=?', [valId]); save(); closeSheet(); render(); }); return; }
+      const d = formData(box), v = num(d.value);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d.date)) return bad('Enter the date.');
+      if (!(v > 0)) return bad('Enter the value.');
+      if (valId) run('UPDATE property_values SET date=?,value=?,note=? WHERE id=?', [d.date, v, d.note.trim(), valId]);
+      else run('INSERT INTO property_values(property_id,date,value,note) VALUES(?,?,?,?)', [propertyId, d.date, v, d.note.trim()]);
+      save(); closeSheet(); render(); };
+  });
+}
+
 /* ---------------- bank accounts & cash ---------------- */
 function renderAccounts() {
   setTitle('Bank accounts & cash');
@@ -981,7 +1142,7 @@ function renderMore() {
     h += `<div class="item" data-fx="${c}"><span>${c}</span><span class="r">${r == null ? '—' : r.toFixed(4)}</span></div>`; }
   h += `</div></details><div class="btns"><button class="btn" data-act="update">Update now</button></div></div>`;
   const nh = q('SELECT COUNT(*) n, MIN(date) d FROM price_history')[0];
-  h += `<div class="card"><h2>Price history</h2><p class="sub">${nh.n ? nh.n.toLocaleString('en-CA') + ' prices kept, from ' + esc(nh.d.slice(0, 4)) + '. Past years are monthly (DataHub); from the first update on, the app keeps each day\'s prices itself.' : 'No price history yet.'}</p>
+  h += `<div class="card"><h2>Price history</h2><p class="sub">${nh.n ? nh.n.toLocaleString('en-CA') + ' prices kept, from ' + esc(nh.d.slice(0, 4)) + '. Past years are monthly (DataHub); from the first update on, the app keeps each day\'s prices itself.' : 'No price history yet.'}${getSetting('daily_loaded') ? ' Daily prices updated ' + when(getSetting('daily_loaded')) + '.' : ''}</p>
     <div class="btns"><button class="btn light" data-act="history">${getSetting('history_loaded') ? 'Refresh past prices' : 'Load past prices'}</button></div></div>`;
   h += `<div class="card"><h2>Appearance</h2>
     <div class="f2"><label class="f"><span>Colours</span><select id="set-theme">${[['', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([v, l]) => `<option value="${v}"${(PREFS.theme || '') === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
@@ -991,7 +1152,7 @@ function renderMore() {
     <p class="sub">Everything is kept in one SQLite database file on this device. Export it to back it up or to move it to another phone or computer; import it there.</p>
     <div class="btns"><button class="btn" data-act="export">Export database</button><button class="btn light" data-act="import">Import database</button></div></div>`;
   h += `<div class="card"><h2>About</h2><p class="sub">KJT Invest ${APP_VERSION}, by Knowing Jesus Today (knowingjesus.today). Open source (GPL-2.0-or-later), no accounts, no analytics, no tracking.
-    The app only goes online to update prices: metal prices from gold-api.com, exchange rates from the European Central Bank, past prices from DataHub and Frankfurter. Nothing about you or your holdings is sent.</p></div>`;
+    The app only goes online to update prices: metal prices from gold-api.com, exchange rates from the European Central Bank, past prices from DataHub, Yahoo Finance and Frankfurter. Nothing about you or your holdings is sent.</p></div>`;
   view().innerHTML = h;
   document.getElementById('set-home').onchange = e => { setSetting('home_currency', e.target.value); save(); render(); };
   document.getElementById('set-theme').onchange = e => { PREFS.theme = e.target.value; applyLook(); savePrefs(); };
@@ -1078,7 +1239,7 @@ function propertyForm(id) {
     ${field('purchase_date', 'Date bought', p.purchase_date, 'type="date"')}</div>
     <div class="f2">${field('purchase_price', 'Purchase price', p.purchase_price)}${field('purchase_costs', 'Purchase costs', p.purchase_costs)}</div>
     <p class="hint">Purchase costs: notary, transfer tax, inspection and the like.</p>
-    ${field('current_value', 'What it is worth today (your estimate)', p.current_value)}
+    ${id ? '' : field('current_value', 'What it is worth today (your estimate)', null)}
     <label class="f"><span>Number of owners</span><select name="owners">${[1, 2, 3, 4, 5].map(n => `<option value="${n}"${n === (p.owners || 1) ? ' selected' : ''}>${n === 1 ? 'Just me' : n + ' people, equal shares'}</option>`).join('')}</select></label>
     <p class="hint">Enter the whole property's amounts; the app shows your share.</p>
     <label class="f"><span>Notes</span><textarea name="notes">${esc(p.notes)}</textarea></label>
@@ -1087,54 +1248,19 @@ function propertyForm(id) {
     box.onclick = e => { const a = e.target.dataset.f; if (!a) return;
       if (a === 'cancel') return closeSheet();
       if (a === 'delete') { ask('Delete this property and all its years?').then(y => { if (!y) return;
-        run('DELETE FROM property_years WHERE property_id=?', [id]); run('DELETE FROM rent_periods WHERE property_id=?', [id]); run('DELETE FROM properties WHERE id=?', [id]);
+        for (const tb of ['property_years', 'rent_periods', 'property_items', 'property_values']) run(`DELETE FROM ${tb} WHERE property_id=?`, [id]);
+        run('DELETE FROM properties WHERE id=?', [id]);
         state.propertyId = null; save(); closeSheet(); render(); }); return; }
-      const d = formData(box), pp = num(d.purchase_price), pc = num(d.purchase_costs), cv = num(d.current_value);
+      const d = formData(box), pp = num(d.purchase_price), pc = num(d.purchase_costs), cv = id ? null : num(d.current_value);
       if (!d.name.trim()) return bad('Give the property a name.');
       if (!(pp > 0)) return bad('Enter the purchase price.');
       if (Number.isNaN(pc) || Number.isNaN(cv)) return bad('Check the amounts.');
       const ty = (box.querySelector('[name=type]:checked') || {}).value || 'house';
-      const vals = [d.name.trim(), d.address.trim(), d.currency, d.purchase_date, pp, pc || 0, cv, d.notes.trim(), +d.owners || 1, ty];
-      if (id) run('UPDATE properties SET name=?,address=?,currency=?,purchase_date=?,purchase_price=?,purchase_costs=?,current_value=?,notes=?,owners=?,type=? WHERE id=?', vals.concat([id]));
-      else { run('INSERT INTO properties(name,address,currency,purchase_date,purchase_price,purchase_costs,current_value,notes,owners,type) VALUES(?,?,?,?,?,?,?,?,?,?)', vals);
-        state.propertyId = q('SELECT last_insert_rowid() id')[0].id; state.tab = 'property'; }
-      save(); closeSheet(); render(); };
-  });
-}
-function yearForm(propertyId, yearId, presetYear) {
-  const p = q('SELECT * FROM properties WHERE id=?', [propertyId])[0]; if (!p) return;
-  const used = q('SELECT year FROM property_years WHERE property_id=?', [propertyId]).map(r => r.year);
-  let y = yearId ? q('SELECT * FROM property_years WHERE id=?', [yearId])[0] : null;
-  if (!y) { let yr = presetYear || new Date().getFullYear(); if (!presetYear) while (used.includes(yr)) yr--; y = { year: yr }; }
-  const c = p.currency || home(), periods = q('SELECT * FROM rent_periods WHERE property_id=?', [propertyId]);
-  openSheet(`<h2>${esc(p.name)}: ${yearId ? 'edit' : 'add'} year</h2>
-    ${field('year', 'Year', y.year, 'inputmode="numeric"')}
-    <div class="note" id="rentnote"></div>
-    ${field('rent', 'Other income in the year (parking, laundry…), optional', y.rent || '')}
-    <p class="hint">Whole-property amounts for the year (${c}).</p>
-    ${COSTS.map(([k, l]) => field(k, l, y[k])).join('')}
-    ${field('value_end', 'Value at the end of the year (your estimate, optional)', y.value_end)}
-    <label class="f"><span>Notes</span><textarea name="notes">${esc(y.notes)}</textarea></label>
-    <div class="preview" id="pv"></div>
-    <div class="btns"><button class="btn" data-f="save">Save</button><button class="btn light" data-f="cancel">Cancel</button></div>
-    ${yearId ? '<div class="btns"><button class="btn danger" data-f="delete">Delete year</button></div>' : ''}`, box => {
-    const invested = (p.purchase_price || 0) + (p.purchase_costs || 0);
-    const pv = () => { const d = formData(box); const yy = {}; COSTS.forEach(([k]) => yy[k] = num(d[k]) || 0);
-      const yr = parseInt(d.year, 10), rr = yr > 1900 ? rentForYear(p, periods, yr) : { rent: 0, empty: 0 };
-      box.querySelector('#rentnote').innerHTML = `Rent from your rent periods: <b>${whole(rr.rent, c)}</b>${rr.empty >= 0.05 ? ` · ${rr.empty.toFixed(1)} months empty` : ''}`;
-      const net = rr.rent + (num(d.rent) || 0) - yearCosts(yy);
-      box.querySelector('#pv').innerHTML = `Net income <b class="${signCls(net)}">${whole(net, c)}</b> · cash return <b class="${signCls(net)}">${pct(invested ? net / invested : null)}</b>`; };
-    box.oninput = pv; pv();
-    box.onclick = e => { const a = e.target.dataset.f; if (!a) return;
-      if (a === 'cancel') return closeSheet();
-      if (a === 'delete') { ask('Delete ' + y.year + '?').then(ok => { if (!ok) return; run('DELETE FROM property_years WHERE id=?', [yearId]); save(); closeSheet(); render(); }); return; }
-      const d = formData(box), yr = parseInt(d.year, 10);
-      if (!(yr > 1900 && yr < 2200)) return bad('Enter a year, e.g. 2025.');
-      if (q('SELECT id FROM property_years WHERE property_id=? AND year=? AND id<>?', [propertyId, yr, yearId || 0]).length) return bad(yr + ' is already there: tap it in the list to edit it.');
-      const keys = ['rent'].concat(COSTS.map(x => x[0])).concat(['value_end']); const vals = [];
-      for (const k of keys) { const n = num(d[k]); if (Number.isNaN(n)) return bad('Check the amounts.'); vals.push(k === 'value_end' ? n : (n || 0)); }
-      if (yearId) run(`UPDATE property_years SET year=?,${keys.map(k => k + '=?').join(',')},notes=? WHERE id=?`, [yr].concat(vals, [d.notes.trim(), yearId]));
-      else run(`INSERT INTO property_years(property_id,year,${keys.join(',')},notes) VALUES(?,?,${keys.map(() => '?').join(',')},?)`, [propertyId, yr].concat(vals, [d.notes.trim()]));
+      const vals = [d.name.trim(), d.address.trim(), d.currency, d.purchase_date, pp, pc || 0, d.notes.trim(), +d.owners || 1, ty];
+      if (id) run('UPDATE properties SET name=?,address=?,currency=?,purchase_date=?,purchase_price=?,purchase_costs=?,notes=?,owners=?,type=? WHERE id=?', vals.concat([id]));
+      else { run('INSERT INTO properties(name,address,currency,purchase_date,purchase_price,purchase_costs,notes,owners,type) VALUES(?,?,?,?,?,?,?,?,?)', vals);
+        state.propertyId = q('SELECT last_insert_rowid() id')[0].id; state.tab = 'property';
+        if (cv > 0) run('INSERT INTO property_values(property_id,date,value,note) VALUES(?,?,?,?)', [state.propertyId, today(), cv, 'Your estimate']); }
       save(); closeSheet(); render(); };
   });
 }
@@ -1168,12 +1294,13 @@ function rentForm(propertyId, rentId, copyOf) {
 }
 function duplicateProperty(id) {
   const p = q('SELECT * FROM properties WHERE id=?', [id])[0]; if (!p) return;
-  ask('Make a copy of "' + p.name + '" with its rent periods and yearly costs? You can then change what differs.', 'Duplicate').then(y => { if (!y) return;
+  ask('Make a copy of "' + p.name + '" with its rent periods, costs and values? You can then change what differs.', 'Duplicate').then(y => { if (!y) return;
     run('INSERT INTO properties(name,address,currency,purchase_date,purchase_price,purchase_costs,current_value,notes,owners,type) VALUES(?,?,?,?,?,?,?,?,?,?)',
       [p.name + ' (copy)', p.address, p.currency, p.purchase_date, p.purchase_price, p.purchase_costs, p.current_value, p.notes, p.owners || 1, p.type || 'house']);
     const nid = q('SELECT last_insert_rowid() id')[0].id;
     run('INSERT INTO rent_periods(property_id,start_date,end_date,monthly_rent,tenant,notes) SELECT ?,start_date,end_date,monthly_rent,tenant,notes FROM rent_periods WHERE property_id=?', [nid, id]);
-    run(`INSERT INTO property_years(property_id,year,rent,${COSTS.map(x => x[0]).join(',')},value_end,notes) SELECT ?,year,rent,${COSTS.map(x => x[0]).join(',')},value_end,notes FROM property_years WHERE property_id=?`, [nid, id]);
+    run('INSERT INTO property_items(property_id,kind,amount,freq,start_date,end_date,note) SELECT ?,kind,amount,freq,start_date,end_date,note FROM property_items WHERE property_id=?', [nid, id]);
+    run('INSERT INTO property_values(property_id,date,value,note) SELECT ?,date,value,note FROM property_values WHERE property_id=?', [nid, id]);
     state.propertyId = nid; save(); render(); view().scrollTop = 0; toast('Copy made: edit its name and amounts'); });
 }
 function priceForm(sym) {
@@ -1258,14 +1385,17 @@ function goBack() {
 }
 window.__onBack = () => goBack();
 view().addEventListener('click', e => {
-  const el = e.target.closest('[data-act],[data-go],[data-metal],[data-prop],[data-year],[data-yr],[data-rent],[data-price],[data-fx],[data-chart],[data-range],[data-acct],[data-bal],[data-asset],[data-aval],[data-hpage],[data-prange]'); if (!el) return;
+  const el = e.target.closest('[data-act],[data-go],[data-metal],[data-prop],[data-item],[data-pval],[data-cfy],[data-cfp],[data-rent],[data-price],[data-fx],[data-chart],[data-range],[data-acct],[data-bal],[data-asset],[data-aval],[data-hpage],[data-prange]'); if (!el) return;
   const d = el.dataset;
   if (d.chart) { state.chart = d.chart; const st = view().scrollTop; render(); view().scrollTop = st; }
   else if (d.range) { state.range = d.range; const st = view().scrollTop; render(); view().scrollTop = st; }
   else if (d.go) { state.tab = d.go; state.propertyId = null; state.accountId = null; state.assetId = null; render(); view().scrollTop = 0; }
   else if (d.metal) metalForm(+d.metal);
   else if (d.prop) { state.propertyId = +d.prop; render(); view().scrollTop = 0; }
-  else if (d.year || d.yr) yearForm(state.propertyId, d.year ? +d.year : null, d.yr ? +d.yr : null);
+  else if (d.item) itemForm(state.propertyId, +d.item);
+  else if (d.pval) propertyValueForm(state.propertyId, +d.pval);
+  else if (d.cfy) { state.cfYear = +d.cfy; if (el.classList.contains('yrow')) state.cfPage = 0; const st = view().scrollTop; render(); view().scrollTop = st; }
+  else if (d.cfp) { state.cfPage = +d.cfp; const sc = document.getElementById('cfS'); if (sc) sc.scrollTo({ left: +d.cfp * sc.clientWidth, behavior: 'smooth' }); document.querySelectorAll('.cftabs .seg').forEach((b, j) => b.classList.toggle('on', j === +d.cfp)); }
   else if (d.rent) rentForm(state.propertyId, +d.rent);
   else if (d.hpage) { const sc = document.getElementById('heroS'); if (sc) sc.scrollTo({ left: +d.hpage * sc.clientWidth, behavior: 'smooth' }); }
   else if (d.prange) { state.prange = d.prange; const st = view().scrollTop; render(); view().scrollTop = st; }
@@ -1288,7 +1418,8 @@ view().addEventListener('click', e => {
     case 'pin-on': case 'pin-change': case 'pin-off': securityAction(d.act); break;
     case 'edit-account': accountForm(+d.id); break;
     case 'add-balance': balanceForm(+d.id); break;
-    case 'add-year': yearForm(+d.id); break;
+    case 'add-item': itemForm(+d.id); break;
+    case 'add-pvalue': propertyValueForm(+d.id); break;
     case 'update': updatePrices(false); break;
     case 'history': toast('Loading price history…'); loadHistory(false); break;
     case 'export': exportDb(); break;

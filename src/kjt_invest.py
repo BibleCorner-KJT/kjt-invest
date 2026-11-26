@@ -18,7 +18,7 @@ import urllib.request
 import gi
 
 APP_ID = 'today.knowingjesus.Invest'
-VERSION = '1.3'
+VERSION = '1.4'
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(os.environ.get('XDG_DATA_HOME') or os.path.expanduser('~/.local/share'), 'kjt-invest')
 OLD_DIR = os.path.join(os.path.expanduser('~/.local/share'), 'investment-tracker')   # where 1.0-1.2 (Investment Tracker) kept the data
@@ -150,7 +150,7 @@ class Tracker:
             elif cmd in ('bioAvailable', 'bioEnable', 'bioUnlock', 'bioDisable'):
                 threading.Thread(target=self.bio, args=(msg_id, cmd, args), daemon=True).start()
             elif cmd == 'httpGet':
-                threading.Thread(target=self.http_get, args=(msg_id, args.get('url', '')), daemon=True).start()
+                threading.Thread(target=self.http_get, args=(msg_id, args.get('url', ''), args.get('ua')), daemon=True).start()
             elif cmd == 'exportDb':
                 self.export_db(msg_id, args)
             elif cmd == 'importDb':
@@ -161,10 +161,10 @@ class Tracker:
             self.reply(msg_id, {'error': str(e)})
 
     # ---------- abilities ----------
-    def http_get(self, msg_id, url):
+    def http_get(self, msg_id, url, ua=None):
         if not url.startswith('https://'):
             return self.reply(msg_id, {'error': 'only https'})
-        req = urllib.request.Request(url, headers={'User-Agent': 'KJTInvest/' + VERSION,
+        req = urllib.request.Request(url, headers={'User-Agent': ua or ('KJTInvest/' + VERSION),
                                                    'Accept': 'application/json, application/xml, text/xml'})
         try:
             with urllib.request.urlopen(req, timeout=20) as r:
