@@ -1,9 +1,9 @@
-/* KJT Finance 1.18 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
+/* KJT Finance 1.19 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
    All data stays in one SQLite file on the device. The only network calls are the
    price updates (metal prices from gold-api.com, exchange rates from the European Central Bank). */
 'use strict';
 
-const APP_VERSION = '1.18';
+const APP_VERSION = '1.19';
 const SCHEMA = 11;
 const OZT_G = 31.1034768;
 const METALS = [
@@ -206,6 +206,10 @@ function prepareDb() {
   if (!q('PRAGMA table_info(transactions)').some(r => r.name === 'bank_ok')) run('ALTER TABLE transactions ADD COLUMN bank_ok INTEGER');
   if (!q('PRAGMA table_info(transactions)').some(r => r.name === 'import_id2')) { run('ALTER TABLE transactions ADD COLUMN import_id2 TEXT'); run('CREATE INDEX IF NOT EXISTS tx_import2 ON transactions(import_id2)'); }
   if (!getSetting('bank_ok_v118')) { run("UPDATE transactions SET bank_ok=2 WHERE bank_ok IS NULL AND (import_id LIKE 'ref:%' OR import_id LIKE 'h:%')"); setSetting('bank_ok_v118', '1'); }
+  /* 1.19: a credit card's expiry month (YYYY-MM) */
+  if (!q('PRAGMA table_info(accounts)').some(r => r.name === 'expires')) run('ALTER TABLE accounts ADD COLUMN expires TEXT');
+  /* 1.19: an account can be hidden (still counted) or closed */
+  if (!q('PRAGMA table_info(accounts)').some(r => r.name === 'status')) { run('ALTER TABLE accounts ADD COLUMN status TEXT'); run("UPDATE accounts SET status='closed' WHERE notes LIKE '%(closed in MMEX)%'"); }
   syncMeta();   /* 1.14: lasting ids, change times and deletion notes, for syncing and merging */
   if (+getSetting('schema', 1) < SCHEMA) setSetting('schema', SCHEMA);
 }
@@ -698,6 +702,7 @@ function render() {
     view().insertAdjacentHTML('afterbegin', `<div class="subnav">${ASECS.map(([k, l]) => subBtn(k, l, k === state.tab, 'data-asec')).join('')}</div>`);
   }
   enhanceView();
+  settingsNav();
   markAmounts();
   navAfter();
 }
@@ -1289,18 +1294,19 @@ function renderAccounts() {
   const H = home(), as = q('SELECT * FROM accounts ORDER BY type, name');
   let h = missingWarn(), total = 0, yearly = 0;
   const groups = {};
-  for (const a of as) (groups[a.type] = groups[a.type] || []).push(a);
+  for (const a of as) { const g = acctOpen(a) ? a.type : '_off'; (groups[g] = groups[g] || []).push(a); }
   let body = '';
   let owed = 0;
-  for (const [type, label] of Object.entries(ACCT_TYPES)) {
-    const list = groups[type]; if (!list) continue;
+  let offBody = '', seenOff = false;
+  for (const [type, label] of Object.entries(ACCT_TYPES).concat([['_off', 'Hidden and closed']])) {
+    const list = groups[type]; if (!list) continue; if (type === '_off') { offBody = body; body = ''; seenOff = true; }
     let gsum = 0; const rowsH = list.map(a => {
       const b = acctBalance(a.id), c = a.currency || H, share = shareOf(a), cr = a.type === 'credit';
       const mine = b ? b.balance * share : null, hv = conv(mine, c, H); if (hv != null) { total += hv; gsum += hv; if (cr) owed -= hv; }
       if (mine != null && a.interest_rate && !cr) yearly += conv(mine * a.interest_rate / 100, c, H) || 0;
       const used = cr && a.credit_limit > 0 && b ? -b.balance / a.credit_limit : null;
-      const sub = [b ? (cr ? 'owed, ' : '') + fmtDate(b.date) : 'no balance yet', a.institution, a.interest_rate && !cr ? a.interest_rate + '%' : '', shareOf(a) < 1 ? 'your share ' + shareLbl(a) : ''].filter(Boolean).map(esc).join(' · ');
-      return `<div class="arowx" data-acct="${a.id}"><div class="al"><div class="an">${esc(a.name)}</div><div class="sub">${sub}</div>
+      const ex = cardExpiry(a), sub = [b ? (cr ? 'owed, ' : '') + fmtDate(b.date) : 'no balance yet', ex ? (ex.gone ? 'expired ' : 'expires ') + ex.label : '', a.institution, a.interest_rate && !cr ? a.interest_rate + '%' : '', shareOf(a) < 1 ? 'your share ' + shareLbl(a) : ''].filter(Boolean).map(esc).join(' · ');
+      return `<div class="arowx${acctOpen(a) ? '' : ' offacct'}" data-acct="${a.id}"><div class="al"><div class="an">${esc(a.name)}${a.status === 'closed' ? ' <span class="badge">closed</span>' : a.status === 'hidden' ? ' <span class="badge">hidden</span>' : ''}</div><div class="sub">${sub}</div>
         ${cr && a.credit_limit ? `<div class="sub">limit ${money(a.credit_limit, c, { dec: 0 })}${b ? ` · <b class="${a.credit_limit + b.balance < 0 ? 'down' : 'up'}">${money(a.credit_limit + b.balance, c, { dec: 0 })} left</b>` : ''}</div>` : ''}</div>
         <div class="ar"><div class="av${mine < 0 ? ' down' : ''}">${mine == null ? '—' : money(mine, c)}</div>${c !== H && hv != null ? `<div class="sub">${money(hv, H)}</div>` : ''}${used != null ? `<div class="sub${used > .7 ? ' down' : ''}">${Math.round(used * 100)}% used</div>` : ''}</div>
         ${used != null ? limitBar(used) : ''}</div>`; }).join('');
@@ -1310,7 +1316,9 @@ function renderAccounts() {
     ${owed > 0.005 ? `<div class="sub">${whole(total + owed, H)} in accounts and cash, less ${whole(owed, H)} owed on credit cards</div>` : ''}
     ${yearly ? `<div class="sub">About ${whole(yearly, H)} interest a year</div>` : ''}</div>`;
   h += `<h2 class="sect">Your accounts</h2>`;
-  h += as.length ? body : `<div class="card empty">No accounts yet. Add your chequing and savings accounts, credit cards, and cash on hand.</div>`;
+  if (seenOff) { const off = body; body = offBody; offBody = off; }   /* body = the open ones; offBody = hidden and closed */
+  h += as.length ? (body || '<div class="card empty">Every account is hidden or closed.</div>') : `<div class="card empty">No accounts yet. Add your chequing and savings accounts, credit cards, and cash on hand.</div>`;
+  if (offBody) h += `<h2 class="sect" data-fdef="1">Hidden and closed <span class="sub">${(groups._off || []).length} · still counted if they hold money</span></h2>` + offBody;
   h += `<button class="btn wide" data-act="add-account">+ Add account</button>`;
   if (as.length) h += `<button class="btn wide light" data-act="recon" data-id="">Reconcile with the bank</button>`;
   view().innerHTML = h;
@@ -1369,6 +1377,7 @@ function renderAccount(id) {
       <div class="big ${owed > 0 ? 'down' : ''}">${b ? money(owed, c) : '—'}</div><div class="sub">owed${b ? ' as of ' + fmtDate(b.date) : ''}${share < 1 ? ' · your share ' + shareLbl(a) + ': ' + money(owed * share, c) : ''}</div>
       ${lim ? `${limitBar(used)}<div class="ie3" style="margin-top:10px"><div class="stat"><div class="k">Limit</div><div class="v">${money(lim, c, { dec: 0 })}</div></div><div class="stat"><div class="k">Available</div><div class="v ${lim - owed < 0 ? 'down' : 'up'}">${money(lim - owed, c, { dec: 0 })}</div></div><div class="stat"><div class="k">Used</div><div class="v ${used > .7 ? 'down' : ''}">${Math.round(used * 100)}%</div></div></div>` : '<p class="sub">Add the credit limit (Edit) to see what is still available.</p>'}
       ${a.interest_rate ? `<div class="sub" style="margin-top:8px">${a.interest_rate}% interest a year on what is not paid in time</div>` : ''}
+      ${(() => { const e = cardExpiry(a); return e ? `<div class="sub${e.soon ? ' down' : ''}" style="margin-top:6px">${e.gone ? 'Expired' : 'Expires'} ${e.label}${e.soon && !e.gone ? ` · in ${e.days} day${e.days === 1 ? '' : 's'}` : ''}</div>` : ''; })()}
       <div class="btns"><button class="btn" data-act="add-tx" data-acct-id="${a.id}">+ Expense</button><button class="btn light" data-act="pay-card" data-id="${a.id}">Pay the card</button></div>
       <div class="btns"><button class="btn light" data-act="add-balance" data-id="${a.id}">Statement / what you owe</button><button class="btn light" data-act="bank-import" data-id="${a.id}">Import bank file</button></div>
       <div class="btns"><button class="btn light" data-act="recon" data-id="${a.id}">Reconcile</button><button class="btn light" data-act="edit-account" data-id="${a.id}">Edit</button></div></div>`;
@@ -1404,9 +1413,10 @@ function accountForm(id, copyOf) {
     ${field('institution', 'Bank (optional)', a.institution, 'autocomplete="off"')}
     ${id ? '' : `<span id="bal-wrap">${field('balance', 'Balance today', null)}</span>`}
     <div class="f2">${field('interest_rate', 'Interest % a year (optional)', a.interest_rate)}
-<span id="limit-wrap">${field('credit_limit', 'Credit limit', a.credit_limit)}</span></div>
+<span id="limit-wrap">${field('credit_limit', 'Credit limit', a.credit_limit)}<label class="f"><span>Card expires (month / year)</span><input type="month" name="expires" value="${esc(a.expires || '')}"></label></span></div>
     ${shareFields(a)}
     <label class="f"><span>Notes</span><textarea name="notes">${esc(a.notes)}</textarea></label>
+    ${id ? `<label class="f"><span>Show this account</span><select name="status"><option value="">Open: in all lists</option><option value="hidden"${a.status === 'hidden' ? ' selected' : ''}>Hidden: not in lists, still counted in totals</option><option value="closed"${a.status === 'closed' ? ' selected' : ''}>Closed: not in lists</option></select></label>` : ''}
     <div class="btns"><button class="btn" data-f="save">Save</button><button class="btn light" data-f="cancel">Cancel</button></div>
     ${id ? '<div class="btns"><button class="btn light" data-f="dup">Duplicate</button><button class="btn danger" data-f="delete">Delete account</button></div>' : ''}`, box => {
     const ts = box.querySelector('[name=type]'), sync = () => { const cr = ts.value === 'credit';
@@ -1426,9 +1436,13 @@ function accountForm(id, copyOf) {
       const sh = readShare(d); if (!sh) return bad('Your share is a percentage from 1 to 100.');
       const lim = d.type === 'credit' ? num(d.credit_limit) : null; if (Number.isNaN(lim)) return bad('Check the credit limit.');
       const vals = [d.name.trim(), d.type, d.institution.trim(), d.currency, rate, sh[1], d.notes.trim(), sh[0], sh[2], lim];
-      if (id) run('UPDATE accounts SET name=?,type=?,institution=?,currency=?,interest_rate=?,owners=?,notes=?,share_pct=?,co_owners=?,credit_limit=? WHERE id=?', vals.concat([id]));
+      const exp = d.type === 'credit' && /^\d{4}-\d{2}$/.test(d.expires || '') ? d.expires : null;
+      if (id) { run('UPDATE accounts SET name=?,type=?,institution=?,currency=?,interest_rate=?,owners=?,notes=?,share_pct=?,co_owners=?,credit_limit=? WHERE id=?', vals.concat([id]));
+        run('UPDATE accounts SET expires=? WHERE id=?', [exp, id]);
+        run('UPDATE accounts SET status=? WHERE id=?', [d.status || null, id]);
+        if (d.status === 'closed') { const bb = acctBalance(id); if (bb && Math.abs(bb.balance) > 0.005) setTimeout(() => toast('Closed. It still holds ' + money(Math.abs(bb.balance), d.currency) + ', so it is still counted in your totals.'), 300); } }
       else { run('INSERT INTO accounts(name,type,institution,currency,interest_rate,owners,notes,share_pct,co_owners,credit_limit) VALUES(?,?,?,?,?,?,?,?,?,?)', vals);
-        const nid = q('SELECT last_insert_rowid() id')[0].id;
+        const nid = q('SELECT last_insert_rowid() id')[0].id; run('UPDATE accounts SET expires=? WHERE id=?', [exp, nid]);
         if (bal != null) run('INSERT INTO account_balances(account_id,date,balance,note,created) VALUES(?,?,?,?,?)', [nid, today(), bal, d.type === 'cash' ? 'First count' : 'Opening balance', Date.now()]);
         state.tab = 'accounts'; state.accountId = nid; }
       save(); closeSheet(); render(); };
@@ -1807,6 +1821,18 @@ function ask(msg, yes) {
       d.hidden = true; res(!!(b && b.hasAttribute('data-y'))); };
   });
 }
+/* 1.19: keyboard: Ctrl+H hides or shows amounts; Esc closes what is open (a window, a question, the selection), or goes back */
+document.addEventListener('keydown', e => {
+  const L = document.getElementById('lock'); if (L && !L.hidden && L.innerHTML) return;
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'h' || e.key === 'H')) { e.preventDefault(); const eb = document.getElementById('eye'); if (eb) eb.click(); return; }
+  if (e.key !== 'Escape') return;
+  const dlg = document.getElementById('dlg'), sh = document.getElementById('sheet');
+  if (dlg && !dlg.hidden) { e.preventDefault(); const no = dlg.querySelector('button:not([data-y])'); if (no) no.click(); else dlg.hidden = true; return; }
+  if (sh && !sh.hidden) { e.preventDefault(); closeSheet(); return; }
+  const ae = document.activeElement; if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) { ae.blur(); return; }
+  if (state.sel) { state.sel = null; selBar(); render(); return; }
+  if (navBack()) e.preventDefault();
+});
 let toastTimer;
 function toast(msg) { const t = document.getElementById('toast'); t.textContent = msg; t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => t.hidden = true, 2600); }
 document.getElementById('tabs').onclick = e => { const b = e.target.closest('button'); if (!b) return;
@@ -1890,6 +1916,7 @@ view().addEventListener('click', e => {
       const ow = acctBalance(+d.id); txForm(null, null, { kind: 'transfer', account_id: bank.id, to_account_id: +d.id, amount: ow && ow.balance < 0 ? +(-ow.balance).toFixed(2) : null, note: 'Card payment' }); break; }
     case 'recon': state.tab = 'recon'; state.reconId = d.id ? +d.id : null; render(); view().scrollTop = 0; break;
     case 'find-xfer': offerTransfers(false); break;
+    case 'stmt-bal': stmtBalances(+d.id); break;
     case 'xfer-apply': applyLoose(+d.id); break;
     case 'recon-month': reconMonth(+d.id, d.ym); break;
     case 'tx-of': state.tab = 'money'; state.msec = 'tx'; state.txAcct = d.id; state.accountId = null; render(); view().scrollTop = 0; break;
@@ -2311,14 +2338,24 @@ function reminders(days) {   /* due (or overdue) reminders, and what is coming i
   const until = dstr(dnum(today()) + (days || 14));
   return q('SELECT * FROM recurring WHERE active=1 AND next_date<=? ORDER BY next_date', [until]);
 }
+/* a card works until the last day of its expiry month */
+function cardExpiry(a) {
+  if (!a || a.type !== 'credit' || !a.expires || !/^\d{4}-\d{2}$/.test(a.expires)) return null;
+  const y = +a.expires.slice(0, 4), m = +a.expires.slice(5, 7), end = `${a.expires}-${String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, '0')}`, days = dnum(end) - dnum(today());
+  return { end, days, label: a.expires.slice(5, 7) + '/' + a.expires.slice(2, 4), soon: days <= 60, gone: days < 0 };
+}
+function expiringCards() { return q("SELECT * FROM accounts WHERE type='credit' AND expires IS NOT NULL").filter(acctOpen).map(a => [a, cardExpiry(a)]).filter(([, e]) => e && e.soon); }
 function remindersCard() {
   const rs = reminders(14), now = today(), until = dstr(dnum(now) + 14);
   const ls = q('SELECT * FROM loans WHERE closed=0 AND due_date IS NOT NULL AND due_date<=? ORDER BY due_date', [until]);
-  if (!rs.length && !ls.length) return '';
+  const cards = expiringCards();
+  if (!rs.length && !ls.length && !cards.length) return '';
+  const cardRows = cards.map(([a, e]) => `<div class="txn cost" data-acct="${a.id}"><div class="txn-top"><span class="txn-date warn-t">${e.gone ? 'expired · ' : 'expires · '}${e.label}</span><span class="txn-desc">${esc(a.name)}</span></div>
+      <div class="txn-body"><div class="sub">${e.gone ? 'This card has expired. ' : `In ${e.days} day${e.days === 1 ? '' : 's'}. `}Activate the new card, update payments that use it, then change the date here.</div></div></div>`).join('');
   const loanRows = ls.map(l => { const s = loanStats(l); if (s.owed <= 0.005) return ''; const late = l.due_date < now;
     return `<div class="txn ${late ? 'cost' : 'inc'}" data-go="loans" data-loanid="${l.id}"><div class="txn-top"><span class="txn-date${late ? ' warn-t' : ''}">${late ? 'overdue · ' : ''}${fmtDate(l.due_date)}</span><span class="txn-desc">${esc(l.person)} repays you</span></div>
       <div class="txn-body"><div class="sub">loan of ${money(l.amount, l.currency || home(), { dec: 0 })}</div><div class="r"><div class="strongv">${money(s.owed, l.currency || home())}</div></div></div></div>`; }).join('');
-  return `<h2 class="sect" data-ftot="${rs.length + ls.length} coming">Coming up <span class="sub">next 14 days</span></h2><div class="card"><div class="txns" style="margin-top:0">` + loanRows + rs.map(r => {
+  return `<h2 class="sect" data-ftot="${rs.length + ls.length + cards.length} coming">Coming up <span class="sub">next 14 days</span></h2><div class="card"><div class="txns" style="margin-top:0">` + cardRows + loanRows + rs.map(r => {
     const a = q('SELECT * FROM accounts WHERE id=?', [r.account_id])[0], c = (a && a.currency) || home(), due = r.next_date <= now;
     return `<div class="txn ${r.kind === 'in' ? 'inc' : 'cost'}"><div class="txn-top"><span class="txn-date${due ? ' warn-t' : ''}">${due ? (r.next_date < now ? 'overdue · ' : 'today · ') : ''}${fmtDate(r.next_date)}</span><span class="txn-desc">${esc(r.payee || cats().label(r.category_id))}</span></div>
       <div class="txn-body"><div class="sub">${esc(FREQS[r.freq] || '')} · ${esc(a ? a.name : '')}${r.auto ? ' · added by itself' : ''}</div><div class="r"><div class="strongv">${r.kind === 'in' ? '+' : '−'}${money(r.amount, c)}</div></div></div>
@@ -2355,7 +2392,7 @@ function txListHtml() {
   else if (per === 'all') { from = '0000-01-01'; to = '9999-12-31'; label = 'All time'; }
   else { from = ym + '-01'; to = ym + '-31'; prev = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`; next = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`;
     label = new Date(ym + '-15T12:00:00').toLocaleDateString('en-CA', { year: 'numeric', month: 'long' }); }
-  const accts = q('SELECT * FROM accounts ORDER BY name'), A = Object.fromEntries(accts.map(a => [a.id, a])), C = cats();
+  const accAll = q('SELECT * FROM accounts ORDER BY name'), A = Object.fromEntries(accAll.map(a => [a.id, a])), C = cats(), accts = accAll.filter(a => acctOpen(a) || String(a.id) === String(state.txAcct));
   let sql = 'SELECT * FROM transactions WHERE date>=? AND date<=?', p = [from, to];
   if (state.txAcct) { sql += ' AND (account_id=? OR to_account_id=?)'; p.push(+state.txAcct, +state.txAcct); }
   if (state.txCat === 'none') sql += " AND category_id IS NULL AND kind<>'transfer'";
@@ -2427,8 +2464,10 @@ function linkedTxHtml(link, title) {
   return `<h2 class="sect">${title || 'Transactions linked to this'}</h2><div class="card"><div class="txlist">${txs.map(t => `<div class="txday small">${fmtDate(t.date)}</div>` + txRow(t, A)).join('')}</div></div>`;
 }
 function txForm(id, copyOf, preset) {
-  const accts = q('SELECT * FROM accounts ORDER BY name'); if (!accts.length) return toast('First add an account under Assets › Accounts.');
-  const t = id ? q('SELECT * FROM transactions WHERE id=?', [id])[0] : Object.assign({ kind: 'out', date: today(), account_id: +(state.txAcct || accts[0].id) }, copyOf || {}, preset || {});
+  const all = q('SELECT * FROM accounts ORDER BY name'); if (!all.length) return toast('First add an account under Assets › Accounts.');
+  const t0 = id ? q('SELECT * FROM transactions WHERE id=?', [id])[0] : null, keep = t0 ? [t0.account_id, t0.to_account_id] : [];
+  const accts = all.filter(a => acctOpen(a) || keep.includes(a.id) || (state.txAcct && a.id === +state.txAcct)); if (!accts.length) accts.push(...all);
+  const t = t0 || Object.assign({ kind: 'out', date: today(), account_id: +(state.txAcct || accts[0].id) }, copyOf || {}, preset || {});
   if (copyOf) t.date = today();
   const payees = q("SELECT DISTINCT payee FROM transactions WHERE payee IS NOT NULL AND payee<>'' ORDER BY payee LIMIT 300").map(r => r.payee);
   const rec = t.recurring_id ? q('SELECT * FROM recurring WHERE id=?', [t.recurring_id])[0] : null;
@@ -2542,7 +2581,7 @@ function rulesHtml() {
     `<div class="btns"><button class="btn light" data-act="add-rule">+ Add one</button></div></div>`;
 }
 function ruleForm(id) {
-  const r = id ? q('SELECT * FROM payee_rules WHERE id=?', [id])[0] : {}, accts = q('SELECT * FROM accounts ORDER BY name');
+  const r = id ? q('SELECT * FROM payee_rules WHERE id=?', [id])[0] : {}, accts = q('SELECT * FROM accounts ORDER BY name').filter(a => acctOpen(a) || a.id === r.to_account_id);
   openSheet(`<h2>${id ? 'Remembered payee' : 'New remembered payee'}</h2>
     ${field('pattern', 'Description contains', r.pattern ? r.pattern.toUpperCase() : '', 'autocomplete="off" placeholder="e.g. METRO or ATM"')}
     <div class="freqs" style="grid-template-columns:1fr 1fr"><label class="freqo"><input type="radio" name="what" value="cat"${r.to_account_id ? '' : ' checked'}><span>Category</span></label><label class="freqo"><input type="radio" name="what" value="acct"${r.to_account_id ? ' checked' : ''}><span>Transfer to an account</span></label></div>
@@ -2827,7 +2866,7 @@ function renderLoan(id) {
 }
 function loanForm(id) {
   const l = id ? q('SELECT * FROM loans WHERE id=?', [id])[0] : { date: today(), currency: home() };
-  const accts = q("SELECT * FROM accounts WHERE type<>'credit' ORDER BY name");
+  const accts = q("SELECT * FROM accounts WHERE type<>'credit' ORDER BY name").filter(acctOpen);
   const people = q('SELECT DISTINCT person FROM loans ORDER BY person').map(r => r.person);
   openSheet(`<h2>${id ? 'Edit' : 'New'} loan</h2>
     ${field('person', 'Lent to', l.person, 'autocomplete="off" list="lpeople" placeholder="name"')}<datalist id="lpeople">${people.map(p => `<option value="${esc(p)}">`).join('')}</datalist>
@@ -2869,7 +2908,7 @@ function loanForm(id) {
 function loanPayForm(loanId, payId) {
   const l = q('SELECT * FROM loans WHERE id=?', [loanId])[0]; if (!l) return;
   const p = payId ? q('SELECT * FROM loan_payments WHERE id=?', [payId])[0] : { date: today() };
-  const s = loanStats(l), c = l.currency || home(), accts = q("SELECT * FROM accounts WHERE type<>'credit' ORDER BY name");
+  const s = loanStats(l), c = l.currency || home(), accts = q("SELECT * FROM accounts WHERE type<>'credit' ORDER BY name").filter(acctOpen);
   openSheet(`<h2>${esc(l.person)}: ${payId ? 'edit' : 'new'} repayment</h2>
     <p class="sub">Still owed: <b>${money(s.owed, c)}</b></p>
     <div class="f2">${field('principal', 'Repaid (' + c + ')', p.principal)}${field('interest', 'Interest received (optional)', p.interest)}</div>
@@ -3030,6 +3069,11 @@ function prepareImport(parsed, accountId, opts) {
   const have = q('SELECT * FROM transactions WHERE account_id=? OR to_account_id=?', [accountId, accountId]);
   const refs = new Set(have.flatMap(t => [t.import_id, t.import_id2]).filter(Boolean)), used = new Set(), mem = payeeMemory(), cardPay = transferCat(), rules = payeeRules(), cash = cashAccount(accountId);
   const seen = {}, rows = [];
+  /* 1.19: the same amount going the other way in another of your accounts within 3 days = a transfer */
+  const ds = parsed.txs.map(x => x.date).sort(), pairUsed = new Set(), acur = (a && a.currency) || home();
+  const others = ds.length ? q("SELECT t.*, COALESCE(o.currency, ?) acur FROM transactions t JOIN accounts o ON o.id=t.account_id WHERE t.account_id<>? AND t.kind IN ('in','out') AND t.date>=? AND t.date<=?",
+    [home(), accountId, dstr(dnum(ds[0]) - 3), dstr(dnum(ds[ds.length - 1]) + 3)]) : [];
+  const xlike = t => XFER_RE.test((t.payee || '') + ' ' + (t.note || t.memo || '')) && !ETR_RE.test((t.payee || '') + ' ' + (t.note || t.memo || ''));
   for (const x of parsed.txs) {
     const base = `${x.date}|${x.amount.toFixed(2)}|${normPayee(x.payee)}`; seen[base] = (seen[base] || 0) + 1;
     const iid = x.ref ? `ref:${parsed.acctId || ''}:${x.ref}` : `h:${base}|${seen[base]}`;
@@ -3057,7 +3101,15 @@ function prepareImport(parsed, accountId, opts) {
     if (!cat && credit && kind === 'in') cat = cardPay;   /* a payment to the card is not income */
     if (!cat && !credit && kind === 'out' && /\b(visa|master ?card|amex|american express|credit card|card payment)\b/i.test(x.payee + ' ' + (x.memo || ''))) cat = cardPay;   /* paying your card from the bank */
     if (!cat && kind === 'in' && /\binter[eê]ts?\b|\binterest\b/i.test(x.payee + ' ' + (x.memo || ''))) cat = interestCat();
-    rows.push(Object.assign({}, x, { iid, dup, kind: transferTo ? 'transfer' : kind, cat: transferTo ? null : cat, transferTo }));
+    let pair = null;
+    if (!dup && !transferTo && !opts.noPairs) {
+      const want = x.amount < 0 ? 'in' : 'out', abs = Math.abs(x.amount);
+      pair = others.filter(t => !pairUsed.has(t.id) && t.kind === want && t.acur === acur && Math.abs(t.amount - abs) < 0.005 && Math.abs(dnum(t.date) - dnum(x.date)) <= 3)
+        .sort((p1, p2) => Math.abs(dnum(p1.date) - dnum(x.date)) - Math.abs(dnum(p2.date) - dnum(x.date)))[0] || null;
+      if (pair) pairUsed.add(pair.id);
+    }
+    const xc = transferCat(), likely = !!pair && (xlike(x) || xlike(pair) || (xc && (pair.category_id === xc || cat === xc)) || !pair.category_id);
+    rows.push(Object.assign({}, x, { iid, dup, kind: transferTo ? 'transfer' : kind, cat: transferTo ? null : cat, transferTo, pair, linkPair: likely, xlike: !pair && !transferTo && xlike(x) }));
   }
   return { rows, account: a };
 }
@@ -3077,6 +3129,15 @@ function commitImport(parsed, id, prep) {
       const dest = r.transferTo;
       if (!dest || dest === 'new') { r.kind = r.amount < 0 ? 'out' : 'in'; r.transferTo = null; }   /* 1.15: never makes a cash account by itself */
       else if (r.amount < 0) { from = id; to = dest; } else { from = dest; to = id; }
+    }
+    if (r.pair && r.linkPair) {   /* 1.19: one transfer instead of two entries */
+      const note = [r.payee, r.pair.payee].filter(Boolean).filter((v, k, arr) => arr.indexOf(v) === k).join(' · ').slice(0, 200);
+      if (r.amount < 0) {
+        run("INSERT INTO transactions(account_id,date,kind,amount,category_id,payee,note,to_account_id,created,import_id,import_id2,bank_ok) VALUES(?,?,'transfer',?,NULL,?,?,?,?,?,?,2)",
+          [id, r.date, Math.abs(r.amount), String(r.payee || '').slice(0, 120), note, r.pair.account_id, now, r.iid, r.pair.import_id || null]);
+        run('DELETE FROM transactions WHERE id=?', [r.pair.id]);
+      } else run("UPDATE transactions SET kind='transfer', to_account_id=?, category_id=NULL, note=?, import_id2=? WHERE id=?", [id, note, r.iid, r.pair.id]);
+      n++; continue;
     }
     const toSide = to === id;   /* money came in from a remembered account: the bank line belongs to the receiving side */
     run('INSERT INTO transactions(account_id,date,kind,amount,category_id,payee,note,to_account_id,link,recurring_id,created,import_id,import_id2,bank_ok) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
@@ -3100,7 +3161,7 @@ let toastLater = '';
 const tail4 = s => s ? '…' + String(s).replace(/\s/g, '').slice(-4) : '';
 function multiReview(parts) {
   let map = {}; try { map = JSON.parse(getSetting('import_map', '{}')) || {}; } catch (e) { map = {}; }
-  const accts = () => q('SELECT * FROM accounts ORDER BY name');
+  const accts = () => q('SELECT * FROM accounts ORDER BY name').filter(a => acctOpen(a) || Object.values(map).includes(a.id));
   const guess = p => { if (p.acctId && map[p.acctId] && accts().some(a => a.id === map[p.acctId])) return String(map[p.acctId]); return 'new'; };
   const label = p => (p.credit ? 'Credit card' : p.kindHint === 'SAVINGS' ? 'Savings' : p.kindHint === 'CREDITLINE' ? 'Line of credit' : 'Chequing') + ' ' + tail4(p.acctId);
   openSheet(`<h2>Import ${parts.length} accounts</h2><p class="sub">Your bank put several accounts in this file. Choose where each one goes; the app remembers it for next time.</p>
@@ -3195,7 +3256,8 @@ function csvMapForm(rows, accountId) {
   });
 }
 function importReview(parsed, accountId) {
-  const accts = q('SELECT * FROM accounts ORDER BY name');
+  let map0 = {}; try { map0 = JSON.parse(getSetting('import_map', '{}')) || {}; } catch (e) { map0 = {}; }
+  const accts = q('SELECT * FROM accounts ORDER BY name').filter(a => acctOpen(a) || a.id === +accountId || a.id === (parsed.acctId && map0[parsed.acctId]));
   let map = {}; try { map = JSON.parse(getSetting('import_map', '{}')) || {}; } catch (e) { map = {}; }
   let acc = accountId || (parsed.acctId && map[parsed.acctId]) || (accts.find(a => parsed.credit ? a.type === 'credit' : a.type !== 'credit') || accts[0]).id;
   if (!accts.some(a => a.id === +acc)) acc = accts[0].id;
@@ -3206,11 +3268,13 @@ function importReview(parsed, accountId) {
       <p class="hint" style="margin-top:0">Up to that day the account already has its transactions (typed in or from MMEX), so nothing is doubled.</p></div>
     <div id="imp-sum"></div>
     <div class="btns"><button class="btn" data-f="go">Import</button><button class="btn light" data-f="cancel">Cancel</button></div>`, box => {
-    let prep = null, lastAcct = null;
+    let prep = null, lastAcct = null, pairChoice = {};
     const show = () => {
       const id = +box.querySelector('[name=acct]').value, cutEl = box.querySelector('[name=cut]'), useEl = box.querySelector('[name=usecut]');
-      if (id !== lastAcct) { lastAcct = id; const lo = lastOwnDate(id); cutEl.value = lo || ''; useEl.checked = !!lo; box.querySelector('#cut-wrap').style.display = lo ? '' : 'none'; }
+      if (id !== lastAcct) { lastAcct = id; pairChoice = {}; box.querySelectorAll('[data-pairx]').forEach(x => x.remove()); const lo = lastOwnDate(id); cutEl.value = lo || ''; useEl.checked = !!lo; box.querySelector('#cut-wrap').style.display = lo ? '' : 'none'; }
       prep = prepareImport(parsed, id, { cutoff: useEl.checked && cutEl.value ? cutEl.value : null });
+      box.querySelectorAll('[data-pairx]').forEach(x => { pairChoice[+x.dataset.pairx] = x.checked; });
+      prep.rows.forEach((r, i) => { if (r.pair && i in pairChoice) r.linkPair = pairChoice[i]; });
       const keepMaybe = new Set(Array.from(box.querySelectorAll('[data-maybe]:checked')).map(x => +x.dataset.maybe));
       prep.rows.forEach((r, i) => { if (r.dup === 'maybe' && keepMaybe.has(i)) r.include = true; });
       const maybes = prep.rows.map((r, i) => [r, i]).filter(([r]) => r.dup === 'maybe'), before = prep.rows.filter(r => r.dup === 'before').length;
@@ -3220,6 +3284,10 @@ function importReview(parsed, accountId) {
         <p class="sub" style="margin:8px 0">${fmtDate(dates[0])} to ${fmtDate(dates[dates.length - 1])}${parsed.balance != null ? ` · balance in the file: <b>${money(a.type === 'credit' ? Math.abs(parsed.balance) : parsed.balance, c)}</b>${a.type === 'credit' ? ' owed' : ''} on ${fmtDate(parsed.balDate || dates[dates.length - 1])}` : ''}</p>
         ${parsed.currency && a.currency && parsed.currency !== a.currency ? `<div class="warn">The file is in ${esc(parsed.currency)} but this account is in ${esc(a.currency)}.</div>` : ''}
         ${fresh.length ? `<div class="preview">${fresh.slice(0, 6).map(r => `${fmtDate(r.date)} · ${esc((r.payee || '').slice(0, 26))} · <span class="${r.amount < 0 ? 'down' : 'up'}">${r.amount < 0 ? '−' : '+'}${money(Math.abs(r.amount), c)}</span>${r.cat ? ' · <i>' + esc(cats().label(r.cat)) + '</i>' : ''}`).join('<br>')}${fresh.length > 6 ? '<br>…and ' + (fresh.length - 6) + ' more' : ''}</div>` : '<p class="sub">Everything in this file is already in the app.</p>'}
+        ${(() => { const ps = prep.rows.map((r, i) => [r, i]).filter(([r]) => !r.dup && r.pair), A2 = Object.fromEntries(q('SELECT id, name FROM accounts').map(x => [x.id, x.name])), lo = prep.rows.filter(r => !r.dup && r.xlike).length;
+          return (ps.length ? `<h3 class="ieh">Transfers between your accounts: ticked ones become one transfer</h3><div class="maybes">${ps.map(([r, i]) => `<label class="maybe"><input type="checkbox" data-pairx="${i}"${r.linkPair ? ' checked' : ''}>
+            <span><b>${money(Math.abs(r.amount), c)} ${r.amount < 0 ? '→ ' + esc(A2[r.pair.account_id] || '?') : '← ' + esc(A2[r.pair.account_id] || '?')}</b><br><small>${fmtDate(r.date)} ${esc((r.payee || '').slice(0, 26))} · there: ${fmtDate(r.pair.date)} ${esc((r.pair.payee || '').slice(0, 22))}</small></span></label>`).join('')}</div>` : '')
+            + (lo ? `<p class="sub" style="margin:0 0 8px">🔁 <b>${lo}</b> look${lo === 1 ? 's' : ''} like a transfer with no other side yet (BR TO BR…). After the import, say where ${lo === 1 ? 'it' : 'each'} went under Reconcile.</p>` : ''); })()}
         ${atm ? `<p class="sub" style="margin:0 0 8px">💵 <b>${atm}</b> cash withdrawal${atm > 1 ? 's go' : ' goes'} to ${cashA ? esc(cashA.name) : 'a new "Cash in hand" account'}: moving money to your wallet is not spending.</p>` : ''}
         ${before ? `<p class="sub" style="margin:0 0 8px"><b>${before}</b> up to ${fmtDate(box.querySelector('[name=cut]').value)} left out (already in the account).</p>` : ''}
         ${maybes.length ? `<h3 class="ieh">Possible duplicates: not added unless you tick them</h3><div class="maybes">${maybes.map(([r, i]) => `<label class="maybe"><input type="checkbox" data-maybe="${i}"${r.include ? ' checked' : ''}>
@@ -3246,6 +3314,7 @@ function importReview(parsed, accountId) {
    per year and in total; one tap adds a correction. Entries you typed that no bank file has shown yet are "not in bank yet".
    Money that left one of your accounts and arrived in another (BR TO BR at RBC) is linked into one transfer. */
 const XFER_RE = /\b(br\s*to\s*br|transfer|virement|tfr|xfer|trsf|inter-?account)\b/i, ETR_RE = /\b(e-?transfer|interac|etfr|e-?tfr|send money)\b/i;
+const acctOpen = a => !a || (a.status !== 'hidden' && a.status !== 'closed');
 function pendFrom(id) {   /* entries from this day on should show up in the bank's files */
   if (id in PFROM) return PFROM[id];
   const a = q('SELECT type FROM accounts WHERE id=?', [id])[0];
@@ -3357,6 +3426,36 @@ function applyLoose(id) {
   if (t.payee && normPayee(t.payee).length >= 4 && !/\d{4,}/.test(t.payee)) learnRule(t.payee, null, z);
   save(); toast('Linked as a transfer'); render();
 }
+/* 1.19: type the closing balance of each monthly statement; each becomes a balance check on the last day of that month */
+function stmtBalances(id) {
+  const a = q('SELECT * FROM accounts WHERE id=?', [id])[0]; if (!a) return;
+  const c = a.currency || home(), cr = a.type === 'credit', first = [(q('SELECT MIN(date) d FROM transactions WHERE account_id=? OR to_account_id=?', [id, id])[0] || {}).d, (q('SELECT MIN(date) d FROM account_balances WHERE account_id=?', [id])[0] || {}).d].filter(Boolean).sort()[0] || today();
+  const ends = []; let y = +today().slice(0, 4), m = +today().slice(5, 7) - 1;
+  for (let k = 0; k < 36; k++) { if (m < 1) { m = 12; y--; } const e = `${y}-${String(m).padStart(2, '0')}-${String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, '0')}`; if (e < first) break; ends.push(e); m--; }
+  const have = Object.fromEntries(q('SELECT date, balance FROM account_balances WHERE account_id=?', [id]).map(r => [r.date, r.balance]));
+  openSheet(`<h2>Balances from statements · ${esc(a.name)}</h2><p class="sub">From each monthly statement, type the ${cr ? 'balance owed' : 'closing balance'} on the last day. Fill in only the months you want to check; start with the months around the difference.</p>
+    <div class="stmtgrid">${ends.map(e => `<label class="f"><span>${new Date(e + 'T12:00:00').toLocaleDateString('en-CA', { month: 'short', year: 'numeric' })}${have[e] != null ? ' ✓' : ''}</span><input name="e${e}" inputmode="decimal" autocomplete="off" value="${have[e] != null ? +(cr ? Math.abs(have[e]) : have[e]).toFixed(2) : ''}"${have[e] != null ? ' disabled' : ''}></label>`).join('')}</div>
+    <div class="btns"><button class="btn" data-f="save">Save</button><button class="btn light" data-f="cancel">Cancel</button></div>`, box => {
+    box.onclick = e => { const f = e.target.dataset.f; if (!f) return; if (f === 'cancel') return closeSheet();
+      const d = formData(box); let n = 0;
+      for (const e2 of ends) { const v = d['e' + e2]; if (v == null || String(v).trim() === '' || have[e2] != null) continue; const x = num(v); if (Number.isNaN(x)) return bad('Check the amount for ' + e2.slice(0, 7) + '.');
+        run('INSERT INTO account_balances(account_id,date,balance,note,created) VALUES(?,?,?,?,?)', [id, e2, cr ? Math.abs(x) : x, 'Statement', 9e12]); n++; }
+      save(); closeSheet(); toast(n ? n + ' statement balance' + (n > 1 ? 's' : '') + ' added' : 'Nothing added'); render(); };
+  });
+}
+function settingsNav() {
+  const v = view(); v.classList.toggle('hasnav', state.tab === 'more'); if (state.tab !== 'more') return;
+  const hs = Array.from(v.querySelectorAll(':scope > h2.sect')); if (hs.length < 3) return;
+  const nav = document.createElement('nav'); nav.className = 'setnav nomask'; nav.setAttribute('aria-label', 'Settings sections');
+  nav.innerHTML = hs.map((h, i) => `<button data-sn="${i}">${esc((h.childNodes[0] && h.childNodes[0].textContent || h.textContent).trim())}</button>`).join('');
+  v.prepend(nav);
+  const place = () => { const hd = document.getElementById('top'); nav.style.top = window.innerWidth >= 980 && hd ? (hd.getBoundingClientRect().bottom + 14) + 'px' : ''; };
+  place(); window.onresize = place;
+  nav.onclick = e => { const b = e.target.closest('[data-sn]'); if (!b) return; const h = hs[+b.dataset.sn];
+    if (h.classList.contains('closed')) h.click();
+    nav.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+    v.scrollTo({ top: h.offsetTop - (window.innerWidth >= 980 ? 8 : nav.offsetHeight + 12), behavior: 'smooth' }); };
+}
 /* the Reconcile page: all accounts, or one */
 function renderRecon(id) {
   const H = home();
@@ -3380,7 +3479,8 @@ function renderRecon(id) {
   let h = `<div class="card hero"><div class="label">${isCash ? 'Cash counts' : cr ? 'Statements' : 'Bank balances'} compared with your transactions</div>
     <div class="big ${tot ? 'down' : 'up'}">${ps.length ? (tot ? sgn(tot) : '✓') : '—'}</div>
     <div class="sub">${!ps.length ? `Add ${isCash ? 'two cash counts' : 'two balances (import bank files, or Update balance)'} to compare.` : tot ? `left unexplained in ${off.length} month${off.length > 1 ? 's' : ''}` : 'every period agrees with the bank'}${fixes ? ` · corrections recorded: ${sgn(fixes)}` : ''}</div>
-    <div class="btns">${isCash ? `<button class="btn light" data-act="add-balance" data-id="${a.id}">Count your cash</button>` : `<button class="btn light" data-act="bank-import" data-id="${a.id}">Import a bank file</button><button class="btn light" data-act="add-balance" data-id="${a.id}">Add a balance</button>`}</div></div>`;
+    <div class="btns">${isCash ? `<button class="btn light" data-act="add-balance" data-id="${a.id}">Count your cash</button>` : `<button class="btn light" data-act="bank-import" data-id="${a.id}">Import a bank file</button><button class="btn light" data-act="stmt-bal" data-id="${a.id}">Balances from statements</button>`}</div>
+    ${(() => { const big = ps.filter(p => p.diff && dnum(p.check.date) - dnum(p.prev.date) > 40).pop(); return big && !isCash ? `<div class="warn" style="margin-top:10px">The difference of ${sgn(big.diff)} covers ${fmtDate(big.prev.date)} to ${fmtDate(big.check.date)}. Add the month-end balances from your statements for that time (<b>Balances from statements</b>): the table then shows which month is off.</div>` : ''; })()}</div>`;
   if (months.length) {
     let yr = null;
     h += `<h2 class="sect">Month by month <span class="sub">tap one to see why</span></h2><div class="card"><div class="rtab"><div class="rth"><span>Month</span><span>${cr ? 'Owed' : isCash ? 'Counted' : 'Bank'}</span><span>Difference</span></div>`;
@@ -3465,7 +3565,7 @@ document.getElementById('selbar').addEventListener('click', e => {
   if (k === 'edit') multiEditForm(ids);
 });
 function multiEditForm(ids) {
-  const accts = q('SELECT * FROM accounts ORDER BY name');
+  const accts = q('SELECT * FROM accounts ORDER BY name').filter(acctOpen);
   openSheet(`<h2>Change ${ids.length} transaction${ids.length > 1 ? 's' : ''}</h2><p class="sub">Only what you change here is changed; the rest stays as it is.</p>
     <label class="f"><span>Category</span><select name="cat"><option value="keep">Keep as it is</option>${catOptions('any', null).replace('<option value="">No category</option>', '<option value="none">No category</option>')}</select></label>
     <label class="f"><span>Account</span><select name="acct"><option value="keep">Keep as it is</option>${accts.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('')}</select></label>
@@ -3537,8 +3637,9 @@ function enhanceView() {
     if (h.dataset.ftot) h.insertAdjacentHTML('beforeend', `<span class="ftot">${esc(h.dataset.ftot)}</span>`);
     h.insertAdjacentHTML('beforeend', '<svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>');
     const set = closed => { h.classList.toggle('closed', closed); body.hidden = closed; h.setAttribute('aria-expanded', String(!closed)); };
-    set(F.has(key));
-    const toggle = () => { const c = !h.classList.contains('closed'); set(c); if (c) F.add(key); else F.delete(key); setSetting('folded', JSON.stringify(Array.from(F))); save();
+    const fdef = !!h.dataset.fdef;   /* folded until you open it (the app remembers that) */
+    set(fdef ? !F.has(key + '!open') : F.has(key));
+    const toggle = () => { const c = !h.classList.contains('closed'); set(c); if (fdef) { if (c) F.delete(key + '!open'); else F.add(key + '!open'); } else if (c) F.add(key); else F.delete(key); setSetting('folded', JSON.stringify(Array.from(F))); save();
       if (!c) for (const [id, k] of [['heroS', 'hpage'], ['cfS', 'cfPage']]) { const el = document.getElementById(id); if (el) fitSwipe(el, state[k] || 0); } };
     h.onclick = toggle; h.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } };
   }
@@ -3901,6 +4002,7 @@ function mmexDo(m, info, map, opt) {
     if (v === 'new') {
       run('INSERT INTO accounts(name,type,institution,currency,interest_rate,owners,notes,share_pct,credit_limit) VALUES(?,?,?,?,?,1,?,100,?)',
         [a.name, a.type, a.heldAt, a.cur, a.type === 'credit' ? null : a.rate, (a.notes + (a.closed ? ' (closed in MMEX)' : '')).trim(), a.type === 'credit' ? a.limit : null]);
+      if (a.closed) run("UPDATE accounts SET status='closed' WHERE id=last_insert_rowid()");
       acc[a.id] = q('SELECT last_insert_rowid() id')[0].id; st.accts++;
       /* the opening balance, on or before the first transaction, so every MMEX transaction counts as it did in MMEX */
       const d = [a.initDate, a.from].filter(Boolean).sort()[0] || today();

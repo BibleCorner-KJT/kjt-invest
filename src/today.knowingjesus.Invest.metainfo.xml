@@ -25,6 +25,7 @@
   <branding><color type="primary" scheme_preference="light">#f3e2b8</color><color type="primary" scheme_preference="dark">#3e093f</color></branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.19" date="2026-11-26"><description><p>Bank imports recognise transfers between your accounts and link them. Hide or close accounts. Credit card expiry dates with a notice two months ahead. Balances from monthly statements to find the month that is off. Ctrl+H hides amounts; Esc closes windows. A section menu in Settings.</p></description></release>
     <release version="1.18" date="2026-11-26"><description><p>Reconcile with the bank: each account month by month, the difference per month, per year and in total, and a correction in one tap. Entries not yet in a bank file are marked. Money moved between your own accounts (BR TO BR, card payments) is linked into one transfer; transfers with no other side ask where the money went.</p></description></release>
     <release version="1.17" date="2026-11-26"><description><p>The eye button now hides every amount, including those inside sentences, summaries, reports and chart labels. Correct version numbers on Android and Linux.</p></description></release>
     <release version="1.16" date="2026-11-26"><description><p>Prices page: favourite currencies first, with coloured currency signs and the change since yesterday; gold and silver pictures; metal prices per troy ounce, gram, kilogram, tola, tael or ounce. A setting to block screenshots (Android).</p></description></release>

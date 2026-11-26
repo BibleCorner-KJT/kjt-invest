@@ -568,3 +568,18 @@ ol.steps { margin: 8px 0; padding-left: 20px; display: grid; gap: 6px; font-size
 .rblock { background: var(--soft); border-radius: 12px; padding: 8px 12px; margin: 10px 0; }
 .rrow { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; font-variant-numeric: tabular-nums; }
 .loosesel { flex: 1; min-width: 0; max-width: 62%; }
+
+/* 1.19 */
+.arowx.offacct .an { color: var(--muted); }
+.stmtgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0 10px; }
+.setnav { position: sticky; top: -14px; z-index: 5; display: flex; gap: 6px; overflow-x: auto; padding: 8px 2px; margin-top: -8px; margin-bottom: 6px; background: var(--bg); scrollbar-width: none; }
+.setnav::-webkit-scrollbar { display: none; }
+.setnav button { flex: none; border: 0; border-radius: 999px; padding: 7px 13px; background: var(--soft); color: var(--ink); font: inherit; font-size: .86rem; font-weight: 650; cursor: pointer; }
+.setnav button.on { background: var(--head); color: var(--head-ink); }
+@media (min-width: 980px) {
+  main#view.hasnav { padding-left: 232px; }
+  main#view.hasnav > .setnav { position: fixed; left: max(16px, calc(50% - 360px - 116px - 200px)); width: 196px; max-width: none; flex-direction: column; overflow: visible; margin: 0; padding: 10px; border-radius: 16px; background: var(--card); box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  main#view.hasnav > .setnav button { text-align: left; border-radius: 10px; background: transparent; }
+  main#view.hasnav > .setnav button:hover { background: var(--soft); }
+  main#view.hasnav > .setnav button.on { background: var(--head); color: var(--head-ink); }
+}
