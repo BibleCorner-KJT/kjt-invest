@@ -3001,9 +3001,9 @@ function commitImport(parsed, id, prep) {
     if (r.dup && !(r.dup === 'maybe' && r.include)) continue;
     let from = id, to = null;
     if (r.transferTo) {
-      let dest = r.transferTo;
-      if (dest === 'new') { if (!newCash) { run("INSERT INTO accounts(name,type,currency,owners,share_pct) VALUES('Cash in hand','cash',?,1,100)", [a.currency || home()]); newCash = q('SELECT last_insert_rowid() id')[0].id; } dest = newCash; }
-      if (r.amount < 0) { from = id; to = dest; } else { from = dest; to = id; }
+      const dest = r.transferTo;
+      if (!dest || dest === 'new') { r.kind = r.amount < 0 ? 'out' : 'in'; r.transferTo = null; }   /* 1.15: never makes a cash account by itself */
+      else if (r.amount < 0) { from = id; to = dest; } else { from = dest; to = id; }
     }
     run('INSERT INTO transactions(account_id,date,kind,amount,category_id,payee,note,to_account_id,link,recurring_id,created,import_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
       [from, r.date, r.kind, Math.abs(r.amount), r.cat, String(r.payee || '').slice(0, 120), (r.memo || '').slice(0, 200), to, null, null, now, r.iid]); n++;
