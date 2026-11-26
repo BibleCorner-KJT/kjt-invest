@@ -1,10 +1,10 @@
-/* KJT Invest 1.7 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
+/* KJT Invest 1.8 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
    All data stays in one SQLite file on the device. The only network calls are the
    price updates (metal prices from gold-api.com, exchange rates from the European Central Bank). */
 'use strict';
 
-const APP_VERSION = '1.7';
-const SCHEMA = 6;
+const APP_VERSION = '1.8';
+const SCHEMA = 7;
 const OZT_G = 31.1034768;
 const METALS = [
   { sym: 'XAU', name: 'Gold', purity: 0.9999 },
@@ -27,7 +27,8 @@ const PROP_TYPES = {
   other: ['Other', '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 12h6M12 9v6"/>'],
 };
 const propIcon = (t, size) => `<svg class="picon" viewBox="0 0 24 24" width="${size || 26}" height="${size || 26}" aria-hidden="true">${(PROP_TYPES[t] || PROP_TYPES.house)[1]}</svg>`;
-const ACCT_TYPES = { chequing: 'Chequing', savings: 'Savings', cash: 'Cash', gic: 'GIC / term deposit', other: 'Other' };
+const ACCT_TYPES = { chequing: 'Chequing', savings: 'Savings', cash: 'Cash', gic: 'GIC / term deposit', credit: 'Credit card', other: 'Other' };
+const ACCT_GROUP = { credit: 'Credit cards' };
 const COSTS = [
   ['condo_fees', 'Condo fees'], ['insurance', 'Insurance'], ['municipal_tax', 'Municipal taxes'],
   ['school_tax', 'School taxes'], ['other_costs', 'Other costs (repairs, maintenance)'],
@@ -43,7 +44,7 @@ window.__nativeReply = function (id, payload) {
   if (typeof data === 'string') { try { data = JSON.parse(data); } catch (e) { data = { error: 'bad reply' }; } }
   p(data || {});
 };
-const LEAVES_APP = ['exportDb', 'importDb', 'bioUnlock', 'bioEnable'];
+const LEAVES_APP = ['exportDb', 'importDb', 'bioUnlock', 'bioEnable', 'print'];
 function native(cmd, args) {
   const away = LEAVES_APP.includes(cmd);
   if (away) nativeBusy++;
@@ -66,6 +67,7 @@ async function browserNative(id, cmd, a) {
     else if (cmd === 'setPrefs') { localStorage.setItem('it-prefs', a.json); reply({ ok: true }); }
     else if (cmd === 'secure' || cmd === 'bioDisable' || cmd === 'statusBar' || cmd === 'openUrl') reply({ ok: true });
     else if (cmd === 'appInfo') reply({ platform: 'browser', version: APP_VERSION });
+    else if (cmd === 'print') { window.print(); reply({ ok: true }); }
     else if (cmd === 'bioAvailable') reply({ available: false });
     else if (cmd === 'httpGet') { const r = await fetch(a.url); reply({ status: r.status, body: await r.text() }); }
     else if (cmd === 'exportDb') {
@@ -114,6 +116,13 @@ CREATE TABLE IF NOT EXISTS asset_values (id INTEGER PRIMARY KEY, asset_id INTEGE
   date TEXT NOT NULL, value REAL NOT NULL, note TEXT);
 CREATE TABLE IF NOT EXISTS price_history (symbol TEXT NOT NULL, date TEXT NOT NULL, price REAL NOT NULL, source TEXT, PRIMARY KEY(symbol, date));
 CREATE TABLE IF NOT EXISTS fx_history (currency TEXT NOT NULL, date TEXT NOT NULL, per_eur REAL NOT NULL, PRIMARY KEY(currency, date));
+CREATE TABLE IF NOT EXISTS categories (id INTEGER PRIMARY KEY, name TEXT NOT NULL, parent_id INTEGER, kind TEXT NOT NULL DEFAULT 'out', sort INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS transactions (id INTEGER PRIMARY KEY, account_id INTEGER NOT NULL, date TEXT NOT NULL, kind TEXT NOT NULL, amount REAL NOT NULL,
+  category_id INTEGER, payee TEXT, note TEXT, to_account_id INTEGER, link TEXT, recurring_id INTEGER, created INTEGER);
+CREATE INDEX IF NOT EXISTS tx_date ON transactions(date);
+CREATE INDEX IF NOT EXISTS tx_acct ON transactions(account_id, date);
+CREATE TABLE IF NOT EXISTS recurring (id INTEGER PRIMARY KEY, account_id INTEGER NOT NULL, kind TEXT NOT NULL, amount REAL NOT NULL, category_id INTEGER,
+  payee TEXT, note TEXT, to_account_id INTEGER, link TEXT, freq TEXT NOT NULL, next_date TEXT NOT NULL, end_date TEXT, auto INTEGER DEFAULT 0, active INTEGER DEFAULT 1);
 `;
 function q(sql, params) {
   const st = db.prepare(sql); const out = [];
@@ -152,6 +161,18 @@ function prepareDb() {
       if (!q('SELECT id FROM property_values WHERE property_id=? AND date>=?', [p.id, today()]).length) run('INSERT INTO property_values(property_id,date,value,note) VALUES(?,?,?,?)', [p.id, today(), p.current_value, 'Your estimate']);
     setSetting('items_migrated', '1');
   }
+  /* 1.8: credit card limits; your share as a percentage (unequal shares) and the co-owners' names */
+  const acols = q('PRAGMA table_info(accounts)').map(r => r.name);
+  if (!acols.includes('credit_limit')) run('ALTER TABLE accounts ADD COLUMN credit_limit REAL');
+  /* when a transaction and a balance check fall on the same day, the one entered later counts as later */
+  if (!q('PRAGMA table_info(account_balances)').some(r => r.name === 'created')) run('ALTER TABLE account_balances ADD COLUMN created INTEGER');
+  if (!q('PRAGMA table_info(transactions)').some(r => r.name === 'created')) run('ALTER TABLE transactions ADD COLUMN created INTEGER');
+  for (const tb of ['properties', 'accounts', 'other_assets']) {
+    const tc = q(`PRAGMA table_info(${tb})`).map(r => r.name);
+    if (!tc.includes('share_pct')) { run(`ALTER TABLE ${tb} ADD COLUMN share_pct REAL`); run(`UPDATE ${tb} SET share_pct = 100.0 / owners WHERE owners > 1`); }
+    if (!tc.includes('co_owners')) run(`ALTER TABLE ${tb} ADD COLUMN co_owners TEXT`);
+  }
+  if (!getSetting('cats_seeded')) { seedCategories(); setSetting('cats_seeded', '1'); }
   if (+getSetting('schema', 1) < SCHEMA) setSetting('schema', SCHEMA);
 }
 function isOurDb(candidate) {
@@ -297,7 +318,7 @@ function propertyValues(p) {   /* [[date, value]]: the purchase, then your estim
 function propertyStats(p) {
   const periods = q('SELECT * FROM rent_periods WHERE property_id=? ORDER BY start_date', [p.id]);
   const items = q('SELECT * FROM property_items WHERE property_id=? ORDER BY start_date', [p.id]);
-  const owners = Math.max(1, p.owners || 1), share = 1 / owners;
+  const share = shareOf(p), owners = share < 1 ? Math.max(2, Math.round(1 / share)) : 1;
   const invested = (p.purchase_price || 0) + (p.purchase_costs || 0);
   const anchors = propertyValues(p), now = today(), nowY = +now.slice(0, 4), nowM = +now.slice(5, 7) - 1;
   let y0 = p.purchase_date ? +p.purchase_date.slice(0, 4) : nowY;
@@ -335,7 +356,20 @@ function propertyStats(p) {
   return { rows: years, periods, items, anchors, owners, share, invested, value, valueGain, sumNet, gain, overall, annual, yearsHeld, last, perMonth,
     avgCash: full.length ? full.reduce((s, r) => s + (r.cash || 0), 0) / full.length : null };
 }
-function acctBalance(id) { const r = q('SELECT * FROM account_balances WHERE account_id=? ORDER BY date DESC, id DESC LIMIT 1', [id]); return r[0] || null; }
+/* your share of something owned with others: a percentage (1.8), or equal shares from earlier versions */
+function shareOf(r) { if (r && r.share_pct > 0 && r.share_pct <= 100) return r.share_pct / 100; return 1 / Math.max(1, (r && r.owners) || 1); }
+function shareLbl(r) { return +(shareOf(r) * 100).toFixed(2) + '%'; }
+function shareFields(r) {
+  return `<div class="f2">${field('share_pct', 'Your share (%)', r && r.share_pct ? +(+r.share_pct).toFixed(4) : (r && r.owners > 1 ? +(100 / r.owners).toFixed(4) : 100), 'inputmode="decimal"')}
+    ${field('co_owners', 'Owned with (optional)', r && r.co_owners, 'autocomplete="off" placeholder="names"')}</div>
+    <p class="hint">100% if it is all yours. Enter the whole amounts; the app shows your share.</p>`;
+}
+function readShare(d) {   /* -> [share_pct, owners, co_owners] or null */
+  const s = num(String(d.share_pct == null ? '100' : d.share_pct).replace('%', ''));
+  if (s == null) return [100, 1, (d.co_owners || '').trim()];
+  if (!(s > 0 && s <= 100)) return null;
+  return [s, s >= 100 ? 1 : Math.max(2, Math.round(100 / s)), (d.co_owners || '').trim()];
+}
 function totals() {
   const H = home(); let metals = 0, metalsCost = 0, metalsM = 0, metalsCostM = 0, missing = false;
   for (const h of q('SELECT * FROM metal_holdings')) {
@@ -354,19 +388,19 @@ function totals() {
     if (s.last) { const ly = s.last.year; const n = conv(s.last.net * k, p.currency, H);
       if (reLastYear == null || ly > reLastYear) { reLastYear = ly; reLastNet = n; } else if (ly === reLastYear) reLastNet += n; }
   }
-  let cash = 0;
+  let cash = 0, debt = 0;
   for (const a of q('SELECT * FROM accounts')) {
     const b = acctBalance(a.id); if (!b) continue;
-    const v = conv(b.balance / Math.max(1, a.owners || 1), a.currency || H, H);
-    if (v == null) { missing = true; continue; } cash += v;
+    const v = conv(b.balance * shareOf(a), a.currency || H, H);
+    if (v == null) { missing = true; continue; } cash += v; if (v < 0) debt -= v;
   }
   let other = 0, otherCost = 0;
   for (const a of q('SELECT * FROM other_assets')) {
-    const v = assetValue(a.id); if (!v) continue; const k = 1 / Math.max(1, a.owners || 1);
+    const v = assetValue(a.id); if (!v) continue; const k = shareOf(a);
     const hv = conv(v.value * k, a.currency || H, H); if (hv == null) { missing = true; continue; }
     other += hv; otherCost += conv((a.purchase_price != null ? a.purchase_price : v.value) * k, a.currency || H, H) || 0;
   }
-  return { other, otherCost, cash, metals, metalsCost, metalsM, metalsCostM, re, reInvested, reIncome, reLastNet, reLastYear, total: metals + re + cash + other, missing };
+  return { other, otherCost, cash, metals, metalsCost, metalsM, metalsCostM, re, reInvested, reIncome, reLastNet, reLastYear, debt, total: metals + re + cash + other, missing };
 }
 
 /* ---------------- price updates ---------------- */
@@ -577,6 +611,18 @@ function setTitle(t, back) {
   document.getElementById('back').hidden = !back;
 }
 /* Menus: Overview · Assets (Metals, Property, Cash, Other assets) · Markets (metal prices, currencies) */
+/* small coloured pictures for the sub-menus */
+const SUBICON = {
+  metals: () => metalIcon('XAU', 'bar', 22),
+  property: () => `<svg class="sico" viewBox="0 0 24 24"><path class="f" d="M5 10.5 12 5l7 5.5V20H5z"/><path d="M3 11.5 12 4l9 7.5M5 10v10h14V10M10 20v-5.5h4V20"/></svg>`,
+  accounts: () => `<svg class="sico" viewBox="0 0 24 24"><rect class="f" x="3" y="7.5" width="18" height="12.5" rx="2.5"/><path d="M5.5 7.5 15.5 4l1.2 3.5M21 12h-4.5a1.75 1.75 0 0 0 0 3.5H21"/></svg>`,
+  assets: () => `<svg class="sico" viewBox="0 0 24 24"><path class="f" d="M3 16v-3l2-5h14l2 5v3z"/><path d="M3 16v-3l2-5h14l2 5v3zM5 13h14"/><circle cx="7.5" cy="17" r="1.8"/><circle cx="16.5" cy="17" r="1.8"/></svg>`,
+  tx: () => `<svg class="sico" viewBox="0 0 24 24"><rect class="f" x="4" y="3" width="16" height="18" rx="2.5"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>`,
+  reports: () => `<svg class="sico" viewBox="0 0 24 24"><path class="f" d="M12 3a9 9 0 1 0 9 9h-9z"/><path d="M12 3a9 9 0 1 0 9 9h-9zM15 3.5A8 8 0 0 1 20.5 9H15z"/></svg>`,
+  recurring: () => `<svg class="sico" viewBox="0 0 24 24"><circle class="f" cx="12" cy="12" r="8.5" stroke="none"/><path d="M19.5 9A8 8 0 0 0 5 7.5M4.5 15A8 8 0 0 0 19 16.5M5 3.5v4h4M19 20.5v-4h-4"/></svg>`,
+  categories: () => `<svg class="sico" viewBox="0 0 24 24"><path class="f" d="M3.5 12.5V4.5a1 1 0 0 1 1-1h8l8 8-9 9z"/><path d="M3.5 12.5V4.5a1 1 0 0 1 1-1h8l8 8-9 9z"/><circle cx="8" cy="8" r="1.5"/></svg>`,
+};
+const subBtn = (k, l, on, attr) => `<button class="${on ? 'on' : ''}" ${attr}="${k}">${SUBICON[k] ? SUBICON[k]() : ''}<span>${l}</span></button>`;
 const ASECS = [['metals', 'Metals'], ['property', 'Property'], ['accounts', 'Cash'], ['assets', 'Other assets']];
 const isAsset = t => ASECS.some(a => a[0] === t);
 function render() {
@@ -590,11 +636,12 @@ function render() {
   else if (state.tab === 'accounts') state.accountId ? renderAccount(state.accountId) : renderAccounts();
   else if (state.tab === 'assets') state.assetId ? renderAsset(state.assetId) : renderAssets();
   else if (state.tab === 'currency') renderMarkets();
+  else if (state.tab === 'money') renderMoney();
   else renderMore();
   const inDetail = state.propertyId && state.tab === 'property' || state.accountId && state.tab === 'accounts' || state.assetId && state.tab === 'assets';
   if (isAsset(state.tab) && !inDetail) {
     setTitle('Assets');
-    view().insertAdjacentHTML('afterbegin', `<div class="subnav">${ASECS.map(([k, l]) => `<button class="${k === state.tab ? 'on' : ''}" data-asec="${k}">${l}</button>`).join('')}</div>`);
+    view().insertAdjacentHTML('afterbegin', `<div class="subnav">${ASECS.map(([k, l]) => subBtn(k, l, k === state.tab, 'data-asec')).join('')}</div>`);
   }
 }
 function priceStrip() {
@@ -619,6 +666,7 @@ function renderOverview() {
       <div class="btns"><button class="btn" data-act="add-metal">Add precious metal</button><button class="btn" data-act="add-property">Add property</button><button class="btn" data-act="add-account">Add bank account</button><button class="btn" data-act="add-asset">Add other asset</button></div></div>`;
   }
   const M = mcur(), mGain = t.metalsM - t.metalsCostM;
+  h += remindersCard();
   h += `<h2 class="sect">What you own</h2><div class="card tap" data-go="metals"><div class="phead"><span class="pbadge">${metalIcon('XAU', 'bar', 28)}</span><h2 style="margin:0">Precious metals${M !== H ? ' (' + M + ')' : ''}</h2></div>
     <div class="row strong"><span class="k">Value</span><span class="v">${whole(t.metalsM, M)}</span></div>
     <div class="row"><span class="k">Paid (fees included)</span><span class="v">${whole(t.metalsCostM, M)}</span></div>
@@ -631,12 +679,14 @@ function renderOverview() {
     ${t.reLastYear ? `<div class="row"><span class="k">Net income ${t.reLastYear}</span><span class="v ${signCls(t.reLastNet)}">${whole(t.reLastNet, H)}</span></div>` : ''}
     <div class="row"><span class="k">Total gain (value + income)</span><span class="v ${signCls(reGain)}">${whole(reGain, H)} ${t.reInvested ? '(' + pct(reGain / t.reInvested) + ')' : ''}</span></div></div>`;
   h += `<div class="card tap" data-go="accounts"><div class="phead"><span class="pbadge"><svg class="picon" viewBox="0 0 24 24" width="26" height="26"><path d="M3 7h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM3 7l13-3v3M16 13.5h2"/></svg></span><h2 style="margin:0">Cash & bank accounts</h2></div>
-    <div class="row strong"><span class="k">Balance</span><span class="v">${whole(t.cash, H)}</span></div></div>`;
+    <div class="row strong"><span class="k">Balance${t.debt > 0.005 ? ' (less credit cards)' : ''}</span><span class="v ${t.cash < 0 ? 'down' : ''}">${whole(t.cash, H)}</span></div>
+    ${t.debt > 0.005 ? `<div class="row"><span class="k">Owed on credit cards</span><span class="v down">${whole(t.debt, H)}</span></div>` : ''}</div>`;
   h += `<div class="card tap" data-go="assets"><div class="phead"><span class="pbadge">${assetIcon('car')}</span><h2 style="margin:0">Other assets</h2></div>
     <div class="row strong"><span class="k">Value (your estimate)</span><span class="v">${whole(t.other, H)}</span></div>
     ${t.otherCost ? `<div class="row"><span class="k">Paid</span><span class="v">${whole(t.otherCost, H)}</span></div>` : ''}</div>`;
   h += `<h2 class="sect">Income & expenses</h2>` + ieCard();
   h += `<h2 class="sect">Current prices <span class="sub">${mcur()} per troy ounce</span></h2><div class="card">${priceStrip()}</div>`;
+  if (nAll) h += `<button class="btn wide light" data-act="print-report">Print the report or save it as a PDF</button>`;
   view().innerHTML = h; bindHero(); bindChart();
 }
 /* ---------------- 1.3: metal pictures, other assets, overview pages ---------------- */
@@ -676,12 +726,12 @@ function renderAssets() {
   const H = home(), as = q('SELECT * FROM other_assets ORDER BY type, name');
   let total = 0, paid = 0, body = '';
   for (const a of as) {
-    const v = assetValue(a.id), c = a.currency || H, k = 1 / Math.max(1, a.owners || 1);
+    const v = assetValue(a.id), c = a.currency || H, k = shareOf(a);
     const val = v ? v.value * k : null, cost = a.purchase_price != null ? a.purchase_price * k : null;
     const hv = conv(val, c, H); if (hv != null) { total += hv; paid += conv(cost, c, H) || 0; }
     const ch = val != null && cost ? val / cost - 1 : null;
     body += `<div class="txn" data-asset="${a.id}"><div class="txn-top"><span class="ticon">${assetIcon(a.type, 22)}</span><span class="txn-date">${a.purchase_date ? 'bought ' + fmtDate(a.purchase_date, true) : (ASSET_TYPES[a.type] || ASSET_TYPES.other)[0]}</span><span class="txn-desc">${esc(a.name)}</span></div>
-      <div class="txn-body"><div class="sub">${(ASSET_TYPES[a.type] || ASSET_TYPES.other)[0]}${cost != null ? ' · paid ' + money(cost, c, { dec: 0 }) : ''}${a.owners > 1 ? ' · your share 1/' + a.owners : ''}</div>
+      <div class="txn-body"><div class="sub">${(ASSET_TYPES[a.type] || ASSET_TYPES.other)[0]}${cost != null ? ' · paid ' + money(cost, c, { dec: 0 }) : ''}${shareOf(a) < 1 ? ' · your share ' + shareLbl(a) : ''}</div>
       <div class="r"><div class="strongv">${val == null ? '—' : money(val, c, { dec: 0 })}</div><div class="sub ${signCls(ch)}">${pct(ch)}</div></div></div></div>`;
   }
   let h = `<h2 class="sect">Total</h2><div class="card hero"><div class="label">Other assets (${H})</div><div class="big">${whole(total, H)}</div>
@@ -695,10 +745,10 @@ function renderAsset(id) {
   const a = q('SELECT * FROM other_assets WHERE id=?', [id])[0];
   if (!a) { state.assetId = null; return renderAssets(); }
   setTitle(a.name, true);
-  const c = a.currency || home(), k = 1 / Math.max(1, a.owners || 1), vs = q('SELECT * FROM asset_values WHERE asset_id=? ORDER BY date DESC, id DESC', [id]), v = vs[0];
+  const c = a.currency || home(), k = shareOf(a), vs = q('SELECT * FROM asset_values WHERE asset_id=? ORDER BY date DESC, id DESC', [id]), v = vs[0];
   const val = v ? v.value * k : null, cost = a.purchase_price != null ? a.purchase_price * k : null;
   let h = `<div class="card"><div class="phead"><span class="pbadge">${assetIcon(a.type)}</span><div><h3>${(ASSET_TYPES[a.type] || ASSET_TYPES.other)[0]}</h3>${a.purchase_date ? `<div class="sub">Bought ${fmtDate(a.purchase_date)}</div>` : ''}</div></div>
-    ${a.owners > 1 ? `<div class="note" style="margin-top:10px">Owned by ${a.owners} people: amounts show your share (1/${a.owners}).</div>` : ''}
+    ${shareOf(a) < 1 ? `<div class="note" style="margin-top:10px">Your share is ${shareLbl(a)}${a.co_owners ? ' (owned with ' + esc(a.co_owners) + ')' : ''}: amounts show your share.</div>` : ''}
     <div class="row strong" style="margin-top:8px"><span class="k">Value (your estimate)</span><span class="v">${val == null ? '—' : money(val, c, { dec: 0 })}</span></div>
     ${cost != null ? `<div class="row"><span class="k">Paid</span><span class="v">${money(cost, c, { dec: 0 })}</span></div>
     <div class="row"><span class="k">Change</span><span class="v ${signCls(val - cost)}">${val == null ? '—' : money(val - cost, c, { dec: 0 }) + ' (' + pct(val / cost - 1) + ')'}</span></div>` : ''}
@@ -706,6 +756,7 @@ function renderAsset(id) {
   h += `<div class="card"><h2>Value history</h2>` + (vs.length ? `<div class="txns">` + vs.map((r, i) => { const p = vs[i + 1], ch = p ? r.value - p.value : null;
     return `<div class="txn" data-aval="${r.id}"><div class="txn-top"><span class="txn-date">${fmtDate(r.date)}</span><span class="txn-desc">${esc(r.note || '')}</span></div>
       <div class="txn-body"><div class="sub ${signCls(ch)}">${ch == null ? '' : (ch >= 0 ? '+' : '') + money(ch, c, { dec: 0 })}</div><div class="r"><div class="strongv">${money(r.value, c, { dec: 0 })}</div></div></div></div>`; }).join('') + `</div>` : '<p class="sub">No values yet.</p>') + `</div>`;
+  h += linkedTxHtml('asset:' + a.id, 'Transactions linked to this') + `<button class="btn wide light" data-act="add-tx" data-link="asset:${a.id}">+ Transaction for this</button>`;
   view().innerHTML = h;
 }
 function assetForm(id, copyOf) {
@@ -715,7 +766,7 @@ function assetForm(id, copyOf) {
     ${field('name', 'Name', a.name, 'autocomplete="off" placeholder="e.g. 2021 Toyota RAV4"')}
     <div class="f2">${field('purchase_date', 'Date bought', a.purchase_date, 'type="date"')}<label class="f"><span>Currency</span><select name="currency">${curOptions(a.currency || home())}</select></label></div>
     <div class="f2">${field('purchase_price', 'Price paid', a.purchase_price)}${id ? '' : field('value', 'Worth today (your estimate)', null)}</div>
-    <label class="f"><span>Owners</span><select name="owners">${[1, 2, 3, 4, 5].map(n => `<option value="${n}"${n === (a.owners || 1) ? ' selected' : ''}>${n === 1 ? 'Just me' : n + ' people, equal shares'}</option>`).join('')}</select></label>
+    ${shareFields(a)}
     <label class="f"><span>Notes</span><textarea name="notes">${esc(a.notes)}</textarea></label>
     <div class="btns"><button class="btn" data-f="save">Save</button><button class="btn light" data-f="cancel">Cancel</button></div>
     ${id ? '<div class="btns"><button class="btn light" data-f="dup">Duplicate</button><button class="btn danger" data-f="delete">Delete</button></div>' : ''}`, box => {
@@ -723,13 +774,14 @@ function assetForm(id, copyOf) {
       if (f === 'cancel') return closeSheet();
       if (f === 'dup') { const cp = Object.assign({}, a); delete cp.id; cp.name = a.name + ' (copy)'; return assetForm(null, cp); }
       if (f === 'delete') { ask('Delete this asset and its value history?').then(y => { if (!y) return;
-        run('DELETE FROM asset_values WHERE asset_id=?', [id]); run('DELETE FROM other_assets WHERE id=?', [id]); state.assetId = null; save(); closeSheet(); render(); }); return; }
+        run('DELETE FROM asset_values WHERE asset_id=?', [id]); run('DELETE FROM other_assets WHERE id=?', [id]); run('UPDATE transactions SET link=NULL WHERE link=?', ['asset:' + id]); run('UPDATE recurring SET link=NULL WHERE link=?', ['asset:' + id]); state.assetId = null; save(); closeSheet(); render(); }); return; }
       const d = formData(box), pp = num(d.purchase_price), v = id ? null : num(d.value);
       if (!d.name.trim()) return bad('Give it a name.');
       if (Number.isNaN(pp) || Number.isNaN(v)) return bad('Check the amounts.');
-      const vals = [d.name.trim(), d.type || 'other', d.purchase_date || null, pp, d.currency, +d.owners || 1, d.notes.trim()];
-      if (id) run('UPDATE other_assets SET name=?,type=?,purchase_date=?,purchase_price=?,currency=?,owners=?,notes=? WHERE id=?', vals.concat([id]));
-      else { run('INSERT INTO other_assets(name,type,purchase_date,purchase_price,currency,owners,notes) VALUES(?,?,?,?,?,?,?)', vals);
+      const sh = readShare(d); if (!sh) return bad('Your share is a percentage from 1 to 100.');
+      const vals = [d.name.trim(), d.type || 'other', d.purchase_date || null, pp, d.currency, sh[1], d.notes.trim(), sh[0], sh[2]];
+      if (id) run('UPDATE other_assets SET name=?,type=?,purchase_date=?,purchase_price=?,currency=?,owners=?,notes=?,share_pct=?,co_owners=? WHERE id=?', vals.concat([id]));
+      else { run('INSERT INTO other_assets(name,type,purchase_date,purchase_price,currency,owners,notes,share_pct,co_owners) VALUES(?,?,?,?,?,?,?,?,?)', vals);
         const nid = q('SELECT last_insert_rowid() id')[0].id;
         const first = v != null ? v : pp;
         if (first != null) run('INSERT INTO asset_values(asset_id,date,value,note) VALUES(?,?,?,?)', [nid, today(), first, v != null ? 'Your estimate' : 'Price paid']);
@@ -774,11 +826,11 @@ function worthModel() {
   for (const p of q('SELECT * FROM properties')) { const st = propertyStats(p), k = st.share, c = p.currency || H;
     const an = st.anchors;
     items.push({ kind: 'p', from: p.purchase_date || '0000', at: d => convOn(interp(an, d) * k, c, H, d), paid: d => convOn(st.invested * k, c, H, p.purchase_date || d) }); }
-  for (const a of q('SELECT * FROM accounts')) { const k = 1 / Math.max(1, a.owners || 1), c = a.currency || H;
-    const bs = q('SELECT date, balance FROM account_balances WHERE account_id=? ORDER BY date, id', [a.id]).map(r => [r.date, r.balance]);
-    if (!bs.length) continue;
-    items.push({ kind: 'c', from: bs[0][0], at: d => { const v = lastOnOrBefore(bs, d); return v == null ? 0 : convOn(v * k, c, H, d); }, paid: null }); }
-  for (const a of q('SELECT * FROM other_assets')) { const k = 1 / Math.max(1, a.owners || 1), c = a.currency || H;
+  for (const a of q('SELECT * FROM accounts')) { const k = shareOf(a), c = a.currency || H;
+    const f1 = q('SELECT MIN(date) d FROM account_balances WHERE account_id=?', [a.id])[0].d, f2 = q('SELECT MIN(date) d FROM transactions WHERE account_id=? OR to_account_id=?', [a.id, a.id])[0].d;
+    const from = [f1, f2].filter(Boolean).sort()[0]; if (!from) continue;
+    items.push({ kind: 'c', from, at: d => { const b = acctBalance(a.id, d); return b == null ? 0 : convOn(b.balance * k, c, H, d); }, paid: null }); }
+  for (const a of q('SELECT * FROM other_assets')) { const k = shareOf(a), c = a.currency || H;
     const an = q('SELECT date, value FROM asset_values WHERE asset_id=? ORDER BY date, id', [a.id]).map(r => [r.date, r.value]);
     if (a.purchase_date && a.purchase_price != null && (!an.length || an[0][0] > a.purchase_date)) an.unshift([a.purchase_date, a.purchase_price]);
     if (!an.length) continue;
@@ -845,7 +897,7 @@ function bindChart() {
 /* ---------------- overview: the top box has pages you swipe ---------------- */
 const CATS = [['metals', 'Precious metals', 'cat-m'], ['re', 'Real estate', 'cat-p'], ['cash', 'Cash & bank', 'cat-c'], ['other', 'Other assets', 'cat-o']];
 function heroPages(t) {
-  const H = home(), parts = { metals: t.metals, re: t.re, cash: t.cash, other: t.other };
+  const H = home(), parts = { metals: t.metals, re: t.re, cash: Math.max(0, t.cash), other: t.other };
   const sum = Object.values(parts).reduce((a, b) => a + b, 0) || 1;
   const paid = { metals: t.metalsCost, re: t.reInvested, cash: t.cash, other: t.otherCost };
   const gainOf = { metals: t.metals - t.metalsCost, re: t.re - t.reInvested + t.reIncome, cash: 0, other: t.other - t.otherCost };
@@ -979,6 +1031,7 @@ function renderMetals() {
       <div class="txns">${items}</div></div>`;
   }
   h += `<button class="btn wide" data-act="add-metal">+ Add precious metal</button>`;
+  h += linkedTxHtml('metal:%', 'Transactions linked to your metals');
   view().innerHTML = h;
 }
 function renderProperties() {
@@ -989,10 +1042,10 @@ function renderProperties() {
   for (const p of ps) {
     const s = propertyStats(p), c = p.currency || home(), k = s.share;
     h += `<div class="card tap" data-prop="${p.id}"><div class="phead"><span class="pbadge">${propIcon(p.type)}</span><div><h3>${esc(p.name)}</h3>
-      <div class="sub">${(PROP_TYPES[p.type] || PROP_TYPES.house)[0]}${p.address ? ' · ' + esc(p.address) : ''}${s.owners > 1 ? ' · your share 1/' + s.owners : ''}</div></div></div>
+      <div class="sub">${(PROP_TYPES[p.type] || PROP_TYPES.house)[0]}${p.address ? ' · ' + esc(p.address) : ''}${s.share < 1 ? ' · your share ' + shareLbl(p) : ''}</div></div></div>
       <div class="grid2" style="margin-top:10px">
-        <div class="stat"><div class="k">Value${s.owners > 1 ? ' (your share)' : ''}</div><div class="v">${whole(s.value * k, c)}</div></div>
-        <div class="stat"><div class="k">Invested${s.owners > 1 ? ' (your share)' : ''}</div><div class="v">${whole(s.invested * k, c)}</div></div>
+        <div class="stat"><div class="k">Value${s.share < 1 ? ' (your share)' : ''}</div><div class="v">${whole(s.value * k, c)}</div></div>
+        <div class="stat"><div class="k">Invested${s.share < 1 ? ' (your share)' : ''}</div><div class="v">${whole(s.invested * k, c)}</div></div>
         <div class="stat"><div class="k">Net per month</div><div class="v ${signCls(s.perMonth)}">${s.perMonth == null ? '—' : whole(s.perMonth * k, c)}</div></div>
         <div class="stat"><div class="k">${s.annual != null ? 'Per year, overall' : 'Overall return'}</div><div class="v ${signCls(s.overall)}">${pct(s.annual != null ? s.annual : s.overall)}</div></div>
       </div></div>`;
@@ -1006,7 +1059,7 @@ function renderProperty(id) {
   setTitle(p.name, true);
   const s = propertyStats(p), c = p.currency || home(), k = s.share, sh = v => whole(v * k, c);
   let h = `<div class="card"><div class="phead"><span class="pbadge">${propIcon(p.type)}</span><div><h3>${(PROP_TYPES[p.type] || PROP_TYPES.house)[0]}</h3>${p.address ? `<div class="sub">${esc(p.address)}</div>` : ''}</div></div>
-    ${s.owners > 1 ? `<div class="note" style="margin-top:10px">Owned by ${s.owners} people: amounts show your share (1/${s.owners}). Whole property value ${whole(s.value, c)}.</div>` : ''}
+    ${s.share < 1 ? `<div class="note" style="margin-top:10px">Your share is ${shareLbl(p)}${p.co_owners ? ' (owned with ' + esc(p.co_owners) + ')' : ''}: amounts show your share. Whole property value ${whole(s.value, c)}.</div>` : ''}
     <div class="row strong" style="margin-top:6px"><span class="k">Value (your estimate)</span><span class="v">${sh(s.value)}</span></div>
     <div class="row"><span class="k">Purchase price${p.purchase_costs ? ' + costs' : ''}</span><span class="v">${sh(s.invested)}</span></div>
     <div class="row"><span class="k">Value gain</span><span class="v ${signCls(s.valueGain)}">${sh(s.valueGain)}</span></div>
@@ -1022,7 +1075,7 @@ function renderProperty(id) {
   if (!s.periods.length) h += `<p class="sub">Add each rental: from when, to when (leave the end empty while it is still rented) and the rent per month. Months without rent show as empty.</p>`;
   else h += `<div class="txns">` + s.periods.slice().reverse().map(r => `<div class="txn" data-rent="${r.id}">
       <div class="txn-top"><span class="txn-date">${fmtDate(r.start_date)} – ${r.end_date ? fmtDate(r.end_date) : 'still rented'}</span><span class="txn-desc">${esc(r.tenant || 'Rental')}</span></div>
-      <div class="txn-body"><div class="sub">Rent${s.owners > 1 ? ' (whole property)' : ''}</div><div class="r"><div class="strongv">${money(r.monthly_rent, c, { dec: 0 })} <span class="freq">a month</span></div></div></div></div>`).join('') + `</div>`;
+      <div class="txn-body"><div class="sub">Rent${s.share < 1 ? ' (whole property)' : ''}</div><div class="r"><div class="strongv">${money(r.monthly_rent, c, { dec: 0 })} <span class="freq">a month</span></div></div></div></div>`).join('') + `</div>`;
   h += `<button class="btn wide light" data-act="add-rent" data-id="${p.id}">+ Add rent period</button></div>`;
   /* costs and other income */
   h += `<div class="card"><h2>Costs & other income</h2>`;
@@ -1036,8 +1089,9 @@ function renderProperty(id) {
   /* value history */
   const vals = q('SELECT * FROM property_values WHERE property_id=? ORDER BY date DESC, id DESC', [p.id]);
   h += `<h2 class="sect">Value over time</h2><div class="card">` + (vals.length ? `<div class="txns">` + vals.map(r => `<div class="txn" data-pval="${r.id}"><div class="txn-top"><span class="txn-date">${fmtDate(r.date)}</span><span class="txn-desc">${esc(r.note || 'Your estimate')}</span></div>
-      <div class="txn-body"><div class="sub">${s.owners > 1 ? 'whole property' : ''}</div><div class="r"><div class="strongv">${money(r.value, c, { dec: 0 })}</div></div></div></div>`).join('') + `</div>` : '<p class="sub">Add what you think it is worth now and then; the value between dates is drawn as a straight line.</p>') +
+      <div class="txn-body"><div class="sub">${s.share < 1 ? 'whole property' : ''}</div><div class="r"><div class="strongv">${money(r.value, c, { dec: 0 })}</div></div></div></div>`).join('') + `</div>` : '<p class="sub">Add what you think it is worth now and then; the value between dates is drawn as a straight line.</p>') +
     `<button class="btn wide light" data-act="add-pvalue" data-id="${p.id}">+ Update value</button></div>`;
+  h += linkedTxHtml('property:' + p.id, 'Transactions linked to this property') + `<button class="btn wide light" data-act="add-tx" data-link="property:${p.id}">+ Transaction for this property</button>`;
   view().innerHTML = h; bindCashflow();
 }
 /* Cashflow box: Monthly / Yearly / Costs pages, swiped or chosen above */
@@ -1135,44 +1189,68 @@ function propertyValueForm(propertyId, valId) {
 /* ---------------- bank accounts & cash ---------------- */
 function renderAccounts() {
   setTitle('Bank accounts & cash');
+  state.txAcct = '';
   const H = home(), as = q('SELECT * FROM accounts ORDER BY type, name');
   let h = missingWarn(), total = 0, yearly = 0;
   const groups = {};
   for (const a of as) (groups[a.type] = groups[a.type] || []).push(a);
   let body = '';
+  let owed = 0;
   for (const [type, label] of Object.entries(ACCT_TYPES)) {
     const list = groups[type]; if (!list) continue;
-    body += `<div class="card"><h2>${label}</h2><div class="txns">` + list.map(a => {
-      const b = acctBalance(a.id), c = a.currency || H, share = 1 / Math.max(1, a.owners || 1);
-      const mine = b ? b.balance * share : null, hv = conv(mine, c, H); if (hv != null) total += hv;
-      if (mine != null && a.interest_rate) yearly += conv(mine * a.interest_rate / 100, c, H) || 0;
-      return `<div class="txn" data-acct="${a.id}"><div class="txn-top"><span class="txn-date">${b ? 'as of ' + fmtDate(b.date) : 'no balance yet'}</span><span class="txn-desc">${esc(a.name)}</span></div>
-        <div class="txn-body"><div class="sub">${esc(a.institution || label)}${a.interest_rate ? ' · ' + a.interest_rate + '% interest' : ''}${a.owners > 1 ? ' · your share 1/' + a.owners : ''}</div>
-        <div class="r"><div class="strongv">${mine == null ? '—' : money(mine, c)}</div></div></div></div>`; }).join('') + `</div></div>`;
+    body += `<div class="card"><h2>${ACCT_GROUP[type] || label}</h2><div class="txns">` + list.map(a => {
+      const b = acctBalance(a.id), c = a.currency || H, share = shareOf(a), cr = a.type === 'credit';
+      const mine = b ? b.balance * share : null, hv = conv(mine, c, H); if (hv != null) { total += hv; if (cr) owed -= hv; }
+      if (mine != null && a.interest_rate && !cr) yearly += conv(mine * a.interest_rate / 100, c, H) || 0;
+      const used = cr && a.credit_limit > 0 && b ? -b.balance / a.credit_limit : null;
+      return `<div class="txn${cr ? ' cost' : ''}" data-acct="${a.id}"><div class="txn-top"><span class="txn-date">${b ? (cr ? 'owed ' : '') + 'as of ' + fmtDate(b.date) : 'no balance yet'}</span><span class="txn-desc">${esc(a.name)}</span></div>
+        <div class="txn-body"><div class="sub">${esc(a.institution || label)}${a.interest_rate && !cr ? ' · ' + a.interest_rate + '% interest' : ''}${cr && a.credit_limit ? ' · limit ' + money(a.credit_limit, c, { dec: 0 }) : ''}${shareOf(a) < 1 ? ' · your share ' + shareLbl(a) : ''}</div>
+        <div class="r"><div class="strongv${cr && mine < 0 ? ' down' : ''}">${mine == null ? '—' : money(mine, c)}</div>${used != null ? `<div class="sub${used > .7 ? ' down' : ''}">${Math.round(used * 100)}% used</div>` : ''}</div></div>
+        ${used != null ? limitBar(used) : ''}</div>`; }).join('') + `</div></div>`;
   }
   h += `<h2 class="sect">Total</h2><div class="card hero"><div class="label">Cash & bank (${H})</div><div class="big">${whole(total, H)}</div>
+    ${owed > 0.005 ? `<div class="sub">${whole(total + owed, H)} in accounts and cash, less ${whole(owed, H)} owed on credit cards</div>` : ''}
     ${yearly ? `<div class="sub">About ${whole(yearly, H)} interest a year</div>` : ''}</div>`;
   h += `<h2 class="sect">Your accounts</h2>`;
-  h += as.length ? body : `<div class="card empty">No accounts yet. Add your chequing and savings accounts, and cash on hand.</div>`;
+  h += as.length ? body : `<div class="card empty">No accounts yet. Add your chequing and savings accounts, credit cards, and cash on hand.</div>`;
   h += `<button class="btn wide" data-act="add-account">+ Add account</button>`;
   view().innerHTML = h;
 }
+function limitBar(used) { const u = Math.max(0, Math.min(1, used)); return `<div class="limitbar${used > .7 ? ' hi' : ''}"><i style="width:${(u * 100).toFixed(1)}%"></i></div>`; }
 function renderAccount(id) {
   const a = q('SELECT * FROM accounts WHERE id=?', [id])[0];
   if (!a) { state.accountId = null; return renderAccounts(); }
   setTitle(a.name, true);
-  const c = a.currency || home(), bs = q('SELECT * FROM account_balances WHERE account_id=? ORDER BY date DESC, id DESC', [id]);
-  const share = 1 / Math.max(1, a.owners || 1), b = bs[0];
-  let h = `<div class="card hero"><div class="label">${esc(ACCT_TYPES[a.type] || 'Account')}${a.institution ? ' · ' + esc(a.institution) : ''}</div>
-    <div class="big">${b ? money(b.balance * share, c) : '—'}</div>
-    <div class="sub">${b ? 'as of ' + fmtDate(b.date) : 'no balance yet'}${a.owners > 1 ? ' · your share (1/' + a.owners + ') of ' + money(b ? b.balance : 0, c) : ''}${a.interest_rate ? ' · ' + a.interest_rate + '% interest' : ''}</div>
-    <div class="btns"><button class="btn" data-act="add-balance" data-id="${a.id}">Update balance</button><button class="btn light" data-act="edit-account" data-id="${a.id}">Edit</button></div></div>`;
-  h += `<div class="card"><h2>Balance history</h2>`;
-  if (!bs.length) h += `<p class="sub">No balances yet.</p>`;
-  else h += `<div class="txns">` + bs.map((r, i) => { const prev = bs[i + 1], ch = prev ? r.balance - prev.balance : null;
+  const c = a.currency || home(), cr = a.type === 'credit', bs = q('SELECT * FROM account_balances WHERE account_id=? ORDER BY date DESC, id DESC', [id]);
+  const share = shareOf(a), b = acctBalance(id);
+  let h;
+  if (cr) {
+    const owed = b ? -b.balance : 0, lim = a.credit_limit || 0, used = lim ? owed / lim : null;
+    h = `<div class="card hero"><div class="label">Credit card${a.institution ? ' · ' + esc(a.institution) : ''}</div>
+      <div class="big ${owed > 0 ? 'down' : ''}">${b ? money(owed, c) : '—'}</div><div class="sub">owed${b ? ' as of ' + fmtDate(b.date) : ''}${share < 1 ? ' · your share ' + shareLbl(a) + ': ' + money(owed * share, c) : ''}</div>
+      ${lim ? `${limitBar(used)}<div class="ie3" style="margin-top:10px"><div class="stat"><div class="k">Limit</div><div class="v">${money(lim, c, { dec: 0 })}</div></div><div class="stat"><div class="k">Available</div><div class="v ${lim - owed < 0 ? 'down' : 'up'}">${money(lim - owed, c, { dec: 0 })}</div></div><div class="stat"><div class="k">Used</div><div class="v ${used > .7 ? 'down' : ''}">${Math.round(used * 100)}%</div></div></div>` : '<p class="sub">Add the credit limit (Edit) to see what is still available.</p>'}
+      ${a.interest_rate ? `<div class="sub" style="margin-top:8px">${a.interest_rate}% interest a year on what is not paid in time</div>` : ''}
+      <div class="btns"><button class="btn" data-act="add-tx" data-acct-id="${a.id}">+ Expense</button><button class="btn light" data-act="pay-card" data-id="${a.id}">Pay the card</button></div>
+      <div class="btns"><button class="btn light" data-act="add-balance" data-id="${a.id}">Statement / what you owe</button><button class="btn light" data-act="edit-account" data-id="${a.id}">Edit</button></div></div>`;
+  } else {
+    h = `<div class="card hero"><div class="label">${esc(ACCT_TYPES[a.type] || 'Account')}${a.institution ? ' · ' + esc(a.institution) : ''}</div>
+      <div class="big">${b ? money(b.balance * share, c) : '—'}</div>
+      <div class="sub">${b ? 'as of ' + fmtDate(b.date) : 'no balance yet'}${share < 1 ? ' · your share (' + shareLbl(a) + ') of ' + money(b ? b.balance : 0, c) : ''}${a.interest_rate ? ' · ' + a.interest_rate + '% interest' : ''}</div>
+      <div class="btns"><button class="btn" data-act="add-tx" data-acct-id="${a.id}">+ Transaction</button><button class="btn light" data-act="add-balance" data-id="${a.id}">Update balance</button></div>
+      <div class="btns"><button class="btn light" data-act="edit-account" data-id="${a.id}">Edit</button></div></div>`;
+  }
+  const txs = q('SELECT * FROM transactions WHERE account_id=? OR to_account_id=? ORDER BY date DESC, id DESC LIMIT 60', [id, id]);
+  if (txs.length) {
+    const A = Object.fromEntries(q('SELECT * FROM accounts').map(x => [x.id, x]));
+    h += `<h2 class="sect">Transactions <span class="sub">latest</span></h2><div class="card"><div class="txlist">` + txs.map(t => `<div class="txday small">${fmtDate(t.date)}</div>` + txRow(t, A)).join('') + `</div>
+      <div class="btns"><button class="btn light" data-act="tx-of" data-id="${a.id}">All of them under Money</button></div></div>`;
+  }
+  h += `<h2 class="sect">${cr ? 'Statements' : 'Balance checks'} <span class="sub">${cr ? 'what you owed' : 'the real balance from your bank'}</span></h2><div class="card">`;
+  if (!bs.length) h += `<p class="sub">None yet.</p>`;
+  else h += `<div class="txns" style="margin-top:0">` + bs.map((r, i) => { const prev = bs[i + 1], ch = prev ? r.balance - prev.balance : null;
     return `<div class="txn" data-bal="${r.id}"><div class="txn-top"><span class="txn-date">${fmtDate(r.date)}</span><span class="txn-desc">${esc(r.note || '')}</span></div>
-      <div class="txn-body"><div class="sub ${signCls(ch)}">${ch == null ? '' : (ch >= 0 ? '+' : '') + money(ch, c)}</div><div class="r"><div class="strongv">${money(r.balance, c)}</div></div></div></div>`; }).join('') + `</div>`;
-  h += `</div>`;
+      <div class="txn-body"><div class="sub ${cr ? signCls(ch == null ? null : -ch) : signCls(ch)}">${ch == null ? '' : (ch >= 0 ? '+' : '') + money(ch, c)}</div><div class="r"><div class="strongv">${money(cr ? Math.abs(r.balance) : r.balance, c)}</div></div></div></div>`; }).join('') + `</div>`;
+  h += `<p class="sub" style="margin:8px 0 0">The balance is the last ${cr ? 'statement' : 'balance check'} plus the transactions after it.</p></div>`;
   view().innerHTML = h;
 }
 function accountForm(id, copyOf) {
@@ -1182,25 +1260,34 @@ function accountForm(id, copyOf) {
     <div class="f2"><label class="f"><span>Type</span><select name="type">${Object.entries(ACCT_TYPES).map(([k, l]) => `<option value="${k}"${k === a.type ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
     <label class="f"><span>Currency</span><select name="currency">${curOptions(a.currency || home())}</select></label></div>
     ${field('institution', 'Bank (optional)', a.institution, 'autocomplete="off"')}
-    ${id ? '' : field('balance', 'Balance today', null)}
+    ${id ? '' : `<span id="bal-wrap">${field('balance', 'Balance today', null)}</span>`}
     <div class="f2">${field('interest_rate', 'Interest % a year (optional)', a.interest_rate)}
-    <label class="f"><span>Owners</span><select name="owners">${[1, 2, 3, 4, 5].map(n => `<option value="${n}"${n === (a.owners || 1) ? ' selected' : ''}>${n === 1 ? 'Just me' : n + ' people'}</option>`).join('')}</select></label></div>
+<span id="limit-wrap">${field('credit_limit', 'Credit limit', a.credit_limit)}</span></div>
+    ${shareFields(a)}
     <label class="f"><span>Notes</span><textarea name="notes">${esc(a.notes)}</textarea></label>
     <div class="btns"><button class="btn" data-f="save">Save</button><button class="btn light" data-f="cancel">Cancel</button></div>
     ${id ? '<div class="btns"><button class="btn light" data-f="dup">Duplicate</button><button class="btn danger" data-f="delete">Delete account</button></div>' : ''}`, box => {
+    const ts = box.querySelector('[name=type]'), sync = () => { const cr = ts.value === 'credit';
+      box.querySelector('#limit-wrap').style.display = cr ? '' : 'none';
+      const bl = box.querySelector('#bal-wrap span'); if (bl) bl.textContent = cr ? 'What you owe today' : 'Balance today';
+      const ir = box.querySelector('[name=interest_rate]').closest('label').querySelector('span'); ir.textContent = cr ? 'Interest % a year (optional)' : 'Interest % a year (optional)'; };
+    ts.onchange = sync; sync();
     box.onclick = e => { const f = e.target.dataset.f; if (!f) return;
       if (f === 'cancel') return closeSheet();
       if (f === 'dup') { const cp = Object.assign({}, a); delete cp.id; cp.name = a.name + ' (copy)'; return accountForm(null, cp); }
-      if (f === 'delete') { ask('Delete this account and its balance history?').then(y => { if (!y) return;
-        run('DELETE FROM account_balances WHERE account_id=?', [id]); run('DELETE FROM accounts WHERE id=?', [id]); state.accountId = null; save(); closeSheet(); render(); }); return; }
+      if (f === 'delete') { ask('Delete this account, its balance history and its transactions?').then(y => { if (!y) return;
+        run('DELETE FROM account_balances WHERE account_id=?', [id]);
+        run('DELETE FROM transactions WHERE account_id=? OR to_account_id=?', [id, id]); run('DELETE FROM recurring WHERE account_id=? OR to_account_id=?', [id, id]); run('DELETE FROM accounts WHERE id=?', [id]); state.accountId = null; save(); closeSheet(); render(); }); return; }
       const d = formData(box), rate = num(d.interest_rate), bal = id ? null : num(d.balance);
       if (!d.name.trim()) return bad('Give the account a name.');
       if (Number.isNaN(rate) || Number.isNaN(bal)) return bad('Check the amounts.');
-      const vals = [d.name.trim(), d.type, d.institution.trim(), d.currency, rate, +d.owners || 1, d.notes.trim()];
-      if (id) run('UPDATE accounts SET name=?,type=?,institution=?,currency=?,interest_rate=?,owners=?,notes=? WHERE id=?', vals.concat([id]));
-      else { run('INSERT INTO accounts(name,type,institution,currency,interest_rate,owners,notes) VALUES(?,?,?,?,?,?,?)', vals);
+      const sh = readShare(d); if (!sh) return bad('Your share is a percentage from 1 to 100.');
+      const lim = d.type === 'credit' ? num(d.credit_limit) : null; if (Number.isNaN(lim)) return bad('Check the credit limit.');
+      const vals = [d.name.trim(), d.type, d.institution.trim(), d.currency, rate, sh[1], d.notes.trim(), sh[0], sh[2], lim];
+      if (id) run('UPDATE accounts SET name=?,type=?,institution=?,currency=?,interest_rate=?,owners=?,notes=?,share_pct=?,co_owners=?,credit_limit=? WHERE id=?', vals.concat([id]));
+      else { run('INSERT INTO accounts(name,type,institution,currency,interest_rate,owners,notes,share_pct,co_owners,credit_limit) VALUES(?,?,?,?,?,?,?,?,?,?)', vals);
         const nid = q('SELECT last_insert_rowid() id')[0].id;
-        if (bal != null) run('INSERT INTO account_balances(account_id,date,balance,note) VALUES(?,?,?,?)', [nid, today(), bal, 'Opening balance']);
+        if (bal != null) run('INSERT INTO account_balances(account_id,date,balance,note,created) VALUES(?,?,?,?,?)', [nid, today(), bal, 'Opening balance', Date.now()]);
         state.tab = 'accounts'; state.accountId = nid; }
       save(); closeSheet(); render(); };
   });
@@ -1209,7 +1296,7 @@ function balanceForm(accountId, balId) {
   const a = q('SELECT * FROM accounts WHERE id=?', [accountId])[0]; if (!a) return;
   const r = balId ? q('SELECT * FROM account_balances WHERE id=?', [balId])[0] : { date: today() };
   openSheet(`<h2>${esc(a.name)}: ${balId ? 'edit' : 'new'} balance</h2>
-    <div class="f2">${field('date', 'Date', r.date, 'type="date"')}${field('balance', 'Balance (' + (a.currency || home()) + ', whole account)', r.balance)}</div>
+    <div class="f2">${field('date', 'Date', r.date, 'type="date"')}${field('balance', (a.type === 'credit' ? 'What you owe (' : 'Balance (') + (a.currency || home()) + ', whole account)', a.type === 'credit' && r.balance != null ? Math.abs(r.balance) : r.balance)}</div>
     ${field('note', 'Note (optional)', r.note, 'autocomplete="off" placeholder="e.g. interest paid, transfer"')}
     <div class="btns"><button class="btn" data-f="save">Save</button><button class="btn light" data-f="cancel">Cancel</button></div>
     ${balId ? '<div class="btns"><button class="btn danger" data-f="delete">Delete</button></div>' : ''}`, box => {
@@ -1219,8 +1306,9 @@ function balanceForm(accountId, balId) {
       const d = formData(box), v = num(d.balance);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(d.date)) return bad('Enter the date.');
       if (v == null || Number.isNaN(v)) return bad('Enter the balance.');
+      if (a.type === 'credit' && v < 0) return bad('Enter what you owe as a positive amount.');
       if (balId) run('UPDATE account_balances SET date=?,balance=?,note=? WHERE id=?', [d.date, v, d.note.trim(), balId]);
-      else run('INSERT INTO account_balances(account_id,date,balance,note) VALUES(?,?,?,?)', [accountId, d.date, v, d.note.trim()]);
+      else run('INSERT INTO account_balances(account_id,date,balance,note,created) VALUES(?,?,?,?,?)', [accountId, d.date, v, d.note.trim(), Date.now()]);
       save(); closeSheet(); render(); };
   });
 }
@@ -1319,9 +1407,13 @@ function renderMore() {
   h += `<h2 class="sect">Security</h2><div id="sec"></div>`;
   h += `<h2 class="sect">Your data</h2><div class="card">
     <p class="sub">Everything is kept in one SQLite database file on this device. Export it to back it up or to move it to another phone or computer; import it there.</p>
-    <div class="btns"><button class="btn" data-act="export">Export database</button><button class="btn light" data-act="import">Import database</button></div></div>`;
+    <div class="btns"><button class="btn" data-act="export">Export database</button><button class="btn light" data-act="import">Import database</button></div>
+    <h3 class="ieh">Printable report</h3><p class="sub">A clean summary on paper: net worth, every holding, income & expenses, bills coming. Print it, or choose "Save as PDF" (Android) / "Print to File" (Linux) to keep a PDF.</p>
+    <div class="btns"><button class="btn" data-act="print-report">Print or save as PDF</button></div>
+    <h3 class="ieh">For a spreadsheet (CSV)</h3><p class="sub">Opens in LibreOffice Calc, Excel or Google Sheets. Amounts in each item's own currency, with your share.</p>
+    <div class="btns"><button class="btn light" data-act="csv" data-which="tx">Transactions</button><button class="btn light" data-act="csv" data-which="assets">Assets</button><button class="btn light" data-act="csv" data-which="propcf">Property cashflow</button></div></div>`;
   h += `<h2 class="sect">About</h2><div class="card"><p class="sub">KJT Invest ${APP_VERSION}, by Knowing Jesus Today (knowingjesus.today). Open source (GPL-2.0-or-later), no accounts, no analytics, no tracking.
-    The app only goes online to update prices. Metals: gold-api.com, Yahoo Finance, Currency API. Exchange rates: European Central Bank, Bank of Canada, ExchangeRate-API (exchangerate-api.com), Currency API. Past prices: DataHub, Yahoo Finance, Frankfurter. Nothing about you or your holdings is sent.</p></div>`;
+    The app only goes online to update prices and to look for app updates. Metals: gold-api.com, Yahoo Finance, Currency API. Exchange rates: European Central Bank, Bank of Canada, ExchangeRate-API (exchangerate-api.com), Currency API. Past prices: DataHub, Yahoo Finance, Frankfurter. Nothing about you or your holdings is sent.</p></div>`;
   view().innerHTML = h;
   const on = (id, f) => { const el = document.getElementById(id); if (el) el.onchange = f; };
   on('set-home', e => { setSetting('home_currency', e.target.value); save(); render(); });
@@ -1391,7 +1483,7 @@ function metalForm(id, copyOf) {
     box.onclick = e => { const a = e.target.dataset.f; if (!a) return;
       if (a === 'cancel') return closeSheet();
       if (a === 'dup') { const cp = Object.assign({}, x); delete cp.id; return metalForm(null, cp); }
-      if (a === 'delete') { ask('Delete this holding?').then(y => { if (!y) return; run('DELETE FROM metal_holdings WHERE id=?', [id]); save(); closeSheet(); render(); }); return; }
+      if (a === 'delete') { ask('Delete this holding?').then(y => { if (!y) return; run('DELETE FROM metal_holdings WHERE id=?', [id]); run('UPDATE transactions SET link=NULL WHERE link=?', ['metal:' + id]); run('UPDATE recurring SET link=NULL WHERE link=?', ['metal:' + id]); save(); closeSheet(); render(); }); return; }
       const d = formData(box), qn = num(d.quantity), w = num(d.weight), pu = num(d.purity), cost = num(d.cost);
       if (!(qn > 0) || !(w > 0)) return bad('Enter how many and the weight.');
       if (!(pu > 0 && pu <= 1)) return bad('Purity is a number between 0 and 1, e.g. 0.9999.');
@@ -1414,8 +1506,7 @@ function propertyForm(id) {
     <div class="f2">${field('purchase_price', 'Purchase price', p.purchase_price)}${field('purchase_costs', 'Purchase costs', p.purchase_costs)}</div>
     <p class="hint">Purchase costs: notary, transfer tax, inspection and the like.</p>
     ${id ? '' : field('current_value', 'What it is worth today (your estimate)', null)}
-    <label class="f"><span>Number of owners</span><select name="owners">${[1, 2, 3, 4, 5].map(n => `<option value="${n}"${n === (p.owners || 1) ? ' selected' : ''}>${n === 1 ? 'Just me' : n + ' people, equal shares'}</option>`).join('')}</select></label>
-    <p class="hint">Enter the whole property's amounts; the app shows your share.</p>
+    ${shareFields(p)}
     <label class="f"><span>Notes</span><textarea name="notes">${esc(p.notes)}</textarea></label>
     <div class="btns"><button class="btn" data-f="save">Save</button><button class="btn light" data-f="cancel">Cancel</button></div>
     ${id ? '<div class="btns"><button class="btn danger" data-f="delete">Delete property</button></div>' : ''}`, box => {
@@ -1423,16 +1514,17 @@ function propertyForm(id) {
       if (a === 'cancel') return closeSheet();
       if (a === 'delete') { ask('Delete this property and all its years?').then(y => { if (!y) return;
         for (const tb of ['property_years', 'rent_periods', 'property_items', 'property_values']) run(`DELETE FROM ${tb} WHERE property_id=?`, [id]);
-        run('DELETE FROM properties WHERE id=?', [id]);
+        run('DELETE FROM properties WHERE id=?', [id]); run("UPDATE transactions SET link=NULL WHERE link=?", ['property:' + id]); run("UPDATE recurring SET link=NULL WHERE link=?", ['property:' + id]);
         state.propertyId = null; save(); closeSheet(); render(); }); return; }
       const d = formData(box), pp = num(d.purchase_price), pc = num(d.purchase_costs), cv = id ? null : num(d.current_value);
       if (!d.name.trim()) return bad('Give the property a name.');
       if (!(pp > 0)) return bad('Enter the purchase price.');
       if (Number.isNaN(pc) || Number.isNaN(cv)) return bad('Check the amounts.');
       const ty = (box.querySelector('[name=type]:checked') || {}).value || 'house';
-      const vals = [d.name.trim(), d.address.trim(), d.currency, d.purchase_date, pp, pc || 0, d.notes.trim(), +d.owners || 1, ty];
-      if (id) run('UPDATE properties SET name=?,address=?,currency=?,purchase_date=?,purchase_price=?,purchase_costs=?,notes=?,owners=?,type=? WHERE id=?', vals.concat([id]));
-      else { run('INSERT INTO properties(name,address,currency,purchase_date,purchase_price,purchase_costs,notes,owners,type) VALUES(?,?,?,?,?,?,?,?,?)', vals);
+      const sh = readShare(d); if (!sh) return bad('Your share is a percentage from 1 to 100.');
+      const vals = [d.name.trim(), d.address.trim(), d.currency, d.purchase_date, pp, pc || 0, d.notes.trim(), sh[1], ty, sh[0], sh[2]];
+      if (id) run('UPDATE properties SET name=?,address=?,currency=?,purchase_date=?,purchase_price=?,purchase_costs=?,notes=?,owners=?,type=?,share_pct=?,co_owners=? WHERE id=?', vals.concat([id]));
+      else { run('INSERT INTO properties(name,address,currency,purchase_date,purchase_price,purchase_costs,notes,owners,type,share_pct,co_owners) VALUES(?,?,?,?,?,?,?,?,?,?,?)', vals);
         state.propertyId = q('SELECT last_insert_rowid() id')[0].id; state.tab = 'property';
         if (cv > 0) run('INSERT INTO property_values(property_id,date,value,note) VALUES(?,?,?,?)', [state.propertyId, today(), cv, 'Your estimate']); }
       save(); closeSheet(); render(); };
@@ -1469,8 +1561,8 @@ function rentForm(propertyId, rentId, copyOf) {
 function duplicateProperty(id) {
   const p = q('SELECT * FROM properties WHERE id=?', [id])[0]; if (!p) return;
   ask('Make a copy of "' + p.name + '" with its rent periods, costs and values? You can then change what differs.', 'Duplicate').then(y => { if (!y) return;
-    run('INSERT INTO properties(name,address,currency,purchase_date,purchase_price,purchase_costs,current_value,notes,owners,type) VALUES(?,?,?,?,?,?,?,?,?,?)',
-      [p.name + ' (copy)', p.address, p.currency, p.purchase_date, p.purchase_price, p.purchase_costs, p.current_value, p.notes, p.owners || 1, p.type || 'house']);
+    run('INSERT INTO properties(name,address,currency,purchase_date,purchase_price,purchase_costs,current_value,notes,owners,type,share_pct,co_owners) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+      [p.name + ' (copy)', p.address, p.currency, p.purchase_date, p.purchase_price, p.purchase_costs, p.current_value, p.notes, p.owners || 1, p.type || 'house', p.share_pct, p.co_owners]);
     const nid = q('SELECT last_insert_rowid() id')[0].id;
     run('INSERT INTO rent_periods(property_id,start_date,end_date,monthly_rent,tenant,notes) SELECT ?,start_date,end_date,monthly_rent,tenant,notes FROM rent_periods WHERE property_id=?', [nid, id]);
     run('INSERT INTO property_items(property_id,kind,amount,freq,start_date,end_date,note) SELECT ?,kind,amount,freq,start_date,end_date,note FROM property_items WHERE property_id=?', [nid, id]);
@@ -1562,7 +1654,7 @@ function goBack() {
 window.__onBack = () => goBack();
 window.addEventListener('resize', () => { for (const [id, k] of [['heroS', 'hpage'], ['cfS', 'cfPage']]) { const el = document.getElementById(id); if (el) fitSwipe(el, state[k] || 0); } });
 view().addEventListener('click', e => {
-  const el = e.target.closest('[data-act],[data-go],[data-metal],[data-prop],[data-item],[data-pval],[data-cfy],[data-cfp],[data-rent],[data-price],[data-fx],[data-chart],[data-range],[data-acct],[data-bal],[data-asset],[data-aval],[data-hpage],[data-prange],[data-unfav],[data-ie],[data-asec]'); if (!el) return;
+  const el = e.target.closest('[data-act],[data-go],[data-metal],[data-prop],[data-item],[data-pval],[data-cfy],[data-cfp],[data-rent],[data-price],[data-fx],[data-chart],[data-range],[data-acct],[data-bal],[data-asset],[data-aval],[data-hpage],[data-prange],[data-unfav],[data-ie],[data-asec],[data-msec],[data-txm],[data-tx],[data-rec],[data-cat],[data-addsub],[data-addcat],[data-rp],[data-remdo],[data-remskip]'); if (!el) return;
   const d = el.dataset;
   if (d.chart) { state.chart = d.chart; const st = view().scrollTop; render(); view().scrollTop = st; }
   else if (d.range) { state.range = d.range; const st = view().scrollTop; render(); view().scrollTop = st; }
@@ -1575,6 +1667,16 @@ view().addEventListener('click', e => {
   else if (d.cfp) { state.cfPage = +d.cfp; const sc = document.getElementById('cfS'); if (sc) sc.scrollTo({ left: +d.cfp * sc.clientWidth, behavior: 'smooth' }); document.querySelectorAll('.cftabs .seg').forEach((b, j) => b.classList.toggle('on', j === +d.cfp)); }
   else if (d.rent) rentForm(state.propertyId, +d.rent);
   else if (d.asec) { state.tab = d.asec; state.propertyId = null; state.accountId = null; state.assetId = null; render(); view().scrollTop = 0; }
+  else if (d.msec) { state.msec = d.msec; render(); view().scrollTop = 0; }
+  else if (d.txm) { state.txMonth = d.txm; const st = view().scrollTop; render(); view().scrollTop = st; }
+  else if (d.tx) txForm(+d.tx);
+  else if (d.rec) recForm(+d.rec);
+  else if (d.cat) catForm(+d.cat);
+  else if (d.addsub) catForm(null, +d.addsub);
+  else if (d.addcat) catForm(null, null, d.addcat);
+  else if (d.rp) { state.rp = d.rp; const st = view().scrollTop; render(); view().scrollTop = st; }
+  else if (d.remdo) { const r = q('SELECT * FROM recurring WHERE id=?', [+d.remdo])[0]; if (r) { addFromRecurring(r, r.next_date); advance(r); save(); toast('Added'); render(); } }
+  else if (d.remskip) { const r = q('SELECT * FROM recurring WHERE id=?', [+d.remskip])[0]; if (r) { advance(r); save(); toast('Skipped this time'); render(); } }
   else if (d.ie) { state.ieRange = d.ie; const st = view().scrollTop; render(); view().scrollTop = st; }
   else if (d.unfav) { setFavs(favs().filter(c => c !== d.unfav)); render(); }
   else if (d.hpage) { const sc = document.getElementById('heroS'); if (sc) sc.scrollTo({ left: +d.hpage * sc.clientWidth, behavior: 'smooth' }); }
@@ -1592,6 +1694,13 @@ view().addEventListener('click', e => {
     case 'dup-property': duplicateProperty(+d.id); break;
     case 'add-rent': rentForm(+d.id); break;
     case 'add-account': accountForm(); break;
+    case 'add-tx': txForm(null, null, Object.assign(d.acctId ? { account_id: +d.acctId } : {}, d.link ? { link: d.link } : {})); break;
+    case 'pay-card': { const bank = q("SELECT id FROM accounts WHERE type<>'credit' ORDER BY type='chequing' DESC, name LIMIT 1")[0];
+      if (!bank) { toast('First add the bank account you pay the card from.'); break; }
+      const ow = acctBalance(+d.id); txForm(null, null, { kind: 'transfer', account_id: bank.id, to_account_id: +d.id, amount: ow && ow.balance < 0 ? +(-ow.balance).toFixed(2) : null, note: 'Card payment' }); break; }
+    case 'tx-of': state.tab = 'money'; state.msec = 'tx'; state.txAcct = d.id; state.accountId = null; render(); view().scrollTop = 0; break;
+    case 'csv': exportCsv(d.which); break;
+    case 'print-report': printReport(); break;
     case 'add-asset': assetForm(); break;
     case 'check-update': checkUpdate(true); break;
     case 'install-update': installUpdate(); break;
@@ -1806,7 +1915,7 @@ function bindSecurity() {
    Your share only, in your home currency. */
 function ieModel() {
   const H = home(), m = {};
-  const slot = key => (m[key] = m[key] || { rent: 0, other: 0, interest: 0, costs: 0, byKind: {} });
+  const slot = key => (m[key] = m[key] || { rent: 0, other: 0, interest: 0, hin: 0, costs: 0, byKind: {} });
   for (const p of q('SELECT * FROM properties')) {
     const st = propertyStats(p), k = st.share, c = p.currency || H;
     for (const yr of st.rows) for (const f of yr.months) {
@@ -1817,10 +1926,18 @@ function ieModel() {
     }
   }
   const now = today();
-  for (const a of q('SELECT * FROM accounts WHERE interest_rate > 0')) {
+  /* your own transactions: not transfers, not those linked to a property (already counted above), not savings */
+  const A = Object.fromEntries(q('SELECT * FROM accounts').map(x => [x.id, x])), C = cats();
+  for (const t of q("SELECT * FROM transactions WHERE kind<>'transfer'")) {
+    if (t.link && t.link.startsWith('property:') || t.date > now) continue;
+    const top = C.top(t.category_id); if (top && top.kind === 'save') continue;
+    const a = A[t.account_id] || {}, v = convOn(t.amount * shareOf(a), a.currency || H, H, t.date) || 0, x = slot(t.date.slice(0, 7));
+    if (t.kind === 'in') x.hin += v; else { x.costs += v; const kk = 'cat:' + (top ? top.name : 'No category'); x.byKind[kk] = (x.byKind[kk] || 0) + v; }
+  }
+  for (const a of q("SELECT * FROM accounts WHERE interest_rate > 0 AND type<>'credit'")) {
     const bs = q('SELECT date, balance FROM account_balances WHERE account_id=? ORDER BY date, id', [a.id]).map(r => [r.date, r.balance]);
     if (!bs.length) continue;
-    const k = 1 / Math.max(1, a.owners || 1), c = a.currency || H;
+    const k = shareOf(a), c = a.currency || H;
     let y = +bs[0][0].slice(0, 4), mo = +bs[0][0].slice(5, 7);
     for (;;) { const key = `${y}-${String(mo).padStart(2, '0')}`; if (key > now.slice(0, 7)) break;
       const bal = lastOnOrBefore(bs, key + '-28'); if (bal > 0) slot(key).interest += convOn(bal * a.interest_rate / 100 / 12 * k, c, H, key + '-15') || 0;
@@ -1834,17 +1951,17 @@ function ieRange(model, range) {
   if (range === 'Y') keys = Array.from({ length: +now.slice(5, 7) }, (_, i) => `${yNow}-${String(i + 1).padStart(2, '0')}`);
   else if (range === 'PY') keys = Array.from({ length: 12 }, (_, i) => `${yNow - 1}-${String(i + 1).padStart(2, '0')}`);
   else { let y = yNow, mo = +now.slice(5, 7); for (let i = 0; i < 12; i++) { keys.unshift(`${y}-${String(mo).padStart(2, '0')}`); mo--; if (!mo) { mo = 12; y--; } } }
-  const t = { rent: 0, other: 0, interest: 0, costs: 0, byKind: {}, months: [] };
-  for (const key of keys) { const x = model[key] || { rent: 0, other: 0, interest: 0, costs: 0, byKind: {} };
-    t.rent += x.rent; t.other += x.other; t.interest += x.interest; t.costs += x.costs;
+  const t = { rent: 0, other: 0, interest: 0, hin: 0, costs: 0, byKind: {}, months: [] };
+  for (const key of keys) { const x = model[key] || { rent: 0, other: 0, interest: 0, hin: 0, costs: 0, byKind: {} };
+    t.rent += x.rent; t.other += x.other; t.interest += x.interest; t.hin += x.hin || 0; t.costs += x.costs;
     for (const [kk, v] of Object.entries(x.byKind)) t.byKind[kk] = (t.byKind[kk] || 0) + v;
-    t.months.push({ key, inc: x.rent + x.other + x.interest, out: x.costs, current: key === ym }); }
-  t.income = t.rent + t.other + t.interest; t.net = t.income - t.costs;
+    t.months.push({ key, inc: x.rent + x.other + x.interest + (x.hin || 0), out: x.costs, current: key === ym }); }
+  t.income = t.rent + t.other + t.interest + t.hin; t.net = t.income - t.costs;
   return t;
 }
 function ieCard() {
   const H = home(), model = ieModel();
-  if (!Object.keys(model).length) return `<div class="card"><p class="sub">Add rent periods and costs to your properties, and interest rates to your savings accounts, to see your income and expenses here.</p></div>`;
+  if (!Object.keys(model).length) return `<div class="card"><p class="sub">Add transactions under Money, rent periods and costs to your properties, and interest rates to your savings accounts, to see your income and expenses here.</p></div>`;
   state.ieRange = state.ieRange || 'L12';
   const t = ieRange(model, state.ieRange), yNow = new Date().getFullYear();
   const segs = [['L12', 'Last 12 months'], ['Y', String(yNow) + ' so far'], ['PY', String(yNow - 1)]].map(([kk, l]) => `<button class="seg${state.ieRange === kk ? ' on' : ''}" data-ie="${kk}">${l}</button>`).join('');
@@ -1852,8 +1969,8 @@ function ieCard() {
   const bars = `<div class="iebars">${t.months.map(x => `<div class="ieb${x.current ? ' cur' : ''}"><div class="iebp"><i class="in" style="height:${(x.inc / max * 100).toFixed(1)}%"></i><i class="out" style="height:${(x.out / max * 100).toFixed(1)}%"></i></div><span>${MONTHS[+x.key.slice(5, 7) - 1][0]}</span></div>`).join('')}</div>
     <div class="legend"><span><i class="lin"></i>Income</span><span><i class="lout"></i>Expenses</span></div>`;
   const rows = (list, total) => list.filter(([, v]) => v > 0.5).map(([l, v]) => `<div class="arow ie"><span class="al">${l}</span><span class="av">${whole(v, H)}</span><span class="ap">${total ? Math.round(v / total * 100) + '%' : ''}</span></div>`).join('') || '<p class="sub">None in this period.</p>';
-  const inc = [['Rent', t.rent], ['Other income', t.other], ['Interest (estimated)', t.interest]];
-  const exp = Object.entries(t.byKind).sort((a, b) => b[1] - a[1]).map(([kk, v]) => [esc((PITEMS[kk] || PITEMS.other_cost)[0]), v]);
+  const inc = [['Your income (transactions)', t.hin], ['Rent', t.rent], ['Other property income', t.other], ['Interest (estimated)', t.interest]];
+  const exp = Object.entries(t.byKind).sort((a, b) => b[1] - a[1]).map(([kk, v]) => [esc(kk.startsWith('cat:') ? kk.slice(4) : (PITEMS[kk] || PITEMS.other_cost)[0] + ' (property)'), v]);
   const n = t.months.length || 1;
   return `<div class="card"><div class="segs">${segs}</div>
     <div class="ie3"><div class="stat"><div class="k">Income</div><div class="v up">${whole(t.income, H)}</div></div>
@@ -1863,7 +1980,466 @@ function ieCard() {
     ${bars}
     <h3 class="ieh">Income</h3><div class="alloc">${rows(inc, t.income)}</div>
     <h3 class="ieh">Expenses</h3><div class="alloc">${rows(exp, t.costs)}</div>
-    <p class="sub" style="margin:10px 0 0">From your properties (your share) and the interest your accounts earn, estimated from their rate and balance.</p></div>`;
+    <p class="sub" style="margin:10px 0 0">From your transactions (savings and transfers left out), your properties (your share) and the interest your accounts earn, estimated from their rate and balance. Details under Money › Reports.</p></div>`;
+}
+
+/* ---------------- Money: transactions, recurring, reminders, categories, reports ----------------
+   Kept simple on purpose: a category can have subcategories, and no deeper.
+   An account's balance = its last balance check (the real balance from the bank) + the transactions after it.
+   Credit cards are accounts too: purchases raise what you owe, a payment is a transfer from a bank account.
+   A transaction can be linked to something you own (a property, a metal holding, another asset): it then
+   shows on that item's page. Transactions linked to a property are not counted again in Income & expenses,
+   because the property's rent and costs already are. "Savings & investments" are not spending. */
+const DEFAULT_CATS = [
+  ['out', 'Home', ['Maintenance', 'Furniture']], ['out', 'Food', ['Groceries', 'Restaurants']],
+  ['out', 'Transport', ['Fuel', 'Car costs', 'Transit']], ['out', 'Bills', ['Phone & internet', 'Utilities', 'Insurance']],
+  ['out', 'Health', []], ['out', 'Church & giving', []], ['out', 'Personal', []], ['out', 'Gifts', []],
+  ['out', 'Travel', []], ['out', 'Taxes', []], ['out', 'Other', []],
+  ['in', 'Salary', []], ['in', 'Rent received', []], ['in', 'Interest', []], ['in', 'Gifts received', []], ['in', 'Other income', []],
+  ['save', 'Savings & investments', ['Precious metals', 'Property', 'Big purchases']],
+];
+const KIND_NAME = { out: 'Expense', in: 'Income', transfer: 'Transfer' };
+const FREQS = { weekly: 'Every week', biweekly: 'Every 2 weeks', monthly: 'Every month', yearly: 'Every year' };
+function seedCategories() {
+  if (q('SELECT COUNT(*) n FROM categories')[0].n) return;
+  let i = 0;
+  for (const [kind, name, subs] of DEFAULT_CATS) {
+    run('INSERT INTO categories(name,parent_id,kind,sort) VALUES(?,?,?,?)', [name, null, kind, i++]);
+    const pid = q('SELECT last_insert_rowid() id')[0].id;
+    for (const sname of subs) run('INSERT INTO categories(name,parent_id,kind,sort) VALUES(?,?,?,?)', [sname, pid, kind, i++]);
+  }
+}
+let TXCATS = null;
+function cats() {
+  if (TXCATS) return TXCATS;
+  const rows = q('SELECT * FROM categories ORDER BY sort, name'), byId = {};
+  for (const r of rows) byId[r.id] = r;
+  TXCATS = { rows, byId, label: id => { const c = byId[id]; if (!c) return 'No category'; const p = c.parent_id && byId[c.parent_id]; return p ? p.name + ' › ' + c.name : c.name; },
+    top: id => { const c = byId[id]; return c && c.parent_id ? byId[c.parent_id] || c : c; } };
+  return TXCATS;
+}
+function clearCats() { TXCATS = null; }
+function catOptions(kind, sel) {
+  const C = cats(), tops = C.rows.filter(c => !c.parent_id && (kind === 'any' || c.kind === kind || (kind === 'out' && c.kind === 'save')));
+  return `<option value="">No category</option>` + tops.map(t => `<option value="${t.id}"${t.id === sel ? ' selected' : ''}>${esc(t.name)}</option>` +
+    C.rows.filter(c => c.parent_id === t.id).map(c => `<option value="${c.id}"${c.id === sel ? ' selected' : ''}>   ${esc(t.name)} › ${esc(c.name)}</option>`).join('')).join('');
+}
+/* ---- balances ---- */
+function txEffect(t, accountId, cur) {   /* what one transaction does to one account's balance */
+  if (t.kind === 'transfer') {
+    if (t.account_id === accountId) return -t.amount;
+    if (t.to_account_id === accountId) { const from = q('SELECT currency FROM accounts WHERE id=?', [t.account_id])[0]; return conv(t.amount, (from && from.currency) || home(), cur) || t.amount; }
+    return 0;
+  }
+  if (t.account_id !== accountId) return 0;
+  return t.kind === 'in' ? t.amount : -t.amount;
+}
+function acctBalance(id, onDate) {
+  const d = onDate || today(), a = q('SELECT * FROM accounts WHERE id=?', [id])[0]; if (!a) return null;
+  const snap = q('SELECT * FROM account_balances WHERE account_id=? AND date<=? ORDER BY date DESC, id DESC LIMIT 1', [id, d])[0];
+  const from = snap ? snap.date : '0000-00-00', made = snap ? snap.created || 0 : 0;
+  const txs = q('SELECT * FROM transactions WHERE (account_id=? OR to_account_id=?) AND date<=? AND (date>? OR (date=? AND COALESCE(created,0)>?))', [id, id, d, from, from, made]);
+  if (!snap && !txs.length) return null;
+  let bal = snap ? (a.type === 'credit' ? -Math.abs(snap.balance) : snap.balance) : 0;
+  for (const t of txs) bal += txEffect(t, id, a.currency || home());
+  const lastTx = txs.reduce((m, t) => t.date > m ? t.date : m, from);
+  return { balance: bal, date: lastTx > from ? lastTx : from, checked: snap ? snap.date : null };
+}
+/* ---- recurring and reminders ---- */
+function nextDate(d, freq) {
+  const n = dnum(d);
+  if (freq === 'weekly') return dstr(n + 7);
+  if (freq === 'biweekly') return dstr(n + 14);
+  const y = +d.slice(0, 4), m = +d.slice(5, 7), day = +d.slice(8, 10);
+  const ny = freq === 'yearly' ? y + 1 : (m === 12 ? y + 1 : y), nm = freq === 'yearly' ? m : (m === 12 ? 1 : m + 1);
+  const last = new Date(Date.UTC(ny, nm, 0)).getUTCDate();
+  return `${ny}-${String(nm).padStart(2, '0')}-${String(Math.min(day, last)).padStart(2, '0')}`;
+}
+function addFromRecurring(r, date) {
+  run('INSERT INTO transactions(account_id,date,kind,amount,category_id,payee,note,to_account_id,link,recurring_id,created) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+    [r.account_id, date, r.kind, r.amount, r.category_id, r.payee, r.note, r.to_account_id, r.link, r.id, Date.now()]);
+}
+function advance(r) {
+  const nd = nextDate(r.next_date, r.freq);
+  if (r.end_date && nd > r.end_date) run('UPDATE recurring SET next_date=?, active=0 WHERE id=?', [nd, r.id]);
+  else run('UPDATE recurring SET next_date=? WHERE id=?', [nd, r.id]);
+}
+function processRecurring() {   /* automatic ones are added by themselves; the others wait as reminders */
+  let added = 0;
+  for (let guard = 0; guard < 400; guard++) {
+    const r = q("SELECT * FROM recurring WHERE active=1 AND auto=1 AND next_date<=? ORDER BY next_date LIMIT 1", [today()])[0];
+    if (!r) break; addFromRecurring(r, r.next_date); advance(r); added++;
+  }
+  if (added) { save(); toast(added + ' recurring transaction' + (added > 1 ? 's' : '') + ' added'); }
+}
+function reminders(days) {   /* due (or overdue) reminders, and what is coming in the next days */
+  const until = dstr(dnum(today()) + (days || 14));
+  return q('SELECT * FROM recurring WHERE active=1 AND next_date<=? ORDER BY next_date', [until]);
+}
+function remindersCard() {
+  const rs = reminders(14); if (!rs.length) return '';
+  const now = today();
+  return `<h2 class="sect">Coming up <span class="sub">next 14 days</span></h2><div class="card"><div class="txns" style="margin-top:0">` + rs.map(r => {
+    const a = q('SELECT * FROM accounts WHERE id=?', [r.account_id])[0], c = (a && a.currency) || home(), due = r.next_date <= now;
+    return `<div class="txn ${r.kind === 'in' ? 'inc' : 'cost'}"><div class="txn-top"><span class="txn-date${due ? ' warn-t' : ''}">${due ? (r.next_date < now ? 'overdue · ' : 'today · ') : ''}${fmtDate(r.next_date)}</span><span class="txn-desc">${esc(r.payee || cats().label(r.category_id))}</span></div>
+      <div class="txn-body"><div class="sub">${esc(FREQS[r.freq] || '')} · ${esc(a ? a.name : '')}${r.auto ? ' · added by itself' : ''}</div><div class="r"><div class="strongv">${r.kind === 'in' ? '+' : '−'}${money(r.amount, c)}</div></div></div>
+      ${!r.auto && due ? `<div class="btns" style="margin-top:6px"><button class="btn" data-remdo="${r.id}">Add it</button><button class="btn light" data-remskip="${r.id}">Skip this time</button></div>` : ''}</div>`; }).join('') + `</div></div>`;
+}
+/* ---- money tab ---- */
+const MSECS = [['tx', 'Transactions'], ['reports', 'Reports'], ['recurring', 'Recurring'], ['categories', 'Categories']];
+function renderMoney() {
+  setTitle('Money');
+  state.msec = state.msec || 'tx';
+  let h = `<div class="subnav">${MSECS.map(([k, l]) => subBtn(k, l, k === state.msec, 'data-msec')).join('')}</div>`;
+  if (!q('SELECT COUNT(*) n FROM accounts')[0].n) {
+    view().innerHTML = h + `<div class="card empty">First add a bank account, a credit card or cash under Assets › Cash; then your transactions go here.<div class="btns"><button class="btn" data-act="add-account">Add an account</button></div></div>`; return;
+  }
+  if (state.msec === 'reports') h += reportsHtml();
+  else if (state.msec === 'recurring') h += recurringHtml();
+  else if (state.msec === 'categories') h += categoriesHtml();
+  else h += remindersCard() + txListHtml();
+  view().innerHTML = h;
+  const s = document.getElementById('tx-search'); if (s) { s.oninput = () => { state.txSearch = s.value; clearTimeout(s._t); s._t = setTimeout(() => { const pos = s.selectionStart; render(); const n = document.getElementById('tx-search'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }, 350); }; }
+  const fa = document.getElementById('tx-acct'); if (fa) fa.onchange = () => { state.txAcct = fa.value; render(); };
+}
+function txListHtml() {
+  const ym = state.txMonth || today().slice(0, 7), y = +ym.slice(0, 4), m = +ym.slice(5, 7);
+  const prev = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`, next = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`;
+  const accts = q('SELECT * FROM accounts ORDER BY name'), A = Object.fromEntries(accts.map(a => [a.id, a]));
+  let sql = 'SELECT * FROM transactions WHERE date>=? AND date<=?', p = [ym + '-01', ym + '-31'];
+  if (state.txAcct) { sql += ' AND (account_id=? OR to_account_id=?)'; p.push(+state.txAcct, +state.txAcct); }
+  const srch = (state.txSearch || '').trim().toLowerCase();
+  let txs = q(sql + ' ORDER BY date DESC, id DESC', p);
+  if (srch) txs = txs.filter(t => (t.payee || '').toLowerCase().includes(srch) || (t.note || '').toLowerCase().includes(srch) || cats().label(t.category_id).toLowerCase().includes(srch) || String(t.amount).includes(srch));
+  const H = home(); let inn = 0, out = 0;
+  for (const t of txs) { if (t.kind === 'transfer') continue; const v = conv(t.amount, (A[t.account_id] || {}).currency || H, H) || 0; if (t.kind === 'in') inn += v; else out += v; }
+  let h = `<h2 class="sect">Transactions</h2><div class="card">
+    <div class="ysel"><button data-txm="${prev}" aria-label="Previous month">‹</button><b>${new Date(ym + '-15T12:00:00').toLocaleDateString('en-CA', { year: 'numeric', month: 'long' })}</b><button data-txm="${next}" aria-label="Next month">›</button></div>
+    <div class="f2"><label class="f"><span>Account</span><select id="tx-acct"><option value="">All accounts</option>${accts.map(a => `<option value="${a.id}"${String(a.id) === String(state.txAcct || '') ? ' selected' : ''}>${esc(a.name)}</option>`).join('')}</select></label>
+    <label class="f"><span>Search</span><input id="tx-search" value="${esc(state.txSearch || '')}" placeholder="payee, category, note…" autocomplete="off"></label></div>
+    <div class="ie3"><div class="stat"><div class="k">In</div><div class="v up">${whole(inn, H)}</div></div><div class="stat"><div class="k">Out</div><div class="v down">${whole(out, H)}</div></div><div class="stat"><div class="k">Net</div><div class="v ${signCls(inn - out)}">${whole(inn - out, H)}</div></div></div>
+    <div class="btns"><button class="btn" data-act="add-tx">+ Add transaction</button></div></div>`;
+  if (!txs.length) return h + `<div class="card empty">No transactions in this month${srch ? ' match your search' : ''}.</div>`;
+  let day = '';
+  h += `<div class="card"><div class="txlist">`;
+  for (const t of txs) {
+    if (t.date !== day) { day = t.date; h += `<div class="txday">${new Date(day + 'T12:00:00').toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric' })}</div>`; }
+    h += txRow(t, A);
+  }
+  return h + `</div></div>`;
+}
+function txRow(t, A) {
+  A = A || Object.fromEntries(q('SELECT * FROM accounts').map(a => [a.id, a]));
+  const a = A[t.account_id] || {}, c = a.currency || home(), to = t.to_account_id ? A[t.to_account_id] : null;
+  const title = t.kind === 'transfer' ? `Transfer to ${esc(to ? to.name : '?')}` : esc(t.payee || cats().label(t.category_id));
+  const sub = t.kind === 'transfer' ? esc(a.name || '') + (t.note ? ' · ' + esc(t.note) : '') : `${esc(cats().label(t.category_id))} · ${esc(a.name || '')}${t.note ? ' · ' + esc(t.note) : ''}`;
+  const sign = t.kind === 'in' ? '+' : t.kind === 'out' ? '−' : '';
+  return `<div class="txrow" data-tx="${t.id}"><div class="txl"><div class="txt">${title}${t.recurring_id ? ' <span class="badge">↻</span>' : ''}${t.link ? ' <span class="badge">' + esc(linkLabel(t.link)) + '</span>' : ''}</div><div class="sub">${sub}</div></div>
+    <div class="txa ${t.kind === 'in' ? 'up' : t.kind === 'out' ? 'down' : ''}">${sign}${money(t.amount, c)}</div></div>`;
+}
+function linkOptions(sel) {
+  const o = [`<option value="">Not linked</option>`];
+  const ps = q('SELECT id, name FROM properties ORDER BY name'), ms = q('SELECT id, description, metal FROM metal_holdings ORDER BY description'), os = q('SELECT id, name FROM other_assets ORDER BY name');
+  if (ps.length) o.push(`<optgroup label="Property">${ps.map(p => `<option value="property:${p.id}"${sel === 'property:' + p.id ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}</optgroup>`);
+  if (ms.length) o.push(`<optgroup label="Precious metals">${ms.map(m => `<option value="metal:${m.id}"${sel === 'metal:' + m.id ? ' selected' : ''}>${esc(m.description || METAL[m.metal].name)}</option>`).join('')}</optgroup>`);
+  if (os.length) o.push(`<optgroup label="Other assets">${os.map(x => `<option value="asset:${x.id}"${sel === 'asset:' + x.id ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</optgroup>`);
+  return o.join('');
+}
+function linkLabel(link) {
+  const [k, id] = String(link).split(':');
+  const r = k === 'property' ? q('SELECT name n FROM properties WHERE id=?', [+id])[0] : k === 'metal' ? q('SELECT description n FROM metal_holdings WHERE id=?', [+id])[0] : q('SELECT name n FROM other_assets WHERE id=?', [+id])[0];
+  return r ? r.n || 'linked' : 'linked';
+}
+function linkedTxHtml(link, title) {
+  const txs = q(`SELECT * FROM transactions WHERE link ${link.endsWith('%') ? 'LIKE' : '='} ? ORDER BY date DESC, id DESC LIMIT 50`, [link]);
+  if (!txs.length) return '';
+  const A = Object.fromEntries(q('SELECT * FROM accounts').map(a => [a.id, a]));
+  return `<h2 class="sect">${title || 'Transactions linked to this'}</h2><div class="card"><div class="txlist">${txs.map(t => `<div class="txday small">${fmtDate(t.date)}</div>` + txRow(t, A)).join('')}</div></div>`;
+}
+function txForm(id, copyOf, preset) {
+  const accts = q('SELECT * FROM accounts ORDER BY name'); if (!accts.length) return toast('First add an account under Assets › Cash.');
+  const t = id ? q('SELECT * FROM transactions WHERE id=?', [id])[0] : Object.assign({ kind: 'out', date: today(), account_id: +(state.txAcct || accts[0].id) }, copyOf || {}, preset || {});
+  if (copyOf) t.date = today();
+  const payees = q("SELECT DISTINCT payee FROM transactions WHERE payee IS NOT NULL AND payee<>'' ORDER BY payee LIMIT 300").map(r => r.payee);
+  const rec = t.recurring_id ? q('SELECT * FROM recurring WHERE id=?', [t.recurring_id])[0] : null;
+  openSheet(`<h2>${id ? 'Edit' : copyOf ? 'Copy of' : 'New'} transaction</h2>
+    <div class="freqs">${Object.entries(KIND_NAME).map(([k, l]) => `<label class="freqo"><input type="radio" name="kind" value="${k}"${k === t.kind ? ' checked' : ''}><span>${l}</span></label>`).join('')}</div>
+    <div class="f2">${field('amount', 'Amount', t.amount)}${field('date', 'Date', t.date, 'type="date"')}</div>
+    <div class="f2"><label class="f"><span id="acct-l">Account</span><select name="account_id">${accts.map(a => `<option value="${a.id}"${a.id === t.account_id ? ' selected' : ''}>${esc(a.name)}</option>`).join('')}</select></label>
+    <label class="f" id="to-wrap"><span>To account</span><select name="to_account_id">${accts.map(a => `<option value="${a.id}"${a.id === t.to_account_id ? ' selected' : ''}>${esc(a.name)}</option>`).join('')}</select></label></div>
+    <div id="cat-wrap"><label class="f"><span>Category</span><select name="category_id"></select></label>
+    ${field('payee', 'Paid to / received from (optional)', t.payee, 'autocomplete="off" list="payees"')}<datalist id="payees">${payees.map(p => `<option value="${esc(p)}">`).join('')}</datalist></div>
+    ${field('note', 'Note (optional)', t.note, 'autocomplete="off"')}
+    <label class="f"><span>Linked to something you own (optional)</span><select name="link">${linkOptions(t.link || '')}</select></label>
+    ${id ? (rec ? `<p class="hint">Part of a repeating transaction (${esc(FREQS[rec.freq])}); change the repeat under Money › Recurring.</p>` : '') : `<div class="f2"><label class="f"><span>Repeat</span><select name="freq"><option value="">Only once</option>${Object.entries(FREQS).map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></label>
+      <label class="f" id="auto-wrap"><span>Next times</span><select name="auto"><option value="0">Remind me</option><option value="1">Add by itself</option></select></label></div>`}
+    <div class="btns"><button class="btn" data-f="save">Save</button><button class="btn light" data-f="cancel">Cancel</button></div>
+    ${id ? '<div class="btns"><button class="btn light" data-f="dup">Duplicate</button><button class="btn danger" data-f="delete">Delete</button></div>' : ''}`, box => {
+    const sync = () => { const k = (box.querySelector('[name=kind]:checked') || {}).value || 'out';
+      box.querySelector('#to-wrap').style.display = k === 'transfer' ? '' : 'none';
+      box.querySelector('#cat-wrap').style.display = k === 'transfer' ? 'none' : '';
+      box.querySelector('#acct-l').textContent = k === 'transfer' ? 'From account' : 'Account';
+      const cs = box.querySelector('[name=category_id]'), cur = +cs.value || t.category_id; cs.innerHTML = catOptions(k === 'in' ? 'in' : 'out', cur);
+      const fr = box.querySelector('[name=freq]'); if (fr) box.querySelector('#auto-wrap').style.display = fr.value ? '' : 'none'; };
+    box.querySelectorAll('[name=kind]').forEach(r => r.onchange = sync); const fr = box.querySelector('[name=freq]'); if (fr) fr.onchange = sync; sync();
+    box.onclick = e => { const f = e.target.dataset.f; if (!f) return;
+      if (f === 'cancel') return closeSheet();
+      if (f === 'dup') { const cp = Object.assign({}, t); delete cp.id; delete cp.recurring_id; return txForm(null, cp); }
+      if (f === 'delete') { ask('Delete this transaction?').then(y => { if (!y) return; run('DELETE FROM transactions WHERE id=?', [id]); save(); closeSheet(); render(); }); return; }
+      const d = formData(box), amt = num(d.amount), kind = d.kind || 'out';
+      if (!(amt > 0)) return bad('Enter the amount.');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d.date)) return bad('Enter the date.');
+      if (kind === 'transfer' && d.to_account_id === d.account_id) return bad('Choose two different accounts.');
+      const vals = [+d.account_id, d.date, kind, amt, kind === 'transfer' ? null : (+d.category_id || null), kind === 'transfer' ? null : (d.payee || '').trim(), (d.note || '').trim(), kind === 'transfer' ? +d.to_account_id : null, d.link || null];
+      if (id) run('UPDATE transactions SET account_id=?,date=?,kind=?,amount=?,category_id=?,payee=?,note=?,to_account_id=?,link=? WHERE id=?', vals.concat([id]));
+      else {
+        let rid = null;
+        if (d.freq) { run('INSERT INTO recurring(account_id,kind,amount,category_id,payee,note,to_account_id,link,freq,next_date,auto,active) VALUES(?,?,?,?,?,?,?,?,?,?,?,1)',
+          [vals[0], kind, amt, vals[4], vals[5], vals[6], vals[7], vals[8], d.freq, nextDate(d.date, d.freq), +d.auto || 0]); rid = q('SELECT last_insert_rowid() id')[0].id; }
+        run('INSERT INTO transactions(account_id,date,kind,amount,category_id,payee,note,to_account_id,link,recurring_id,created) VALUES(?,?,?,?,?,?,?,?,?,?,?)', vals.concat([rid, Date.now()]));
+        state.txMonth = d.date.slice(0, 7);
+      }
+      save(); closeSheet(); render(); };
+  });
+}
+/* ---- recurring list ---- */
+function recurringHtml() {
+  const rs = q('SELECT * FROM recurring ORDER BY active DESC, next_date'), A = Object.fromEntries(q('SELECT * FROM accounts').map(a => [a.id, a])), H = home();
+  let monthlyOut = 0, monthlyIn = 0;
+  const perMonth = r => r.amount * ({ weekly: 52 / 12, biweekly: 26 / 12, monthly: 1, yearly: 1 / 12 }[r.freq] || 1);
+  for (const r of rs) if (r.active && r.kind !== 'transfer') { const v = conv(perMonth(r), (A[r.account_id] || {}).currency || H, H) || 0; if (r.kind === 'in') monthlyIn += v; else monthlyOut += v; }
+  let h = `<h2 class="sect">Recurring <span class="sub">bills, salary, subscriptions…</span></h2>`;
+  if (rs.length) h += `<div class="card"><div class="ie3"><div class="stat"><div class="k">In a month</div><div class="v up">${whole(monthlyIn, H)}</div></div><div class="stat"><div class="k">Out a month</div><div class="v down">${whole(monthlyOut, H)}</div></div><div class="stat"><div class="k">Net</div><div class="v ${signCls(monthlyIn - monthlyOut)}">${whole(monthlyIn - monthlyOut, H)}</div></div></div></div>`;
+  h += `<div class="card">` + (rs.length ? `<div class="txns" style="margin-top:0">` + rs.map(r => { const a = A[r.account_id] || {};
+    return `<div class="txn ${r.kind === 'in' ? 'inc' : 'cost'}${r.active ? '' : ' off'}" data-rec="${r.id}"><div class="txn-top"><span class="txn-date">${r.active ? 'next ' + fmtDate(r.next_date) : 'ended'}</span><span class="txn-desc">${esc(r.kind === 'transfer' ? 'Transfer' : (r.payee || cats().label(r.category_id)))}</span></div>
+      <div class="txn-body"><div class="sub">${esc(FREQS[r.freq])} · ${esc(a.name || '')} · ${r.auto ? 'added by itself' : 'reminder'}</div><div class="r"><div class="strongv">${r.kind === 'in' ? '+' : r.kind === 'out' ? '−' : ''}${money(r.amount, a.currency || H)}</div></div></div></div>`; }).join('') + `</div>`
+    : `<p class="sub">Nothing repeats yet. When you add a transaction, choose "Repeat" (every week, 2 weeks, month or year) and whether the app adds it by itself or reminds you.</p>`) +
+    `<div class="btns"><button class="btn" data-act="add-tx">+ Add transaction</button></div></div>`;
+  return h;
+}
+function recForm(id) {
+  const r = q('SELECT * FROM recurring WHERE id=?', [id])[0]; if (!r) return;
+  const a = q('SELECT * FROM accounts WHERE id=?', [r.account_id])[0] || {};
+  openSheet(`<h2>Repeating: ${esc(r.payee || cats().label(r.category_id))}</h2>
+    <div class="f2">${field('amount', 'Amount (' + (a.currency || home()) + ')', r.amount)}<label class="f"><span>Repeat</span><select name="freq">${Object.entries(FREQS).map(([k, l]) => `<option value="${k}"${k === r.freq ? ' selected' : ''}>${l}</option>`).join('')}</select></label></div>
+    <div class="f2">${field('next_date', 'Next time', r.next_date, 'type="date"')}${field('end_date', 'Last time (optional)', r.end_date, 'type="date"')}</div>
+    <label class="f"><span>Next times</span><select name="auto"><option value="0"${r.auto ? '' : ' selected'}>Remind me</option><option value="1"${r.auto ? ' selected' : ''}>Add by itself</option></select></label>
+    <div class="btns"><button class="btn" data-f="save">Save</button><button class="btn light" data-f="cancel">Cancel</button></div>
+    <div class="btns">${r.active ? '<button class="btn light" data-f="stop">Stop repeating</button>' : '<button class="btn light" data-f="resume">Repeat again</button>'}<button class="btn danger" data-f="delete">Delete</button></div>
+    <p class="hint">Stopping or deleting keeps the transactions already added.</p>`, box => {
+    box.onclick = e => { const f = e.target.dataset.f; if (!f) return;
+      if (f === 'cancel') return closeSheet();
+      if (f === 'stop' || f === 'resume') { run('UPDATE recurring SET active=? WHERE id=?', [f === 'resume' ? 1 : 0, id]); save(); closeSheet(); render(); return; }
+      if (f === 'delete') { ask('Delete this repeat? The transactions already added stay.').then(y => { if (!y) return; run('UPDATE transactions SET recurring_id=NULL WHERE recurring_id=?', [id]); run('DELETE FROM recurring WHERE id=?', [id]); save(); closeSheet(); render(); }); return; }
+      const d = formData(box), amt = num(d.amount);
+      if (!(amt > 0)) return bad('Enter the amount.');
+      run('UPDATE recurring SET amount=?,freq=?,next_date=?,end_date=?,auto=? WHERE id=?', [amt, d.freq, d.next_date, d.end_date || null, +d.auto, id]);
+      save(); closeSheet(); render(); };
+  });
+}
+/* ---- categories ---- */
+function categoriesHtml() {
+  const C = cats();
+  const block = (kind, title) => { const tops = C.rows.filter(c => !c.parent_id && c.kind === kind);
+    return `<h2 class="sect">${title}</h2><div class="card"><div class="catlist">${tops.map(t => `<div class="cat"><button class="catn" data-cat="${t.id}">${esc(t.name)} <span class="sub">${q('SELECT COUNT(*) n FROM transactions WHERE category_id=?', [t.id])[0].n || ''}</span></button>
+      ${C.rows.filter(c => c.parent_id === t.id).map(c => `<button class="catn sub2" data-cat="${c.id}">› ${esc(c.name)}</button>`).join('')}
+      <button class="catadd" data-addsub="${t.id}">+ subcategory</button></div>`).join('')}</div>
+      <div class="btns"><button class="btn light" data-addcat="${kind}">+ ${title.replace(/s$/, '')} category</button></div></div>`; };
+  return block('out', 'Expenses') + block('in', 'Income') + block('save', 'Savings & investments') +
+    `<p class="sub" style="padding:0 6px">Tap a name to rename it. Subcategories go one level deep only, to keep things simple. Savings & investments (like buying metals) are not counted as spending.</p>`;
+}
+function catForm(id, parentId, kind) {
+  const c = id ? q('SELECT * FROM categories WHERE id=?', [id])[0] : { parent_id: parentId || null, kind: kind || (parentId ? q('SELECT kind FROM categories WHERE id=?', [parentId])[0].kind : 'out') };
+  const parent = c.parent_id ? q('SELECT name FROM categories WHERE id=?', [c.parent_id])[0] : null;
+  openSheet(`<h2>${id ? 'Rename' : 'New'} ${c.parent_id ? 'subcategory' : 'category'}${parent ? ' of ' + esc(parent.name) : ''}</h2>
+    ${field('name', 'Name', c.name, 'autocomplete="off"')}
+    <div class="btns"><button class="btn" data-f="save">Save</button><button class="btn light" data-f="cancel">Cancel</button></div>
+    ${id ? '<div class="btns"><button class="btn danger" data-f="delete">Delete</button></div><p class="hint">Deleting moves its transactions to ' + (c.parent_id ? 'the main category' : '"No category"') + '.</p>' : ''}`, box => {
+    box.onclick = e => { const f = e.target.dataset.f; if (!f) return;
+      if (f === 'cancel') return closeSheet();
+      if (f === 'delete') { ask('Delete this category?').then(y => { if (!y) return;
+        for (const tb of ['transactions', 'recurring']) run(`UPDATE ${tb} SET category_id=? WHERE category_id=?`, [c.parent_id || null, id]);
+        for (const sub of q('SELECT id FROM categories WHERE parent_id=?', [id])) { for (const tb of ['transactions', 'recurring']) run(`UPDATE ${tb} SET category_id=NULL WHERE category_id=?`, [sub.id]); run('DELETE FROM categories WHERE id=?', [sub.id]); }
+        run('DELETE FROM categories WHERE id=?', [id]); clearCats(); save(); closeSheet(); render(); }); return; }
+      const name = (formData(box).name || '').trim(); if (!name) return bad('Enter a name.');
+      if (id) run('UPDATE categories SET name=? WHERE id=?', [name, id]);
+      else run('INSERT INTO categories(name,parent_id,kind,sort) VALUES(?,?,?,?)', [name, c.parent_id, c.kind, 999]);
+      clearCats(); save(); closeSheet(); render(); };
+  });
+}
+/* ---- reports: where the money goes, what changed, what is coming ---- */
+const RPERIODS = [['m', 'This month'], ['pm', 'Last month'], ['3m', '3 months'], ['12m', '12 months'], ['y', 'This year']];
+function periodRange(k) {
+  const t = today(), y = +t.slice(0, 4), m = +t.slice(5, 7), ym = (yy, mm) => { while (mm < 1) { mm += 12; yy--; } return `${yy}-${String(mm).padStart(2, '0')}`; };
+  const end = mm => dstr(dnum(ym(y, mm + 1).replace(/$/, '-01')) - 1);
+  if (k === 'pm') return [ym(y, m - 1) + '-01', end(m - 1), 1];
+  if (k === '3m') return [ym(y, m - 2) + '-01', t, 3];
+  if (k === '12m') return [ym(y, m - 11) + '-01', t, 12];
+  if (k === 'y') return [`${y}-01-01`, t, m];
+  return [ym(y, m) + '-01', t, 1];
+}
+function spendBy(a, b) {   /* household spending by top category (in home currency), and income */
+  const H = home(), A = Object.fromEntries(q('SELECT * FROM accounts').map(x => [x.id, x])), C = cats();
+  const out = {}, inc = {}, payees = {}; let total = 0, totalIn = 0, count = 0, big = [];
+  for (const t of q("SELECT * FROM transactions WHERE kind<>'transfer' AND date>=? AND date<=?", [a, b])) {
+    if (t.link && t.link.startsWith('property:')) continue;
+    const top = C.top(t.category_id), v = conv(t.amount, (A[t.account_id] || {}).currency || H, H) || 0;
+    if (top && top.kind === 'save') continue;
+    const name = top ? top.name : 'No category';
+    if (t.kind === 'in') { inc[name] = (inc[name] || 0) + v; totalIn += v; }
+    else { out[name] = (out[name] || 0) + v; total += v; count++; if (t.payee) payees[t.payee] = (payees[t.payee] || 0) + v; big.push([v, t]); }
+  }
+  return { out, inc, total, totalIn, count, payees, big: big.sort((x, y) => y[0] - x[0]) };
+}
+function reportsHtml() {
+  const H = home(); state.rp = state.rp || 'm';
+  const [a, b, months] = periodRange(state.rp), len = dnum(b) - dnum(a) + 1;
+  const pa = dstr(dnum(a) - len), pb = dstr(dnum(a) - 1);
+  const cur = spendBy(a, b), prev = spendBy(pa, pb);
+  const segs = RPERIODS.map(([k, l]) => `<button class="seg${state.rp === k ? ' on' : ''}" data-rp="${k}">${l}</button>`).join('');
+  /* smart notes */
+  const notes = [];
+  const sorted = Object.entries(cur.out).sort((x, y) => y[1] - x[1]);
+  if (sorted.length) notes.push(`Most of your spending went to <b>${esc(sorted[0][0])}</b>: ${whole(sorted[0][1], H)} (${Math.round(sorted[0][1] / (cur.total || 1) * 100)}%).`);
+  if (prev.total > 0 && cur.total > 0) { const ch = cur.total / prev.total - 1; notes.push(`You spent <b class="${ch > 0 ? 'down' : 'up'}">${Math.abs(Math.round(ch * 100))}% ${ch > 0 ? 'more' : 'less'}</b> than in the period before (${whole(prev.total, H)}).`); }
+  let bigChange = null;
+  for (const [k, v] of Object.entries(cur.out)) { const pv = prev.out[k] || 0, d = v - pv; if (Math.abs(d) > 20 && (!bigChange || Math.abs(d) > Math.abs(bigChange[1]))) bigChange = [k, d, pv]; }
+  if (bigChange && prev.total > 0) notes.push(`Biggest change: <b>${esc(bigChange[0])}</b> ${bigChange[1] > 0 ? 'up' : 'down'} ${whole(Math.abs(bigChange[1]), H)}.`);
+  if (cur.totalIn > 0) notes.push(`You kept <b class="${signCls(cur.totalIn - cur.total)}">${Math.round((cur.totalIn - cur.total) / cur.totalIn * 100)}%</b> of your income (household only).`);
+  if (cur.count) notes.push(`On average ${whole(cur.total / len, H)} a day, ${whole(cur.total / months, H)} a month.`);
+  if (cur.big.length) { const [v, t] = cur.big[0]; notes.push(`Largest expense: ${whole(v, H)}${t.payee ? ' to ' + esc(t.payee) : ''} on ${fmtDate(t.date)}.`); }
+  const due = reminders(30).filter(r => r.kind === 'out');
+  if (due.length) { let s = 0; for (const r of due) s += r.amount; notes.push(`Coming in the next 30 days: <b>${due.length}</b> bill${due.length > 1 ? 's' : ''}, about ${whole(s, H)}.`); }
+  for (const c of q("SELECT * FROM accounts WHERE type='credit' AND credit_limit>0")) { const bl = acctBalance(c.id); if (bl && -bl.balance / c.credit_limit > 0.7) notes.push(`<span class="down">${esc(c.name)} is at ${Math.round(-bl.balance / c.credit_limit * 100)}% of its limit.</span>`); }
+  const max = sorted.length ? sorted[0][1] : 1;
+  let h = `<h2 class="sect">Reports</h2><div class="card"><div class="segs">${segs}</div>
+    <div class="ie3"><div class="stat"><div class="k">Income</div><div class="v up">${whole(cur.totalIn, H)}</div></div><div class="stat"><div class="k">Spending</div><div class="v down">${whole(cur.total, H)}</div></div><div class="stat"><div class="k">Left over</div><div class="v ${signCls(cur.totalIn - cur.total)}">${whole(cur.totalIn - cur.total, H)}</div></div></div>
+    ${notes.length ? `<ul class="notes">${notes.map(n => `<li>${n}</li>`).join('')}</ul>` : '<p class="sub">Add transactions to see your reports.</p>'}</div>`;
+  if (sorted.length) h += `<h2 class="sect">Where the money goes</h2><div class="card"><div class="catbars">${sorted.map(([k, v]) => { const pv = prev.out[k] || 0, ch = pv ? v / pv - 1 : null;
+    return `<div class="cb"><div class="cbt"><span>${esc(k)}</span><span><b>${whole(v, H)}</b> <small class="sub">${Math.round(v / (cur.total || 1) * 100)}%${ch != null ? ` · <span class="${ch > 0 ? 'down' : 'up'}">${ch > 0 ? '+' : ''}${Math.round(ch * 100)}%</span>` : ''}</small></span></div><div class="cbb"><i style="width:${(v / max * 100).toFixed(1)}%"></i></div></div>`; }).join('')}</div>
+    <p class="sub" style="margin:8px 0 0">The % after each one compares with the period before.</p></div>`;
+  const inc = Object.entries(cur.inc).sort((x, y) => y[1] - x[1]);
+  if (inc.length) h += `<h2 class="sect">Where the money comes from</h2><div class="card"><div class="alloc">${inc.map(([k, v]) => `<div class="arow ie"><span class="al">${esc(k)}</span><span class="av">${whole(v, H)}</span><span class="ap">${Math.round(v / (cur.totalIn || 1) * 100)}%</span></div>`).join('')}</div></div>`;
+  const pay = Object.entries(cur.payees).sort((x, y) => y[1] - x[1]).slice(0, 6);
+  if (pay.length) h += `<h2 class="sect">Paid to most</h2><div class="card"><div class="alloc">${pay.map(([k, v]) => `<div class="arow ie"><span class="al">${esc(k)}</span><span class="av">${whole(v, H)}</span><span class="ap"></span></div>`).join('')}</div></div>`;
+  h += `<button class="btn wide light" data-act="print-report">Print the full report or save it as a PDF</button>`;
+  h += `<p class="sub" style="padding:0 6px">Reports count your own transactions. Rent and costs of your properties are in Overview › Income & expenses, together with these.</p>`;
+  return h;
+}
+/* ---- CSV for spreadsheets ---- */
+function csvCell(v) { if (v == null) return ''; const s = String(v); return /[",\n;]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }
+function toCsv(rows) { return '﻿' + rows.map(r => r.map(csvCell).join(',')).join('\r\n') + '\r\n'; }
+async function exportCsv(which) {
+  const H = home(); let rows, name;
+  if (which === 'tx') {
+    const A = Object.fromEntries(q('SELECT * FROM accounts').map(a => [a.id, a]));
+    rows = [['Date', 'Type', 'Amount', 'Currency', 'Account', 'To account', 'Category', 'Paid to / from', 'Note', 'Linked to']].concat(
+      q('SELECT * FROM transactions ORDER BY date, id').map(t => [t.date, KIND_NAME[t.kind], t.amount, (A[t.account_id] || {}).currency || H, (A[t.account_id] || {}).name, t.to_account_id ? (A[t.to_account_id] || {}).name : '', t.kind === 'transfer' ? '' : cats().label(t.category_id), t.payee, t.note, t.link ? linkLabel(t.link) : '']));
+    name = 'kjt-invest-transactions-' + today() + '.csv';
+  } else if (which === 'assets') {
+    rows = [['Kind', 'Name', 'Detail', 'Currency', 'Paid', 'Value now', 'Your share %', 'Your value in ' + H]];
+    for (const h of q('SELECT * FROM metal_holdings')) { const s = holdingStats(h); rows.push(['Precious metal', h.description || METAL[h.metal].name, `${METAL[h.metal].name}, ${FORMS[h.form] || 'Coin'}, ${s.oz.toFixed(4)} oz pure, bought ${h.purchase_date || ''}`, h.currency, s.cost != null ? s.cost.toFixed(2) : '', s.value != null ? s.value.toFixed(2) : '', 100, s.valueHome != null ? s.valueHome.toFixed(2) : '']); }
+    for (const p of q('SELECT * FROM properties')) { const s = propertyStats(p); rows.push(['Property', p.name, (PROP_TYPES[p.type] || PROP_TYPES.house)[0] + (p.address ? ', ' + p.address : ''), p.currency, s.invested.toFixed(2), s.value.toFixed(2), (s.share * 100).toFixed(2), (conv(s.value * s.share, p.currency, H) || 0).toFixed(2)]); }
+    for (const a of q('SELECT * FROM accounts')) { const b = acctBalance(a.id), k = shareOf(a); rows.push([a.type === 'credit' ? 'Credit card' : 'Account', a.name, (ACCT_TYPES[a.type] || '') + (a.institution ? ', ' + a.institution : ''), a.currency, '', b ? b.balance.toFixed(2) : '', (k * 100).toFixed(2), b ? (conv(b.balance * k, a.currency, H) || 0).toFixed(2) : '']); }
+    for (const o of q('SELECT * FROM other_assets')) { const v = assetValue(o.id), k = shareOf(o); rows.push(['Other asset', o.name, (ASSET_TYPES[o.type] || ASSET_TYPES.other)[0], o.currency, o.purchase_price, v ? v.value : '', (k * 100).toFixed(2), v ? (conv(v.value * k, o.currency, H) || 0).toFixed(2) : '']); }
+    name = 'kjt-invest-assets-' + today() + '.csv';
+  } else {
+    rows = [['Property', 'Month', 'Rent', 'Other income', 'Costs', 'Net', 'Months empty', 'Your share %', 'Currency']];
+    for (const p of q('SELECT * FROM properties')) { const s = propertyStats(p);
+      for (const yr of s.rows) for (const f of yr.months) if (f.owned && !f.future) rows.push([p.name, `${f.y}-${String(f.m + 1).padStart(2, '0')}`, f.rent.toFixed(2), f.income.toFixed(2), f.costs.toFixed(2), f.net.toFixed(2), f.empty.toFixed(2), (s.share * 100).toFixed(2), p.currency]); }
+    name = 'kjt-invest-property-cashflow-' + today() + '.csv';
+  }
+  const bytes = new TextEncoder().encode(toCsv(rows));
+  const r = await native('exportDb', { b64: bytesToB64(bytes), name });
+  if (r.ok) toast('Saved' + (r.where ? ' to ' + r.where : '')); else if (r.error) toast('Not saved: ' + r.error);
+}
+
+/* ---------------- printable report (print it, or save it as a PDF) ----------------
+   A clean black-on-white summary of everything, made for paper. It is separate from the database export:
+   it is for reading, filing or giving to an accountant, not for moving your data. */
+function printReport() {
+  const H = home(), t = totals(), now = today(), M = mcur();
+  const m = v => v == null ? '—' : whole(v, H), td = (v, cls) => `<td class="n${cls ? ' ' + cls : ''}">${v}</td>`;
+  const sgn = v => v == null ? '' : v >= 0 ? 'up' : 'down';
+  let h = `<header class="ph"><div><h1>Financial report</h1><div class="pmeta">${new Date(now + 'T12:00:00').toLocaleDateString('en-CA', { year: 'numeric', month: 'long', day: 'numeric' })} · amounts in ${H}, your share</div></div>
+    <div class="plogo">KJT Invest</div></header>`;
+  /* net worth */
+  const debt = t.debt || 0, cashOnly = t.cash + debt;
+  h += `<h2>Net worth</h2><table><tbody>
+    <tr><td>Precious metals</td>${td(m(t.metals))}</tr>
+    <tr><td>Real estate (your estimate)</td>${td(m(t.re))}</tr>
+    <tr><td>Bank accounts & cash</td>${td(m(cashOnly))}</tr>
+    ${debt > 0.005 ? `<tr><td>Owed on credit cards</td>${td('−' + m(debt), 'down')}</tr>` : ''}
+    <tr><td>Other assets</td>${td(m(t.other))}</tr>
+    <tr class="tot"><td>Total</td>${td(m(t.total))}</tr></tbody></table>
+    ${t.missing ? '<p class="pnote">Some items have no price or exchange rate yet and are left out.</p>' : ''}`;
+  /* metals */
+  const hs = q('SELECT * FROM metal_holdings ORDER BY metal, description');
+  if (hs.length) {
+    let tv = 0, tc = 0;
+    h += `<h2>Precious metals <small>${M} per troy ounce: ${METALS.map(x => { const p = spotIn(x.sym, M); return p == null ? '' : x.name + ' ' + money(p, M); }).filter(Boolean).join(' · ')}</small></h2>
+      <table><thead><tr><th>Holding</th><th>Bought</th><th class="n">Pure oz</th><th class="n">Paid</th><th class="n">Value</th><th class="n">Gain</th></tr></thead><tbody>` +
+      hs.map(x => { const s = holdingStats(x); if (s.valueHome != null) tv += s.valueHome; if (s.costHome != null) tc += s.costHome;
+        return `<tr><td>${esc(x.description || METAL[x.metal].name)}<div class="psub">${METAL[x.metal].name} · ${FORMS[x.form] || 'Coin'}${x.quantity > 1 ? ' · ' + x.quantity + ' pieces' : ''}</div></td><td>${x.purchase_date ? fmtDate(x.purchase_date) : ''}</td>
+          ${td(s.oz.toFixed(3))}${td(m(s.costHome))}${td(m(s.valueHome))}${td(s.costHome ? pct((s.valueHome - s.costHome) / s.costHome) : '', sgn(s.valueHome - s.costHome))}</tr>`; }).join('') +
+      `<tr class="tot"><td>Total</td><td></td><td></td>${td(m(tc))}${td(m(tv))}${td(tc ? pct((tv - tc) / tc) : '', sgn(tv - tc))}</tr></tbody></table>`;
+  }
+  /* property */
+  const ps = q('SELECT * FROM properties ORDER BY name');
+  if (ps.length) {
+    h += `<h2>Real estate</h2><table><thead><tr><th>Property</th><th class="n">Share</th><th class="n">Invested</th><th class="n">Value</th><th class="n">Net cashflow, last 12 months</th></tr></thead><tbody>` +
+      ps.map(p => { const s = propertyStats(p), k = s.share, c = p.currency || H, cv = v => conv(v * k, c, H);
+        let l12 = 0; const fl = []; for (const yr of s.rows) for (const f of yr.months) if (!f.future && f.owned) fl.push(f); for (const f of fl.slice(-12)) l12 += f.net;
+        return `<tr><td>${esc(p.name)}<div class="psub">${(PROP_TYPES[p.type] || PROP_TYPES.house)[0]}${p.address ? ' · ' + esc(p.address) : ''}${p.co_owners ? ' · with ' + esc(p.co_owners) : ''}</div></td>
+          ${td(shareLbl(p))}${td(m(cv(s.invested)))}${td(m(cv(s.value)))}${td(m(cv(l12)), sgn(l12))}</tr>`; }).join('') + `</tbody></table>`;
+  }
+  /* accounts */
+  const as = q('SELECT * FROM accounts ORDER BY type, name');
+  if (as.length) {
+    h += `<h2>Bank accounts, cash & credit cards</h2><table><thead><tr><th>Account</th><th>As of</th><th class="n">Share</th><th class="n">Balance</th></tr></thead><tbody>` +
+      as.map(a => { const b = acctBalance(a.id), v = b ? conv(b.balance * shareOf(a), a.currency || H, H) : null, cr = a.type === 'credit';
+        return `<tr><td>${esc(a.name)}<div class="psub">${ACCT_TYPES[a.type] || ''}${a.institution ? ' · ' + esc(a.institution) : ''}${cr && a.credit_limit ? ' · limit ' + money(a.credit_limit, a.currency || H, { dec: 0 }) : ''}${(a.currency || H) !== H && b ? ' · ' + money(b.balance, a.currency) : ''}</div></td>
+          <td>${b ? fmtDate(b.date) : ''}</td>${td(shareLbl(a))}${td(m(v), v < 0 ? 'down' : '')}</tr>`; }).join('') + `</tbody></table>`;
+  }
+  /* other assets */
+  const os = q('SELECT * FROM other_assets ORDER BY name');
+  if (os.length) {
+    h += `<h2>Other assets</h2><table><thead><tr><th>Asset</th><th class="n">Share</th><th class="n">Paid</th><th class="n">Value</th></tr></thead><tbody>` +
+      os.map(o => { const v = assetValue(o.id), k = shareOf(o), c = o.currency || H;
+        return `<tr><td>${esc(o.name)}<div class="psub">${(ASSET_TYPES[o.type] || ASSET_TYPES.other)[0]}${o.purchase_date ? ' · bought ' + fmtDate(o.purchase_date) : ''}</div></td>
+          ${td(shareLbl(o))}${td(m(o.purchase_price != null ? conv(o.purchase_price * k, c, H) : null))}${td(m(v ? conv(v.value * k, c, H) : null))}</tr>`; }).join('') + `</tbody></table>`;
+  }
+  /* income & expenses, last 12 months */
+  const model = ieModel();
+  if (Object.keys(model).length) {
+    const r = ieRange(model, 'L12');
+    const inc = [['Your income (transactions)', r.hin], ['Rent', r.rent], ['Other property income', r.other], ['Interest (estimated)', r.interest]].filter(x => x[1] > 0.5);
+    const exp = Object.entries(r.byKind).sort((a, b) => b[1] - a[1]).map(([k, v]) => [k.startsWith('cat:') ? k.slice(4) : (PITEMS[k] || PITEMS.other_cost)[0] + ' (property)', v]);
+    h += `<h2>Income & expenses <small>last 12 months</small></h2><div class="pcols"><table><thead><tr><th>Income</th><th class="n"></th><th class="n">%</th></tr></thead><tbody>` +
+      inc.map(([l, v]) => `<tr><td>${esc(l)}</td>${td(m(v))}${td(Math.round(v / (r.income || 1) * 100) + '%')}</tr>`).join('') + `<tr class="tot"><td>Total</td>${td(m(r.income))}<td></td></tr></tbody></table>
+      <table><thead><tr><th>Expenses</th><th class="n"></th><th class="n">%</th></tr></thead><tbody>` +
+      exp.map(([l, v]) => `<tr><td>${esc(l)}</td>${td(m(v))}${td(Math.round(v / (r.costs || 1) * 100) + '%')}</tr>`).join('') + `<tr class="tot"><td>Total</td>${td(m(r.costs))}<td></td></tr></tbody></table></div>
+      <table><tbody><tr class="tot"><td>Net (income less expenses)</td>${td(m(r.net), sgn(r.net))}</tr>
+      <tr><td>A month on average</td>${td(m(r.income / (r.months.length || 1)) + ' in · ' + m(r.costs / (r.months.length || 1)) + ' out')}</tr>
+      ${r.income ? `<tr><td>Share of income kept</td>${td(Math.round(r.net / r.income * 100) + '%', sgn(r.net))}</tr>` : ''}</tbody></table>`;
+    /* month by month */
+    h += `<table class="pmonths"><thead><tr><th>Month</th>${r.months.map(x => `<th class="n">${MONTHS[+x.key.slice(5, 7) - 1]}</th>`).join('')}</tr></thead><tbody>
+      <tr><td>In</td>${r.months.map(x => td(fmtNum(Math.round(x.inc)))).join('')}</tr><tr><td>Out</td>${r.months.map(x => td(fmtNum(Math.round(x.out)))).join('')}</tr>
+      <tr class="tot"><td>Net</td>${r.months.map(x => td(fmtNum(Math.round(x.inc - x.out)), sgn(x.inc - x.out))).join('')}</tr></tbody></table>`;
+  }
+  /* bills coming */
+  const due = reminders(30);
+  if (due.length) {
+    const A = Object.fromEntries(q('SELECT * FROM accounts').map(x => [x.id, x]));
+    h += `<h2>Coming in the next 30 days</h2><table><thead><tr><th>Date</th><th>What</th><th>Account</th><th class="n">Amount</th></tr></thead><tbody>` +
+      due.map(r => `<tr><td>${fmtDate(r.next_date)}</td><td>${esc(r.kind === 'transfer' ? 'Transfer' : (r.payee || cats().label(r.category_id)))}<div class="psub">${esc(FREQS[r.freq] || '')}</div></td><td>${esc((A[r.account_id] || {}).name || '')}</td>${td((r.kind === 'in' ? '+' : r.kind === 'out' ? '−' : '') + money(r.amount, (A[r.account_id] || {}).currency || H), r.kind === 'in' ? 'up' : '')}</tr>`).join('') + `</tbody></table>`;
+  }
+  h += `<footer class="pf">Made with KJT Invest ${APP_VERSION} · knowingjesus.today · printed from your own device; nothing was sent anywhere.</footer>`;
+  document.getElementById('print').innerHTML = h;
+  native('print', { title: 'KJT Invest report ' + now }).then(r => {
+    if (r && r.error === 'unknown command') window.print();
+    else if (r && r.error) toast('Could not print: ' + r.error);
+  });
 }
 
 /* ---------------- updates ----------------
@@ -1935,7 +2511,7 @@ window.__updateStatus = msg => toast(msg);
     }
     db = opened || new SQL.Database();
     native('secure', { on: !!CRYPT });
-    prepareDb(); loadFx();
+    prepareDb(); loadFx(); processRecurring();
     await saveNow();   /* also stores any upgrade of an older database */
     render();
     if (getSetting('auto_update', '1') === '1') { const uc = getSetting('update_checked'); if (!uc || Date.now() - new Date(uc) > 3600000) setTimeout(() => checkUpdate(false), 4000); }

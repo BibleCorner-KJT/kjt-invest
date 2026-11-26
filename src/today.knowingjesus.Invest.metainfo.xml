@@ -25,6 +25,7 @@
   <branding><color type="primary" scheme_preference="light">#f3e2b8</color><color type="primary" scheme_preference="dark">#3e093f</color></branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.8" date="2026-11-26"><description><p>Money: transactions kept simple (categories with one level of subcategories you can rename), duplicate, repeating transactions with reminders, links to what you own, and smart reports. Credit cards with limits. Unequal ownership shares. Spreadsheet (CSV) export and a printable report you can save as a PDF. Menus with pictures.</p></description></release>
     <release version="1.7" date="2026-11-26"><description><p>Simpler menus: Overview, Assets (metals, property, cash, other assets) and Markets (metal prices, the price chart and currencies). The app finds its own updates and opens them in Software.</p></description></release>
     <release version="1.6.1" date="2026-11-26"><description><p>Dark mode: the boxes and lists you choose from are readable again (they were white on white on Linux).</p></description></release>
     <release version="1.6" date="2026-11-26"><description><p>Income and expenses for everything you own (rent, other income, interest; every property cost), month by month. The app updates itself: GNOME Software keeps it up to date from its own channel. The summary box is no taller than its page.</p></description></release>

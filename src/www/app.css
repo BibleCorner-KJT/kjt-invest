@@ -337,3 +337,84 @@ nav#tabs button { font-size: .74rem; }
 .subnav button { border: 0; background: transparent; border-radius: 9px; padding: 9px 2px; font-weight: 650; font-size: .82rem; color: var(--muted); cursor: pointer; }
 .subnav button.on { background: var(--card); color: var(--brand); box-shadow: var(--shadow); }
 .hero a { color: var(--brand); text-decoration: none; font-weight: 600; }
+
+/* ---------- 1.8: livelier menus with pictures ---------- */
+nav#tabs { padding-top: 4px; }
+nav#tabs button { gap: 3px; font-size: .74rem; font-weight: 600; letter-spacing: .01em; }
+nav#tabs .ico { display: grid; place-items: center; width: 56px; height: 30px; border-radius: 16px; transition: background .18s; }
+nav#tabs svg { width: 23px; height: 23px; stroke-width: 1.8; }
+nav#tabs svg .f, .sico .f { fill: currentColor; fill-opacity: .14; }
+nav#tabs button.on .ico { background: var(--brand); color: var(--brand-ink); }
+nav#tabs button.on svg .f { fill-opacity: .3; }
+nav#tabs button.on span { color: var(--brand); }
+nav#tabs button:not(.on):hover .ico { background: var(--soft); }
+.subnav { gap: 5px; padding: 5px; }
+.subnav button { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 7px 2px 6px; font-size: .78rem; line-height: 1.15; }
+.subnav button span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.subnav button svg { width: 22px; height: 22px; flex: none; }
+.sico { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.subnav button:not(.on) .micon { opacity: .8; }
+.subnav button.on { color: var(--brand); }
+.subnav button.on .sico .f { fill-opacity: .25; }
+h2.sect { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 6px; }
+h2.sect::before { content: ""; width: 4px; height: .95em; border-radius: 2px; background: var(--brand); align-self: center; margin-right: 2px; }
+h2.sect .sub { margin-left: 0; }
+
+/* ---------- 1.8: money ---------- */
+.txlist { display: grid; }
+.txday { font-size: .78rem; font-weight: 750; color: var(--brand); text-transform: uppercase; letter-spacing: .04em; padding: 12px 2px 4px; border-bottom: 1px solid var(--line); }
+.txday:first-child { padding-top: 0; }
+.txday.small { text-transform: none; letter-spacing: 0; font-weight: 650; color: var(--muted); border: 0; padding: 8px 2px 0; }
+.txrow { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 9px 2px; border-bottom: 1px solid var(--soft); cursor: pointer; }
+.txrow:active { background: var(--soft); }
+.txl { min-width: 0; }
+.txl .txt { font-weight: 650; overflow-wrap: anywhere; }
+.txl .sub { font-size: .8rem; }
+.txa { font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.badge { display: inline-block; font-size: .68rem; font-weight: 650; padding: 1px 7px; border-radius: 9px; background: var(--soft); color: var(--muted); vertical-align: 2px; }
+.txn.off { opacity: .55; }
+.txn.inc { border-left-color: var(--up); }
+.txn.cost { border-left-color: var(--down); }
+.notes { margin: 10px 0 0; padding-left: 18px; display: grid; gap: 6px; }
+.notes li { line-height: 1.4; }
+.catbars { display: grid; gap: 10px; }
+.cbt { display: flex; justify-content: space-between; gap: 10px; font-size: .9rem; margin-bottom: 4px; }
+.cbb { height: 8px; border-radius: 4px; background: var(--soft); overflow: hidden; }
+.cbb i { display: block; height: 100%; border-radius: 4px; background: var(--c1); }
+.catlist { display: grid; gap: 8px; }
+.cat { border: 1px solid var(--line); border-radius: 10px; padding: 6px 8px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.catn { border: 0; background: none; color: var(--ink); font: inherit; padding: 5px 6px; border-radius: 8px; cursor: pointer; text-align: left; }
+.catn:first-child { font-weight: 700; width: 100%; }
+.catn.sub2 { background: var(--soft); font-size: .86rem; }
+.catadd { border: 1px dashed var(--line); background: none; color: var(--brand); font: inherit; font-size: .82rem; padding: 4px 8px; border-radius: 8px; cursor: pointer; }
+.limitbar { height: 8px; border-radius: 4px; background: var(--soft); overflow: hidden; margin-top: 8px; }
+.limitbar i { display: block; height: 100%; border-radius: 4px; background: var(--c1); }
+.limitbar.hi i { background: var(--down); }
+.hero .limitbar { margin: 12px auto 0; max-width: 320px; }
+
+/* ---------- 1.8: the printable report (only shows on paper / PDF) ---------- */
+#print { display: none; }
+@media print {
+  @page { margin: 14mm 12mm; }
+  html, body { background: #fff !important; color: #111 !important; height: auto !important; overflow: visible !important; }
+  body > *:not(#print) { display: none !important; }
+  #print { display: block !important; font: 10.5pt/1.35 system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif; color: #111; }
+  #print .ph { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2.5pt solid #5b1f61; padding-bottom: 6pt; margin-bottom: 4pt; }
+  #print h1 { font-size: 20pt; margin: 0; color: #3e093f; }
+  #print .pmeta { color: #555; font-size: 9.5pt; }
+  #print .plogo { font-weight: 800; color: #5b1f61; font-size: 12pt; }
+  #print h2 { font-size: 12.5pt; color: #3e093f; margin: 14pt 0 4pt; break-after: avoid; }
+  #print h2 small { font-weight: 400; color: #666; font-size: 8.5pt; margin-left: 6pt; }
+  #print table { width: 100%; border-collapse: collapse; margin: 2pt 0 6pt; break-inside: auto; }
+  #print tr { break-inside: avoid; }
+  #print th { text-align: left; font-size: 8.5pt; text-transform: uppercase; letter-spacing: .04em; color: #555; border-bottom: 1pt solid #999; padding: 3pt 4pt; }
+  #print td { border-bottom: .5pt solid #ddd; padding: 3.5pt 4pt; vertical-align: top; }
+  #print .n { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  #print tr.tot td { font-weight: 700; border-top: 1pt solid #999; border-bottom: 0; }
+  #print .psub { font-size: 8.5pt; color: #666; }
+  #print .up { color: #146c3c; } #print .down { color: #b0261c; }
+  #print .pcols { display: grid; grid-template-columns: 1fr 1fr; gap: 12pt; }
+  #print .pmonths td, #print .pmonths th { font-size: 8pt; padding: 2pt 3pt; }
+  #print .pnote { font-size: 8.5pt; color: #666; }
+  #print .pf { margin-top: 16pt; border-top: .5pt solid #ccc; padding-top: 5pt; font-size: 8pt; color: #777; }
+}

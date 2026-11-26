@@ -177,7 +177,7 @@ public class MainActivity extends Activity {
             HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
             c.setConnectTimeout(15000);
             c.setReadTimeout(20000);
-            c.setRequestProperty("User-Agent", a.optString("ua", "KJTInvest/1.7"));
+            c.setRequestProperty("User-Agent", a.optString("ua", "KJTInvest/1.8"));
             c.setRequestProperty("Accept", "application/json, application/xml, text/xml");
             int status = c.getResponseCode();
             InputStream in = status < 400 ? c.getInputStream() : c.getErrorStream();
@@ -212,6 +212,18 @@ public class MainActivity extends Activity {
         } else if ("appInfo".equals(cmd)) {
             o.put("platform", "android");
             o.put("version", getPackageManager().getPackageInfo(getPackageName(), 0).versionName);
+            reply(id, o);
+        } else if ("print".equals(cmd)) {
+            /* the printable report: Android's print screen, where "Save as PDF" is one of the printers */
+            final String title = a.optString("title", "KJT Invest report");
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    android.print.PrintManager pm = (android.print.PrintManager) getSystemService(PRINT_SERVICE);
+                    pm.print(title, web.createPrintDocumentAdapter(title), new android.print.PrintAttributes.Builder().build());
+                }
+            });
+            o.put("ok", true);
             reply(id, o);
         } else if ("openUrl".equals(cmd)) {
             final String u = a.getString("url");

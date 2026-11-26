@@ -20,7 +20,7 @@ import urllib.request
 import gi
 
 APP_ID = 'today.knowingjesus.Invest'
-VERSION = '1.7'
+VERSION = '1.8'
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(os.environ.get('XDG_DATA_HOME') or os.path.expanduser('~/.local/share'), 'kjt-invest')
 OLD_DIR = os.path.join(os.path.expanduser('~/.local/share'), 'investment-tracker')   # where 1.0-1.2 (Investment Tracker) kept the data
@@ -151,6 +151,11 @@ class Tracker:
                 self.reply(msg_id, {'platform': 'linux', 'version': VERSION, 'channel': IN_FLATPAK, 'arch': 'aarch64' if platform.machine() in ('aarch64', 'arm64') else 'x86_64'})
             elif cmd == 'installUpdate':
                 threading.Thread(target=self.install_update, args=(msg_id, args.get('url', ''), args.get('sha256', '')), daemon=True).start()
+            elif cmd == 'print':
+                # the printable report: the usual print window, where "Print to File" makes a PDF
+                op = WebKit.PrintOperation.new(self.view)
+                op.run_dialog(self.win)
+                self.reply(msg_id, {'ok': True})
             elif cmd == 'openUrl':
                 url = args.get('url', '')
                 if url.startswith('https://'):
