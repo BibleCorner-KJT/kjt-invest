@@ -1,21 +1,21 @@
 {
   "android": {
-    "version": "1.7",
+    "version": "1.8",
     "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-android.apk",
-    "sha256": "f55a51f629abab024e634015fcd1dc588058516cfb8a642e03e648bf4f1b8546",
-    "notes": "Simpler menus: Overview, Assets, Markets"
+    "sha256": "86a4e9a258b80d689f9a9131bae01efe007b4afdb4501d6cf9430fa495efc54c",
+    "notes": "Money: transactions, repeating bills and reminders, smart reports. Credit cards. Unequal shares. CSV and a printable report (PDF). Menus with pictures."
   },
   "linux": {
-    "version": "1.7",
+    "version": "1.8",
     "page": "https://github.com/BibleCorner-KJT/kjt-invest/tree/releases",
-    "notes": "Simpler menus: Overview, Assets, Markets",
+    "notes": "Money: transactions, repeating bills and reminders, smart reports. Credit cards. Unequal shares. CSV and a printable report (PDF). Menus with pictures.",
     "x86_64": {
       "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.flatpak",
-      "sha256": "f6a7ca7cb886e99624b3a94a97a0d7560de6ae254a73b15c750966a79d78e284"
+      "sha256": "af530e55579aaef29a1ccc9179a849bfafbeb4caafde16e86a82ea945df2699e"
     },
     "aarch64": {
       "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux-arm.flatpak",
-      "sha256": "55c06c3158f640fae0ab4241a57dcc756a96fc13f7953bcb1373cbf2dee5520f"
+      "sha256": "74511100e2cd7d2ea20a68cc73276eacac79884915b220279fdd1feda1413dca"
     }
   }
 }
