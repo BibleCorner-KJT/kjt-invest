@@ -212,7 +212,7 @@ public class MainActivity extends Activity {
             HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
             c.setConnectTimeout(15000);
             c.setReadTimeout(20000);
-            c.setRequestProperty("User-Agent", a.optString("ua", "KJTInvest/1.10"));
+            c.setRequestProperty("User-Agent", a.optString("ua", "KJTInvest/1.11"));
             c.setRequestProperty("Accept", "application/json, application/xml, text/xml");
             int status = c.getResponseCode();
             InputStream in = status < 400 ? c.getInputStream() : c.getErrorStream();

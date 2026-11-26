@@ -1,9 +1,9 @@
-/* KJT Invest 1.10 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
+/* KJT Invest 1.11 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
    All data stays in one SQLite file on the device. The only network calls are the
    price updates (metal prices from gold-api.com, exchange rates from the European Central Bank). */
 'use strict';
 
-const APP_VERSION = '1.10';
+const APP_VERSION = '1.11';
 const SCHEMA = 9;
 const OZT_G = 31.1034768;
 const METALS = [
@@ -1724,7 +1724,7 @@ function goBack() {
 window.__onBack = () => goBack();
 window.addEventListener('resize', () => { for (const [id, k] of [['heroS', 'hpage'], ['cfS', 'cfPage']]) { const el = document.getElementById(id); if (el) fitSwipe(el, state[k] || 0); } });
 view().addEventListener('click', e => {
-  const el = e.target.closest('[data-act],[data-go],[data-metal],[data-prop],[data-item],[data-pval],[data-cfy],[data-cfp],[data-rent],[data-price],[data-fx],[data-chart],[data-range],[data-acct],[data-bal],[data-asset],[data-aval],[data-hpage],[data-prange],[data-unfav],[data-ie],[data-asec],[data-msec],[data-txm],[data-tx],[data-rec],[data-cat],[data-addsub],[data-addcat],[data-rp],[data-remdo],[data-remskip],[data-loan],[data-lpay]'); if (!el) return;
+  const el = e.target.closest('[data-act],[data-go],[data-metal],[data-prop],[data-item],[data-pval],[data-cfy],[data-cfp],[data-rent],[data-price],[data-fx],[data-chart],[data-range],[data-acct],[data-bal],[data-asset],[data-aval],[data-hpage],[data-prange],[data-unfav],[data-ie],[data-asec],[data-msec],[data-txm],[data-tx],[data-rec],[data-cat],[data-addsub],[data-addcat],[data-rp],[data-remdo],[data-remskip],[data-loan],[data-lpay],[data-txper]'); if (!el) return;
   const d = el.dataset;
   if (d.chart) { state.chart = d.chart; const st = view().scrollTop; render(); view().scrollTop = st; }
   else if (d.range) { state.range = d.range; const st = view().scrollTop; render(); view().scrollTop = st; }
@@ -1738,6 +1738,7 @@ view().addEventListener('click', e => {
   else if (d.rent) rentForm(state.propertyId, +d.rent);
   else if (d.asec) { state.tab = d.asec; state.propertyId = null; state.accountId = null; state.assetId = null; state.loanId = null; render(); view().scrollTop = 0; }
   else if (d.msec) { state.msec = d.msec; render(); view().scrollTop = 0; }
+  else if (d.txper) { state.txPer = d.txper; render(); }
   else if (d.txm) { state.txMonth = d.txm; const st = view().scrollTop; render(); view().scrollTop = st; }
   else if (d.tx) { if (state.sel) pickTx(el, +d.tx); else txForm(+d.tx); }
   else if (d.loan) { state.loanId = +d.loan; render(); view().scrollTop = 0; }
@@ -1776,7 +1777,10 @@ view().addEventListener('click', e => {
     case 'edit-loan': loanForm(+d.id); break;
     case 'add-loanpay': loanPayForm(+d.id); break;
     case 'bank-import': bankImport(d.id ? +d.id : null); break;
+    case 'tx-clear': state.txCat = ''; state.txSearch = ''; render(); break;
     case 'select-tx': state.sel = new Set(); render(); selBar(); break;
+    case 'sort-uncat': state.txCat = 'none'; render(); state.sel = new Set(Array.from(view().querySelectorAll('[data-tx]')).map(r => +r.dataset.tx)); render(); selBar();
+      toast('All of them are ticked: press Edit to choose a category, or untick some first'); break;
     case 'print-report': printReport(); break;
     case 'add-asset': assetForm(); break;
     case 'check-update': checkUpdate(true); break;
@@ -2189,39 +2193,64 @@ function renderMoney() {
   view().innerHTML = h;
   const s = document.getElementById('tx-search'); if (s) { s.oninput = () => { state.txSearch = s.value; clearTimeout(s._t); s._t = setTimeout(() => { const pos = s.selectionStart; render(); const n = document.getElementById('tx-search'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }, 350); }; }
   const fa = document.getElementById('tx-acct'); if (fa) fa.onchange = () => { state.txAcct = fa.value; render(); };
+  const fc = document.getElementById('tx-cat'); if (fc) fc.onchange = () => { state.txCat = fc.value; render(); };
+  const fs = document.getElementById('tx-sort'); if (fs) fs.onchange = () => { state.txSort = fs.value; render(); };
 }
+const TXSORTS = [['new', 'Newest first'], ['old', 'Oldest first'], ['big', 'Largest amount'], ['small', 'Smallest amount'], ['payee', 'Payee A–Z'], ['cat', 'Category']];
 function txListHtml() {
+  const per = state.txPer || 'm', sort = state.txSort || 'new', H = home();
   const ym = state.txMonth || today().slice(0, 7), y = +ym.slice(0, 4), m = +ym.slice(5, 7);
-  const prev = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`, next = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`;
-  const accts = q('SELECT * FROM accounts ORDER BY name'), A = Object.fromEntries(accts.map(a => [a.id, a]));
-  let sql = 'SELECT * FROM transactions WHERE date>=? AND date<=?', p = [ym + '-01', ym + '-31'];
+  let from, to, prev, next, label;
+  if (per === 'y') { from = `${y}-01-01`; to = `${y}-12-31`; prev = `${y - 1}-${ym.slice(5)}`; next = `${y + 1}-${ym.slice(5)}`; label = String(y); }
+  else if (per === 'all') { from = '0000-01-01'; to = '9999-12-31'; label = 'All time'; }
+  else { from = ym + '-01'; to = ym + '-31'; prev = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`; next = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`;
+    label = new Date(ym + '-15T12:00:00').toLocaleDateString('en-CA', { year: 'numeric', month: 'long' }); }
+  const accts = q('SELECT * FROM accounts ORDER BY name'), A = Object.fromEntries(accts.map(a => [a.id, a])), C = cats();
+  let sql = 'SELECT * FROM transactions WHERE date>=? AND date<=?', p = [from, to];
   if (state.txAcct) { sql += ' AND (account_id=? OR to_account_id=?)'; p.push(+state.txAcct, +state.txAcct); }
+  if (state.txCat === 'none') sql += " AND category_id IS NULL AND kind<>'transfer'";
+  else if (state.txCat) { const ids = [+state.txCat].concat(C.rows.filter(c => c.parent_id === +state.txCat).map(c => c.id)); sql += ` AND category_id IN (${ids.map(() => '?').join(',')})`; p.push(...ids); }
   const srch = (state.txSearch || '').trim().toLowerCase();
   let txs = q(sql + ' ORDER BY date DESC, id DESC', p);
-  if (srch) txs = txs.filter(t => (t.payee || '').toLowerCase().includes(srch) || (t.note || '').toLowerCase().includes(srch) || cats().label(t.category_id).toLowerCase().includes(srch) || String(t.amount).includes(srch));
-  const H = home(); let inn = 0, out = 0;
-  for (const t of txs) { if (t.kind === 'transfer') continue; const v = conv(t.amount, (A[t.account_id] || {}).currency || H, H) || 0; if (t.kind === 'in') inn += v; else out += v; }
+  if (srch) txs = txs.filter(t => (t.payee || '').toLowerCase().includes(srch) || (t.note || '').toLowerCase().includes(srch) || C.label(t.category_id).toLowerCase().includes(srch) || String(t.amount).includes(srch));
+  const hv = t => conv(t.amount, (A[t.account_id] || {}).currency || H, H) || 0;
+  if (sort === 'old') txs.reverse();
+  else if (sort === 'big') txs.sort((a, b) => hv(b) - hv(a));
+  else if (sort === 'small') txs.sort((a, b) => hv(a) - hv(b));
+  else if (sort === 'payee') txs.sort((a, b) => (a.payee || '~').localeCompare(b.payee || '~', 'en', { sensitivity: 'base' }) || (b.date < a.date ? -1 : 1));
+  else if (sort === 'cat') txs.sort((a, b) => C.label(a.category_id).localeCompare(C.label(b.category_id)) || (b.date < a.date ? -1 : 1));
+  let inn = 0, out = 0;
+  for (const t of txs) { if (t.kind === 'transfer') continue; if (t.kind === 'in') inn += hv(t); else out += hv(t); }
+  const unsorted = q(`SELECT COUNT(*) n FROM transactions WHERE category_id IS NULL AND kind<>'transfer' AND date>=? AND date<=?${state.txAcct ? ' AND account_id=' + (+state.txAcct) : ''}`, [from, to])[0].n;
+  const tops = C.rows.filter(c => !c.parent_id);
   let h = `<h2 class="sect">Transactions</h2><div class="card">
-    <div class="ysel"><button data-txm="${prev}" aria-label="Previous month">‹</button><b>${new Date(ym + '-15T12:00:00').toLocaleDateString('en-CA', { year: 'numeric', month: 'long' })}</b><button data-txm="${next}" aria-label="Next month">›</button></div>
+    <div class="segs">${[['m', 'Month'], ['y', 'Year'], ['all', 'All']].map(([k, l]) => `<button class="seg${per === k ? ' on' : ''}" data-txper="${k}">${l}</button>`).join('')}</div>
+    <div class="ysel">${prev ? `<button data-txm="${prev}" aria-label="Before">‹</button>` : '<span></span>'}<b>${label}</b>${next ? `<button data-txm="${next}" aria-label="After">›</button>` : '<span></span>'}</div>
     <div class="f2"><label class="f"><span>Account</span><select id="tx-acct"><option value="">All accounts</option>${accts.map(a => `<option value="${a.id}"${String(a.id) === String(state.txAcct || '') ? ' selected' : ''}>${esc(a.name)}</option>`).join('')}</select></label>
-    <label class="f"><span>Search</span><input id="tx-search" value="${esc(state.txSearch || '')}" placeholder="payee, category, note…" autocomplete="off"></label></div>
+    <label class="f"><span>Category</span><select id="tx-cat"><option value="">All categories</option><option value="none"${state.txCat === 'none' ? ' selected' : ''}>No category yet</option>${tops.map(c => `<option value="${c.id}"${String(c.id) === String(state.txCat || '') ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label></div>
+    <div class="f2"><label class="f"><span>Sort</span><select id="tx-sort">${TXSORTS.map(([k, l]) => `<option value="${k}"${k === sort ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+    <label class="f"><span>Search</span><input id="tx-search" value="${esc(state.txSearch || '')}" placeholder="payee, note, amount…" autocomplete="off"></label></div>
     <div class="ie3"><div class="stat"><div class="k">In</div><div class="v up">${whole(inn, H)}</div></div><div class="stat"><div class="k">Out</div><div class="v down">${whole(out, H)}</div></div><div class="stat"><div class="k">Net</div><div class="v ${signCls(inn - out)}">${whole(inn - out, H)}</div></div></div>
+    ${unsorted && state.txCat !== 'none' ? `<button class="btn wide light sortcta" data-act="sort-uncat"><b>${unsorted}</b> without a category: choose one for them</button>` : ''}
     <div class="btns"><button class="btn" data-act="add-tx">+ Add transaction</button><button class="btn light" data-act="bank-import"${state.txAcct ? ` data-id="${state.txAcct}"` : ''}>Import bank file</button></div>
     ${txs.length ? `<div class="btns"><button class="btn light" data-act="select-tx">Select several…</button></div>` : ''}</div>`;
-  if (!txs.length) return h + `<div class="card empty">No transactions in this month${srch ? ' match your search' : ''}.</div>`;
-  let day = '';
+  if (!txs.length) return h + `<div class="card empty">${state.txCat === 'none' ? 'Every transaction here has a category ✓' : 'No transactions here' + (srch || state.txCat ? ' with these filters' : '') + '.'}${state.txCat || srch ? '<div class="btns"><button class="btn light" data-act="tx-clear">Show all transactions</button></div>' : ''}</div>`;
+  /* headings: the day when sorted by date, the category when sorted by category, none otherwise (each row then shows its date) */
+  const byDate = sort === 'new' || sort === 'old', head = t => byDate ? t.date : sort === 'cat' ? C.label(t.category_id) : null;
+  let cur = null;
   h += `<div class="card"><div class="txlist">`;
   for (const t of txs) {
-    if (t.date !== day) { day = t.date; h += `<div class="txday">${new Date(day + 'T12:00:00').toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric' })}</div>`; }
-    h += txRow(t, A);
+    const k = head(t);
+    if (k != null && k !== cur) { cur = k; h += `<div class="txday">${byDate ? new Date(k + 'T12:00:00').toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric', year: per === 'm' ? undefined : 'numeric' }) : esc(k)}</div>`; }
+    h += txRow(t, A, !byDate);
   }
   return h + `</div></div>`;
 }
-function txRow(t, A) {
+function txRow(t, A, withDate) {
   A = A || Object.fromEntries(q('SELECT * FROM accounts').map(a => [a.id, a]));
   const a = A[t.account_id] || {}, c = a.currency || home(), to = t.to_account_id ? A[t.to_account_id] : null;
   const title = t.kind === 'transfer' ? `Transfer to ${esc(to ? to.name : '?')}` : esc(t.payee || cats().label(t.category_id));
-  const sub = t.kind === 'transfer' ? esc(a.name || '') + (t.note ? ' · ' + esc(t.note) : '') : `${esc(cats().label(t.category_id))} · ${esc(a.name || '')}${t.note ? ' · ' + esc(t.note) : ''}`;
+  const sub = (withDate ? `<b class="txdate">${fmtDate(t.date)}</b> · ` : '') + (t.kind === 'transfer' ? esc(a.name || '') + (t.note ? ' · ' + esc(t.note) : '') : `${esc(cats().label(t.category_id))} · ${esc(a.name || '')}${t.note ? ' · ' + esc(t.note) : ''}`);
   const sign = t.kind === 'in' ? '+' : t.kind === 'out' ? '−' : '';
   const pk = state.sel ? `<span class="tick${state.sel.has(t.id) ? ' on' : ''}" aria-hidden="true"></span>` : '';
   return `<div class="txrow${state.sel && state.sel.has(t.id) ? ' picked' : ''}" data-tx="${t.id}">${pk}<div class="txl"><div class="txt">${title}${t.recurring_id ? ' <span class="badge">↻</span>' : ''}${t.link ? ' <span class="badge">' + esc(linkLabel(t.link)) + '</span>' : ''}</div><div class="sub">${sub}</div></div>
