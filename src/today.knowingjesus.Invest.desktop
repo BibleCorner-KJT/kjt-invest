@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=KJT Invest
+GenericName=Private investment tracker
+Comment=Precious metals, real estate, cash and other assets, kept private on your device
+Exec=kjt-invest
+Icon=today.knowingjesus.Invest
+Terminal=false
+Categories=Office;Finance;
+Keywords=gold;silver;metals;bullion;property;real estate;rent;savings;portfolio;net worth;KJT;Knowing Jesus Today;
+StartupNotify=true
+X-Purism-FormFactor=Workstation;Mobile;

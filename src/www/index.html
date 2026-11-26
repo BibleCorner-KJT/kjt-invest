@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' data:; connect-src *">
+<title>KJT Invest</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header id="top">
+  <button id="back" class="iconbtn" aria-label="Back" hidden>
+    <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>
+  </button>
+  <h1 id="title">KJT Invest</h1>
+  <button id="refresh" class="iconbtn" aria-label="Update prices">
+    <svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5"/></svg>
+  </button>
+  <button id="settings" class="iconbtn" aria-label="Settings">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+  </button>
+</header>
+<main id="view"><p class="loading">Opening…</p></main>
+<nav id="tabs">
+  <button data-tab="overview" class="on"><svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/></svg><span>Overview</span></button>
+  <button data-tab="metals"><svg viewBox="0 0 24 24"><path d="M3 18l3-6h12l3 6zM7 12l2-5h6l2 5"/></svg><span>Metals</span></button>
+  <button data-tab="property"><svg viewBox="0 0 24 24"><path d="M3 11l9-7 9 7M5 10v10h14V10M10 20v-6h4v6"/></svg><span>Property</span></button>
+  <button data-tab="accounts"><svg viewBox="0 0 24 24"><path d="M3 7h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM3 7l13-3v3M16 13.5h2"/></svg><span>Cash</span></button>
+  <button data-tab="assets"><svg viewBox="0 0 24 24"><path d="M3 16v-3l2-5h14l2 5v3z"/><path d="M5 13h14"/><circle cx="7.5" cy="17" r="1.8"/><circle cx="16.5" cy="17" r="1.8"/></svg><span>Assets</span></button>
+</nav>
+<div id="sheet" hidden><div class="sheet-bg"></div><div class="sheet-box"></div></div>
+<div id="dlg" hidden><div class="dlg-bg"></div><div class="dlg-box"><p></p><div class="btns"><button class="btn light" data-n>Cancel</button><button class="btn" data-y>Delete</button></div></div></div>
+<div id="lock" hidden></div>
+<div id="toast" hidden></div>
+<script src="sql-wasm-b64.js"></script>
+<script src="sql-wasm.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

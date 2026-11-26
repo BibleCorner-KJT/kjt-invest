@@ -1,0 +1,7 @@
+build/
+dist/
+*.keystore
+*.jks
+*pass*.txt
+.flatpak-builder/
+repo/

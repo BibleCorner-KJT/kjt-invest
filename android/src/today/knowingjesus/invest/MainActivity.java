@@ -1,0 +1,287 @@
+package today.knowingjesus.invest;
+
+import android.app.Activity;
+import android.content.Intent;
+import android.net.Uri;
+import android.os.Bundle;
+import android.util.Base64;
+import android.os.Build;
+import android.view.Window;
+import android.view.WindowManager;
+import android.webkit.JavascriptInterface;
+import android.webkit.ValueCallback;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+
+import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+
+/**
+ * KJT Invest (Knowing Jesus Today) for Android: a window that shows the app screens (assets/www) and gives them
+ * a few native abilities: keep the database file, fetch prices, export and import the database.
+ * No analytics, no accounts, no other network use.
+ */
+public class MainActivity extends Activity {
+    private static final int REQ_EXPORT = 41;
+    private static final int REQ_IMPORT = 42;
+
+    private WebView web;
+    private File dbFile;
+    private String exportId, importId;
+    private byte[] exportBytes;
+
+    @Override
+    protected void onCreate(Bundle state) {
+        super.onCreate(state);
+        requestWindowFeature(Window.FEATURE_NO_TITLE);
+        dbFile = new File(getFilesDir(), "portfolio.sqlite");
+        WebView.setWebContentsDebuggingEnabled(false);
+        web = new WebView(this);
+        WebSettings s = web.getSettings();
+        s.setJavaScriptEnabled(true);
+        s.setAllowFileAccess(true);
+        s.setAllowContentAccess(false);
+        s.setDomStorageEnabled(false);
+        s.setGeolocationEnabled(false);
+        s.setSaveFormData(false);
+        s.setSupportZoom(false);
+        web.addJavascriptInterface(new Bridge(), "AndroidNative");
+        web.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView v, String url) {
+                return url == null || !url.startsWith("file:///android_asset/");
+            }
+        });
+        web.loadUrl("file:///android_asset/www/index.html");
+        setContentView(web);
+    }
+
+    @Override
+    public void onBackPressed() {
+        web.evaluateJavascript("window.__onBack ? window.__onBack() : false", new ValueCallback<String>() {
+            @Override
+            public void onReceiveValue(String handled) {
+                if (!"true".equals(handled)) finish();
+            }
+        });
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (web != null) web.destroy();
+        super.onDestroy();
+    }
+
+    /* ---------- replies to the screens ---------- */
+    private void reply(final String id, final JSONObject data) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                web.evaluateJavascript("window.__nativeReply(" + JSONObject.quote(id) + "," + JSONObject.quote(data.toString()) + ")", null);
+            }
+        });
+    }
+
+    private void replyError(String id, Throwable e) {
+        JSONObject o = new JSONObject();
+        try { o.put("error", String.valueOf(e.getMessage())); } catch (Exception ignored) { }
+        reply(id, o);
+    }
+
+    private static byte[] readAll(InputStream in) throws Exception {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] buf = new byte[16384];
+        int n;
+        while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+        in.close();
+        return out.toByteArray();
+    }
+
+    private static void copy(File from, File to) throws Exception {
+        InputStream in = new FileInputStream(from);
+        OutputStream out = new FileOutputStream(to);
+        byte[] buf = new byte[16384];
+        int n;
+        while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+        in.close();
+        out.close();
+    }
+
+    /* ---------- abilities the screens can use ---------- */
+    private class Bridge {
+        @JavascriptInterface
+        public void call(final String id, final String cmd, final String argsJson) {
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        handle(id, cmd, new JSONObject(argsJson == null ? "{}" : argsJson));
+                    } catch (Throwable e) {
+                        replyError(id, e);
+                    }
+                }
+            }).start();
+        }
+    }
+
+    private void handle(final String id, String cmd, JSONObject a) throws Exception {
+        JSONObject o = new JSONObject();
+        if ("loadDb".equals(cmd)) {
+            if (dbFile.exists() && dbFile.length() > 0) {
+                /* a copy of the database as it was when the app opened: one step back if something goes wrong */
+                copy(dbFile, new File(getFilesDir(), "portfolio.backup.sqlite"));
+                o.put("b64", Base64.encodeToString(readAll(new FileInputStream(dbFile)), Base64.NO_WRAP));
+            }
+            reply(id, o);
+        } else if ("saveDb".equals(cmd)) {
+            byte[] data = Base64.decode(a.getString("b64"), Base64.DEFAULT);
+            File tmp = new File(getFilesDir(), "portfolio.sqlite.tmp");
+            FileOutputStream out = new FileOutputStream(tmp);
+            out.write(data);
+            out.getFD().sync();
+            out.close();
+            if (!tmp.renameTo(dbFile)) throw new Exception("could not write the database");
+            o.put("ok", true);
+            reply(id, o);
+        } else if ("httpGet".equals(cmd)) {
+            String url = a.getString("url");
+            if (!url.startsWith("https://")) throw new Exception("only https");
+            HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+            c.setConnectTimeout(15000);
+            c.setReadTimeout(20000);
+            c.setRequestProperty("User-Agent", "KJTInvest/1.3");
+            c.setRequestProperty("Accept", "application/json, application/xml, text/xml");
+            int status = c.getResponseCode();
+            InputStream in = status < 400 ? c.getInputStream() : c.getErrorStream();
+            String body = in == null ? "" : new String(readAll(in), "UTF-8");
+            c.disconnect();
+            o.put("status", status);
+            o.put("body", body);
+            reply(id, o);
+        } else if ("getPrefs".equals(cmd)) {
+            /* small settings that must be readable before unlocking (look, passcode length, fingerprint) */
+            File f = new File(getFilesDir(), "prefs.json");
+            o.put("json", f.exists() ? new String(readAll(new FileInputStream(f)), "UTF-8") : "{}");
+            reply(id, o);
+        } else if ("setPrefs".equals(cmd)) {
+            FileOutputStream out = new FileOutputStream(new File(getFilesDir(), "prefs.json"));
+            out.write(a.getString("json").getBytes("UTF-8"));
+            out.close();
+            o.put("ok", true);
+            reply(id, o);
+        } else if ("secure".equals(cmd)) {
+            /* with a passcode, the app's screen is hidden in the recent-apps view and from screenshots */
+            final boolean on = a.optBoolean("on");
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    if (on) getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+                    else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
+                }
+            });
+            o.put("ok", true);
+            reply(id, o);
+        } else if ("bioAvailable".equals(cmd)) {
+            boolean av = Build.VERSION.SDK_INT >= 28 && Bio.available(this);
+            o.put("available", av);
+            o.put("kind", "fingerprint or face");
+            reply(id, o);
+        } else if ("bioDisable".equals(cmd)) {
+            if (Build.VERSION.SDK_INT >= 28) Bio.disable(this);
+            o.put("ok", true);
+            reply(id, o);
+        } else if ("bioEnable".equals(cmd) || "bioUnlock".equals(cmd)) {
+            if (Build.VERSION.SDK_INT < 28) { o.put("error", "needs Android 9 or later"); reply(id, o); return; }
+            Bio.Done cb = new Bio.Done() {
+                @Override
+                public void result(String dek, String error) {
+                    JSONObject r = new JSONObject();
+                    try {
+                        if (error != null) r.put("error", error);
+                        else if (dek.length() > 0) r.put("dek", dek);
+                        else r.put("ok", true);
+                    } catch (Exception ignored) { }
+                    reply(id, r);
+                }
+            };
+            if ("bioEnable".equals(cmd)) Bio.enable(this, Base64.decode(a.getString("dek"), Base64.DEFAULT), cb);
+            else Bio.unlock(this, cb);
+        } else if ("exportDb".equals(cmd)) {
+            exportBytes = Base64.decode(a.getString("b64"), Base64.DEFAULT);
+            exportId = id;
+            final Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+            i.addCategory(Intent.CATEGORY_OPENABLE);
+            i.setType("application/octet-stream");
+            i.putExtra(Intent.EXTRA_TITLE, a.optString("name", "kjt-invest.sqlite"));
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() { startActivityForResult(i, REQ_EXPORT); }
+            });
+        } else if ("importDb".equals(cmd)) {
+            importId = id;
+            final Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            i.addCategory(Intent.CATEGORY_OPENABLE);
+            i.setType("*/*");
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() { startActivityForResult(i, REQ_IMPORT); }
+            });
+        } else {
+            o.put("error", "unknown command");
+            reply(id, o);
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int req, int result, Intent data) {
+        super.onActivityResult(req, result, data);
+        final Uri uri = (result == RESULT_OK && data != null) ? data.getData() : null;
+        if (req == REQ_EXPORT && exportId != null) {
+            final String id = exportId;
+            final byte[] bytes = exportBytes;
+            exportId = null;
+            exportBytes = null;
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        JSONObject o = new JSONObject();
+                        if (uri != null) {
+                            OutputStream out = getContentResolver().openOutputStream(uri, "wt");
+                            out.write(bytes);
+                            out.close();
+                            o.put("ok", true);
+                        }
+                        reply(id, o);
+                    } catch (Throwable e) { replyError(id, e); }
+                }
+            }).start();
+        } else if (req == REQ_IMPORT && importId != null) {
+            final String id = importId;
+            importId = null;
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        JSONObject o = new JSONObject();
+                        if (uri != null) {
+                            byte[] b = readAll(getContentResolver().openInputStream(uri));
+                            if (b.length > 200 * 1024 * 1024) throw new Exception("file too large");
+                            o.put("b64", Base64.encodeToString(b, Base64.NO_WRAP));
+                        }
+                        reply(id, o);
+                    } catch (Throwable e) { replyError(id, e); }
+                }
+            }).start();
+        }
+    }
+}

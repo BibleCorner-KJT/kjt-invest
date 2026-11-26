@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>today.knowingjesus.Invest</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-2.0-or-later</project_license>
+  <name>KJT Invest</name>
+  <summary>Private tracker for metals, property, cash and other assets</summary>
+  <description>
+    <p>KJT Invest (Knowing Jesus Today) keeps track of what you own, privately, on your own device: no accounts, no analytics, no tracking.</p>
+    <ul>
+      <li>Precious metals: gold, silver, platinum and palladium coins, bars and rounds, with live prices, fees, and the price history back to the 1960s</li>
+      <li>Real estate: rent periods and empty months, condo fees, insurance and taxes, co-owners, and the real yearly return</li>
+      <li>Cash and bank accounts, and other assets such as cars and boats</li>
+      <li>An overview you can swipe: the total, what you own, the performance over the years and the gains</li>
+      <li>Optional passcode that encrypts your data, with fingerprint unlock</li>
+      <li>Everything in one database file you can export and import</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">today.knowingjesus.Invest.desktop</launchable>
+  <url type="homepage">https://knowingjesus.today/</url>
+  <url type="vcs-browser">https://github.com/BibleCorner-KJT/kjt-invest</url>
+  <developer id="today.knowingjesus"><name>Knowing Jesus Today (knowingjesus.today)</name></developer>
+  <requires><display_length compare="ge">360</display_length></requires>
+  <supports><control>pointing</control><control>keyboard</control><control>touch</control></supports>
+  <branding><color type="primary" scheme_preference="light">#f3e2b8</color><color type="primary" scheme_preference="dark">#3e093f</color></branding>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="1.3" date="2026-11-26"><description><p>Now KJT Invest. Metals show as coins, bars, rounds or jewellery in their own colours; other assets such as cars and boats; the overview box can be swiped for what you own, the performance graph and the gains.</p></description></release>
+  </releases>
+</component>

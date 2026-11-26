@@ -1,0 +1,32 @@
+app-id: today.knowingjesus.Invest
+runtime: org.gnome.Platform
+runtime-version: '51'
+sdk: org.gnome.Sdk
+command: kjt-invest
+finish-args:
+  # only the internet (for prices), the screen and the graphics card; no access to your files
+  # (export and import go through the system's file picker)
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # fingerprint unlock: the fingerprint reader and the keyring
+  - --system-talk-name=net.reactivated.Fprint
+  - --talk-name=org.freedesktop.secrets
+modules:
+  - name: kjt-invest
+    buildsystem: simple
+    build-commands:
+      - mkdir -p /app/share/kjt-invest
+      - cp -r www /app/share/kjt-invest/www
+      - install -Dm644 kjt_invest.py /app/share/kjt-invest/kjt_invest.py
+      - install -Dm755 kjt-invest /app/bin/kjt-invest
+      - install -Dm644 today.knowingjesus.Invest.desktop /app/share/applications/today.knowingjesus.Invest.desktop
+      - install -Dm644 today.knowingjesus.Invest.metainfo.xml /app/share/metainfo/today.knowingjesus.Invest.metainfo.xml
+      - for s in 512 256 128 64 48 32; do install -Dm644 icons/$s.png /app/share/icons/hicolor/${s}x${s}/apps/today.knowingjesus.Invest.png; done
+      - install -Dm644 icons/scalable.svg /app/share/icons/hicolor/scalable/apps/today.knowingjesus.Invest.svg
+      - python3 -m compileall -q /app/share/kjt-invest
+    sources:
+      - type: dir
+        path: src
