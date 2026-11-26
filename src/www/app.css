@@ -330,3 +330,10 @@ input[type="checkbox"] { -webkit-appearance: auto; appearance: auto; accent-colo
 input[type="radio"] { -webkit-appearance: auto; appearance: auto; }
 input[type="date"] { min-height: 46px; }
 input::placeholder, textarea::placeholder { color: var(--muted); opacity: .8; }
+
+/* 1.7 menus */
+nav#tabs button { font-size: .74rem; }
+.subnav { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; background: var(--soft); border: 1px solid var(--line); border-radius: 12px; padding: 4px; margin-bottom: 6px; }
+.subnav button { border: 0; background: transparent; border-radius: 9px; padding: 9px 2px; font-weight: 650; font-size: .82rem; color: var(--muted); cursor: pointer; }
+.subnav button.on { background: var(--card); color: var(--brand); box-shadow: var(--shadow); }
+.hero a { color: var(--brand); text-decoration: none; font-weight: 600; }

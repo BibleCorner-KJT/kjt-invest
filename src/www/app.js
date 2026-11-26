@@ -1,9 +1,9 @@
-/* KJT Invest 1.6.1 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
+/* KJT Invest 1.7 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
    All data stays in one SQLite file on the device. The only network calls are the
    price updates (metal prices from gold-api.com, exchange rates from the European Central Bank). */
 'use strict';
 
-const APP_VERSION = '1.6.1';
+const APP_VERSION = '1.7';
 const SCHEMA = 6;
 const OZT_G = 31.1034768;
 const METALS = [
@@ -576,16 +576,26 @@ function setTitle(t, back) {
   document.getElementById('title').textContent = t;
   document.getElementById('back').hidden = !back;
 }
+/* Menus: Overview · Assets (Metals, Property, Cash, Other assets) · Markets (metal prices, currencies) */
+const ASECS = [['metals', 'Metals'], ['property', 'Property'], ['accounts', 'Cash'], ['assets', 'Other assets']];
+const isAsset = t => ASECS.some(a => a[0] === t);
 function render() {
-  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === state.tab));
+  if (isAsset(state.tab)) state.lastAsec = state.tab;
+  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === state.tab || (b.dataset.tab === 'assetsgroup' && isAsset(state.tab))));
   document.getElementById('settings').classList.toggle('on', state.tab === 'more');
   if (state.tab === 'overview') renderOverview();
+  else if (state.tab === 'markets') renderMarkets();
   else if (state.tab === 'metals') renderMetals();
   else if (state.tab === 'property') state.propertyId ? renderProperty(state.propertyId) : renderProperties();
   else if (state.tab === 'accounts') state.accountId ? renderAccount(state.accountId) : renderAccounts();
   else if (state.tab === 'assets') state.assetId ? renderAsset(state.assetId) : renderAssets();
-  else if (state.tab === 'currency') renderCurrency();
+  else if (state.tab === 'currency') renderMarkets();
   else renderMore();
+  const inDetail = state.propertyId && state.tab === 'property' || state.accountId && state.tab === 'accounts' || state.assetId && state.tab === 'assets';
+  if (isAsset(state.tab) && !inDetail) {
+    setTitle('Assets');
+    view().insertAdjacentHTML('afterbegin', `<div class="subnav">${ASECS.map(([k, l]) => `<button class="${k === state.tab ? 'on' : ''}" data-asec="${k}">${l}</button>`).join('')}</div>`);
+  }
 }
 function priceStrip() {
   const H = mcur();
@@ -949,9 +959,11 @@ function chartCard() {
 function renderMetals() {
   setTitle('Precious metals');
   const H = mcur(), hs = q("SELECT * FROM metal_holdings ORDER BY metal, COALESCE(purchase_date,'') DESC, description");
-  let h = missingWarn() + `<h2 class="sect">Current prices <span class="sub">${H} per troy ounce</span></h2><div class="card">${priceStrip()}
-    <details class="fold"><summary><h2>Compare the sources</h2></summary>${metalSourcesHtml()}</details></div>`
-    + `<h2 class="sect">Price over time</h2>` + chartCard() + `<h2 class="sect">Your holdings</h2>`;
+  let tv = 0, tc = 0; for (const x of hs) { const st = holdingStats(x); if (st.valueM != null) { tv += st.valueM; tc += st.costM || 0; } }
+  let h = missingWarn() + `<h2 class="sect">Total</h2><div class="card hero"><div class="label">Precious metals (${H})</div><div class="big">${whole(tv, H)}</div>
+      ${tc ? `<div class="sub">Paid ${whole(tc, H)} (fees included) · <span class="${signCls(tv - tc)}">${pct(tv / tc - 1)}</span></div>` : ''}
+      <div class="sub" style="margin-top:6px"><a href="#" data-go="markets">Prices, sources and the price chart are under Markets ›</a></div></div>`
+    + `<h2 class="sect">Your holdings</h2>`;
   if (!hs.length) h += `<div class="card empty">No metals yet.</div>`;
   for (const m of METALS) {
     const mine = hs.filter(x => x.metal === m.sym); if (!mine.length) continue;
@@ -967,7 +979,7 @@ function renderMetals() {
       <div class="txns">${items}</div></div>`;
   }
   h += `<button class="btn wide" data-act="add-metal">+ Add precious metal</button>`;
-  view().innerHTML = h; bindChart();
+  view().innerHTML = h;
 }
 function renderProperties() {
   setTitle('Real estate');
@@ -1229,13 +1241,20 @@ function curSelect(name, sel) {
   const opt = c => `<option value="${c}"${c === sel ? ' selected' : ''}>${c} · ${esc(curName(c))}</option>`;
   return `<select id="${name}" class="cursel"><optgroup label="Favourites">${Array.from(new Set(f)).filter(c => all.includes(c)).map(opt).join('')}</optgroup><optgroup label="All currencies">${all.map(opt).join('')}</optgroup></select>`;
 }
-function renderCurrency() {
-  setTitle('Currency');
+function renderMarkets() {
+  const M = mcur();
+  const pre = `<h2 class="sect">Precious metal prices <span class="sub">${M} per troy ounce</span></h2><div class="card">${priceStrip()}
+    <details class="fold"><summary><h2>Compare the sources</h2></summary>${metalSourcesHtml()}</details></div>
+    <h2 class="sect">Price over time</h2>` + chartCard();
+  renderCurrency(pre); bindChart();
+}
+function renderCurrency(prefix) {
+  setTitle('Markets');
   const from = getSetting('conv_from', 'USD'), to = getSetting('conv_to', home()), amt = num(getSetting('conv_amt', '100')) || 0;
   const r1 = conv(1, from, to), res = conv(amt, from, to);
   const dec = c => ['JPY', 'KRW', 'IDR', 'HUF', 'ISK', 'CLP', 'VND'].includes(c) ? 0 : 2;
-  let h = missingWarn();
-  h += `<h2 class="sect">Convert</h2><div class="card conv">
+  let h = missingWarn() + (prefix || '');
+  h += `<h2 class="sect">Currency converter</h2><div class="card conv">
     <label class="f"><span>Amount</span><input id="cv-amt" value="${esc(fmtNum(amt))}" inputmode="decimal" autocomplete="off"></label>
     <div class="convrow"><label class="f"><span>From</span>${curSelect('cv-from', from)}</label>
       <button class="iconbtn swap" id="cv-swap" aria-label="Swap"><svg viewBox="0 0 24 24"><path d="M7 4v16M3 8l4-4 4 4M17 20V4M13 16l4 4 4-4"/></svg></button>
@@ -1295,7 +1314,7 @@ function renderMore() {
     <div class="btns"><button class="btn light" data-act="history">${getSetting('history_loaded') ? 'Refresh past prices' : 'Load past prices'}</button></div></div>`;
   h += `<h2 class="sect">Updates</h2><div class="card">
     <div class="switch"><span>Check for new versions by itself</span><input type="checkbox" id="set-upd"${getSetting('auto_update', '1') === '1' ? ' checked' : ''}></div>
-    <p class="sub">This is version ${APP_VERSION}. Last checked ${when(getSetting('update_checked'))}.${updateInfo ? ' Version ' + esc(updateInfo.version) + ' is ready.' : ''} On Android the app downloads the update and the phone asks you to confirm it; on Linux, GNOME Software keeps it up to date.</p>
+    <p class="sub">This is version ${APP_VERSION}. Last checked ${when(getSetting('update_checked'))}.${updateInfo ? ' Version ' + esc(updateInfo.version) + ' is ready.' : ''} When there is a new version a bar appears at the top: on Android the phone then asks you to confirm the update; on Linux, Software (GNOME Software) opens with it and you press Install. Your data always stays.</p>
     <div class="btns"><button class="btn light" data-act="check-update">Check for updates now</button>${updateInfo ? '<button class="btn" data-act="install-update">Update</button>' : ''}</div></div>`;
   h += `<h2 class="sect">Security</h2><div id="sec"></div>`;
   h += `<h2 class="sect">Your data</h2><div class="card">
@@ -1524,8 +1543,10 @@ function ask(msg, yes) {
 let toastTimer;
 function toast(msg) { const t = document.getElementById('toast'); t.textContent = msg; t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => t.hidden = true, 2600); }
 document.getElementById('tabs').onclick = e => { const b = e.target.closest('button'); if (!b) return;
-  if (state.tab === b.dataset.tab) { state.propertyId = null; state.accountId = null; state.assetId = null; }
-  state.tab = b.dataset.tab; render(); view().scrollTop = 0; };
+  let t = b.dataset.tab;
+  if (t === 'assetsgroup') t = isAsset(state.tab) ? state.tab : (state.lastAsec || 'metals');
+  if (state.tab === t || b.dataset.tab === 'assetsgroup') { state.propertyId = null; state.accountId = null; state.assetId = null; }
+  state.tab = t; render(); view().scrollTop = 0; };
 document.getElementById('refresh').onclick = () => updatePrices(false);
 document.getElementById('settings').onclick = () => { state.tab = 'more'; render(); view().scrollTop = 0; };
 document.getElementById('back').onclick = () => goBack();
@@ -1541,11 +1562,11 @@ function goBack() {
 window.__onBack = () => goBack();
 window.addEventListener('resize', () => { for (const [id, k] of [['heroS', 'hpage'], ['cfS', 'cfPage']]) { const el = document.getElementById(id); if (el) fitSwipe(el, state[k] || 0); } });
 view().addEventListener('click', e => {
-  const el = e.target.closest('[data-act],[data-go],[data-metal],[data-prop],[data-item],[data-pval],[data-cfy],[data-cfp],[data-rent],[data-price],[data-fx],[data-chart],[data-range],[data-acct],[data-bal],[data-asset],[data-aval],[data-hpage],[data-prange],[data-unfav],[data-ie]'); if (!el) return;
+  const el = e.target.closest('[data-act],[data-go],[data-metal],[data-prop],[data-item],[data-pval],[data-cfy],[data-cfp],[data-rent],[data-price],[data-fx],[data-chart],[data-range],[data-acct],[data-bal],[data-asset],[data-aval],[data-hpage],[data-prange],[data-unfav],[data-ie],[data-asec]'); if (!el) return;
   const d = el.dataset;
   if (d.chart) { state.chart = d.chart; const st = view().scrollTop; render(); view().scrollTop = st; }
   else if (d.range) { state.range = d.range; const st = view().scrollTop; render(); view().scrollTop = st; }
-  else if (d.go) { state.tab = d.go; state.propertyId = null; state.accountId = null; state.assetId = null; render(); view().scrollTop = 0; }
+  else if (d.go) { e.preventDefault(); state.tab = d.go; state.propertyId = null; state.accountId = null; state.assetId = null; render(); view().scrollTop = 0; }
   else if (d.metal) metalForm(+d.metal);
   else if (d.prop) { state.propertyId = +d.prop; render(); view().scrollTop = 0; }
   else if (d.item) itemForm(state.propertyId, +d.item);
@@ -1553,6 +1574,7 @@ view().addEventListener('click', e => {
   else if (d.cfy) { state.cfYear = +d.cfy; if (el.classList.contains('yrow')) state.cfPage = 0; const st = view().scrollTop; render(); view().scrollTop = st; }
   else if (d.cfp) { state.cfPage = +d.cfp; const sc = document.getElementById('cfS'); if (sc) sc.scrollTo({ left: +d.cfp * sc.clientWidth, behavior: 'smooth' }); document.querySelectorAll('.cftabs .seg').forEach((b, j) => b.classList.toggle('on', j === +d.cfp)); }
   else if (d.rent) rentForm(state.propertyId, +d.rent);
+  else if (d.asec) { state.tab = d.asec; state.propertyId = null; state.accountId = null; state.assetId = null; render(); view().scrollTop = 0; }
   else if (d.ie) { state.ieRange = d.ie; const st = view().scrollTop; render(); view().scrollTop = st; }
   else if (d.unfav) { setFavs(favs().filter(c => c !== d.unfav)); render(); }
   else if (d.hpage) { const sc = document.getElementById('heroS'); if (sc) sc.scrollTo({ left: +d.hpage * sc.clientWidth, behavior: 'smooth' }); }
@@ -1877,8 +1899,12 @@ async function installUpdate() {
     const r = await native('installUpdate', { url: updateInfo.url, sha256: updateInfo.sha256 || '' });
     if (r.error) toast('Update not installed: ' + r.error); else toast('Confirm the update on the screen that opens');
   } else if (updateInfo.platform === 'linux') {
-    if (appInfo && appInfo.channel) toast('Open Software (GNOME Software): KJT Invest updates from there, by itself or with Update');
-    else { await native('openUrl', { url: updateInfo.page }); toast('The download page opened in your browser'); }
+    const f = updateInfo[(appInfo && appInfo.arch) || 'x86_64'];
+    if (f && f.url) {
+      toast('Downloading the update…');
+      const r = await native('installUpdate', { url: f.url, sha256: f.sha256 || '' });
+      if (r.error) toast('Update not downloaded: ' + r.error); else toast('Software opens with the new version: press Install (your data stays)');
+    } else { await native('openUrl', { url: updateInfo.page }); toast('The download page opened in your browser'); }
   }
 }
 window.__updateStatus = msg => toast(msg);
@@ -1912,7 +1938,7 @@ window.__updateStatus = msg => toast(msg);
     prepareDb(); loadFx();
     await saveNow();   /* also stores any upgrade of an older database */
     render();
-    if (getSetting('auto_update', '1') === '1') { const uc = getSetting('update_checked'); if (!uc || Date.now() - new Date(uc) > 12 * 3600000) setTimeout(() => checkUpdate(false), 4000); }
+    if (getSetting('auto_update', '1') === '1') { const uc = getSetting('update_checked'); if (!uc || Date.now() - new Date(uc) > 3600000) setTimeout(() => checkUpdate(false), 4000); }
     const last = getSetting('prices_updated');
     if (getSetting('auto_prices', '1') === '1' && (!last || Date.now() - new Date(last) > 15 * 60000)) updatePrices(true);
   } catch (e) {

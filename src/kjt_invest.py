@@ -7,6 +7,8 @@ No analytics, no accounts, no other network use. Works with GTK 4 + WebKitGTK 6.
 or GTK 3 + WebKit2GTK 4.1 / 4.0.
 """
 import base64
+import hashlib
+import platform
 import json
 import os
 import shutil
@@ -18,7 +20,7 @@ import urllib.request
 import gi
 
 APP_ID = 'today.knowingjesus.Invest'
-VERSION = '1.6.1'
+VERSION = '1.7'
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(os.environ.get('XDG_DATA_HOME') or os.path.expanduser('~/.local/share'), 'kjt-invest')
 OLD_DIR = os.path.join(os.path.expanduser('~/.local/share'), 'investment-tracker')   # where 1.0-1.2 (Investment Tracker) kept the data
@@ -146,7 +148,9 @@ class Tracker:
                     f.write(args.get('json', '{}'))
                 self.reply(msg_id, {'ok': True})
             elif cmd == 'appInfo':
-                self.reply(msg_id, {'platform': 'linux', 'version': VERSION, 'channel': IN_FLATPAK})
+                self.reply(msg_id, {'platform': 'linux', 'version': VERSION, 'channel': IN_FLATPAK, 'arch': 'aarch64' if platform.machine() in ('aarch64', 'arm64') else 'x86_64'})
+            elif cmd == 'installUpdate':
+                threading.Thread(target=self.install_update, args=(msg_id, args.get('url', ''), args.get('sha256', '')), daemon=True).start()
             elif cmd == 'openUrl':
                 url = args.get('url', '')
                 if url.startswith('https://'):
@@ -298,6 +302,38 @@ class Tracker:
             self.reply(msg_id, {'dek': dek} if dek else {'error': 'not set up'})
         except Exception as e:
             self.reply(msg_id, {'error': str(e)})
+
+    # ---------- updates: the new version is downloaded from the project's GitHub, checked against its published
+    # fingerprint, and opened in Software (GNOME Software), where you press Install. Your data stays.
+    def install_update(self, msg_id, url, sha):
+        try:
+            if not url.startswith('https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/'):
+                return self.reply(msg_id, {'error': 'not from the KJT Invest project'})
+            req = urllib.request.Request(url, headers={'User-Agent': 'KJTInvest/' + VERSION})
+            with urllib.request.urlopen(req, timeout=120) as r:
+                data = r.read()
+            if sha and hashlib.sha256(data).hexdigest().lower() != sha.lower():
+                return self.reply(msg_id, {'error': 'the downloaded file does not match; nothing was installed'})
+            folder = os.path.join(DATA_DIR, 'update')
+            os.makedirs(folder, exist_ok=True)
+            path = os.path.join(folder, 'KJT Invest update.flatpak')
+            with open(path, 'wb') as f:
+                f.write(data)
+            GLib.idle_add(self.open_file, path)
+            self.reply(msg_id, {'ok': True})
+        except Exception as e:
+            self.reply(msg_id, {'error': str(e)})
+
+    def open_file(self, path):
+        gfile = Gio.File.new_for_path(path)
+        try:
+            if GTK4 and hasattr(Gtk, 'FileLauncher'):
+                Gtk.FileLauncher.new(gfile).launch(self.win, None, None, None)   # through the desktop portal inside the Flatpak
+            else:
+                Gio.AppInfo.launch_default_for_uri(gfile.get_uri(), None)
+        except Exception:
+            Gio.AppInfo.launch_default_for_uri(gfile.get_uri(), None)
+        return False
 
     def chooser(self, title, save, name=None):
         action = Gtk.FileChooserAction.SAVE if save else Gtk.FileChooserAction.OPEN
