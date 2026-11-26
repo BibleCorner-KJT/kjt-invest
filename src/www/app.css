@@ -536,3 +536,17 @@ ol.steps { margin: 8px 0; padding-left: 20px; display: grid; gap: 6px; font-size
 /* ---------- 1.15: room for the title next to four buttons; five sub-menu buttons ---------- */
 @media (max-width: 480px) { header#top .iconbtn { width: 38px; } header#top h1 { font-size: 1.08rem; } }
 .subnav:has(button:nth-child(5)) button { font-size: .66rem; letter-spacing: -.02em; }
+
+/* ---------- 1.16: a livelier Prices page ---------- */
+.secico { width: 26px; height: 26px; flex: none; align-self: center; margin-right: 2px; }
+.secico.ln { width: 22px; height: 22px; fill: none; stroke: var(--brand); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.prices .price { position: relative; }
+.prices .price .micon { display: block; margin: 0 auto 4px; }
+.price .pc { font-size: .74rem; font-weight: 700; margin-top: 2px; }
+.pc.up { color: var(--up); } .pc.down { color: var(--down); }
+.cbadge { display: inline-grid; place-items: center; min-width: 30px; height: 30px; padding: 0 5px; border-radius: 15px; color: #fff; font-weight: 800; font-size: .8rem; letter-spacing: -.02em; box-shadow: inset 0 0 0 2px rgba(255, 255, 255, .25), 0 1px 2px rgba(0, 0, 0, .2); vertical-align: middle; }
+.cbadge.sm { font-size: .66rem; }
+.item.fav { display: grid; grid-template-columns: auto 1fr auto auto; align-items: center; gap: 10px; }
+.item.fav .fn { min-width: 0; }
+.conv .f > span .cbadge { min-width: 24px; height: 24px; font-size: .68rem; margin-right: 4px; }
+.segs.units { margin-bottom: 10px; }

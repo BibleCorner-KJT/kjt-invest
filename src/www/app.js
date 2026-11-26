@@ -1,9 +1,9 @@
-/* KJT Finance 1.15 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
+/* KJT Finance 1.16 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
    All data stays in one SQLite file on the device. The only network calls are the
    price updates (metal prices from gold-api.com, exchange rates from the European Central Bank). */
 'use strict';
 
-const APP_VERSION = '1.15';
+const APP_VERSION = '1.16';
 const SCHEMA = 11;
 const OZT_G = 31.1034768;
 const METALS = [
@@ -554,7 +554,7 @@ function metalSourcesHtml() {
   if (!Object.keys(mt).length) return '<p class="sub">No sources yet: press ↻ when you are online.</p>';
   return `<div class="srcgrid" style="--n:${METAL_SOURCES.length}"><span></span>${METAL_SOURCES.map(s => `<span class="sh">${esc(s.name.replace(' (futures)', ''))}</span>`).join('')}` +
     METALS.map(m => { const byS = mt[m.sym] || {}, sp = spreadOf(byS);
-      return `<span class="sm">${m.name}${sp != null ? `<small>${(sp * 100).toFixed(1)}% apart</small>` : ''}</span>` + METAL_SOURCES.map(s => `<span class="sv">${byS[s.id] ? money(conv(byS[s.id], 'USD', M), M, { dec: 0 }) : '—'}</span>`).join(''); }).join('') + `</div>`;
+      return `<span class="sm">${m.name}${sp != null ? `<small>${(sp * 100).toFixed(1)}% apart</small>` : ''}</span>` + METAL_SOURCES.map(s => `<span class="sv">${byS[s.id] ? money(conv(byS[s.id], 'USD', M) * pfactor(), M, { dec: pfactor() < 0.2 ? 2 : 0 }) : '—'}</span>`).join(''); }).join('') + `</div>`;
 }
 
 /* ---------------- price history ----------------
@@ -694,10 +694,17 @@ function render() {
   enhanceView();
   navAfter();
 }
+/* metal prices in the unit you like: troy ounce (the market's), gram, kilogram, tola, tael */
+const PUNITS = { ozt: ['troy ounce', 'oz t', 31.1034768], g: ['gram', 'g', 1], kg: ['kilogram', 'kg', 1000], tola: ['tola', 'tola', 11.6638038], tael: ['tael', 'tael', 37.429], oz: ['ounce (avoirdupois)', 'oz', 28.349523125] };
+const punit = () => PUNITS[getSetting('price_unit', 'ozt')] ? getSetting('price_unit', 'ozt') : 'ozt';
+const pfactor = () => PUNITS[punit()][2] / 31.1034768;   /* troy-ounce price x this = price per unit */
+const pname = () => PUNITS[punit()][0];
+function unitSegs() { return `<div class="segs units">${Object.entries(PUNITS).map(([k, [, s]]) => `<button class="seg${punit() === k ? ' on' : ''}" data-punit="${k}">${s}</button>`).join('')}</div>`; }
 function priceStrip() {
   const H = mcur();
-  const cells = METALS.map(m => { const p = spotIn(m.sym, H);
-    return `<div class="price"><div class="m">${m.name} / oz</div><div class="p">${p == null ? '—' : money(p, H)}</div></div>`; }).join('');
+  const f = pfactor(), u = PUNITS[punit()][1], y = dstr(dnum(today()) - 1);
+  const cells = METALS.map(m => { const p = spotIn(m.sym, H), p0 = priceOn(m.sym, y, H), ch = p != null && p0 ? p / p0 - 1 : null;
+    return `<div class="price">${metalIcon(m.sym, 'bar', 22)}<div class="m">${m.name} / ${u}</div><div class="p">${p == null ? '—' : money(p * f, H, f < 0.2 ? { dec: 2 } : undefined)}</div>${ch != null && Math.abs(ch) > 0.00005 ? `<div class="pc ${signCls(ch)}">${ch > 0 ? '▲' : '▼'} ${Math.abs(ch * 100).toFixed(2)}%</div>` : ''}</div>`; }).join('');
   return `<div class="prices">${cells}</div><div class="sub" style="margin-top:8px">Prices updated ${when(getSetting('prices_updated'))}</div>`;
 }
 function missingWarn() {
@@ -743,7 +750,7 @@ function renderOverview() {
   h += `<h2 class="sect" data-ftot="${esc(whole(t.total, H))}">What you own</h2>` + ['accounts', 'property', 'metals', 'loans', 'assets'].map(k => cards[k] || '').join('');
   const ie12 = ieRange(ieModel(), 'L12');
   h += `<h2 class="sect" data-ftot="${esc((ie12.net >= 0 ? '+' : '') + whole(ie12.net, H))} net, 12 months">Income & expenses</h2>` + ieCard();
-  h += `<h2 class="sect">Current prices <span class="sub">${mcur()} per troy ounce</span></h2><div class="card">${priceStrip()}</div>`;
+  h += `<h2 class="sect">Current prices <span class="sub">${mcur()} per ${pname()}</span></h2><div class="card tap" data-go="markets">${priceStrip()}</div>`;
   if (nAll) h += `<button class="btn wide light" data-act="print-report">Print the report or save it as a PDF</button>`;
   view().innerHTML = h; bindHero(); bindChart();
 }
@@ -1055,14 +1062,15 @@ function chartCard() {
   const tabs = (nH ? [['MINE', 'My metals']] : []).concat(METALS.map(m => [m.sym, m.name]))
     .map(([k, l]) => `<button class="seg${key === k ? ' on' : ''}" data-chart="${k}">${l}</button>`).join('');
   const ranges = RANGES.map(([k]) => `<button class="seg${state.range === k ? ' on' : ''}" data-range="${k}">${k}</button>`).join('');
-  const { pts, two } = chartData(key);
+  let { pts, two } = chartData(key);
+  if (!two) { const f = pfactor(); if (f !== 1) pts = pts.map(([d, v]) => [d, v * f]); }   /* per the unit you chose */
   let body;
   if (pts.length < 2) {
     body = `<p class="sub" style="padding:18px 0;text-align:center">${getSetting('history_loaded') ? 'Not enough prices for this period yet.' : 'No price history yet.'}</p>
       ${getSetting('history_loaded') ? '' : '<div class="btns"><button class="btn light" data-act="history">Load price history</button></div>'}`;
   } else {
     const f = pts[0][1], l = pts[pts.length - 1][1], ch = f ? l / f - 1 : null;
-    body = `<div class="chart-head"><div><div class="big2">${money(l, M)}</div><div class="sub">${two ? 'value of your metals' : 'per troy ounce'}</div></div>
+    body = `<div class="chart-head"><div><div class="big2">${money(l, M)}</div><div class="sub">${two ? 'value of your metals' : 'per ' + pname()}</div></div>
       <div class="r"><div class="${signCls(ch)}">${pct(ch)}</div><div class="sub">over ${state.range}</div></div></div>
       ${lineChart('metals', pts, two, M, state.range === '1W' || state.range === '1M' || state.range === '6M', ['Value', 'Paid (fees included)'])}
       <p class="sub" style="margin:6px 0 0">Daily prices for the last years (Yahoo Finance), monthly before that (DataHub).</p>`;
@@ -1435,11 +1443,31 @@ function curSelect(name, sel) {
   const opt = c => `<option value="${c}"${c === sel ? ' selected' : ''}>${c} · ${esc(curName(c))}</option>`;
   return `<select id="${name}" class="cursel"><optgroup label="Favourites">${Array.from(new Set(f)).filter(c => all.includes(c)).map(opt).join('')}</optgroup><optgroup label="All currencies">${all.map(opt).join('')}</optgroup></select>`;
 }
+/* pictures for the Prices page */
+function secIcon(k) {
+  const I = {
+    metals: `<svg class="secico" viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="sgA" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f7dd8c"/><stop offset="1" stop-color="#b8861b"/></linearGradient><linearGradient id="sgS" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f2f4f6"/><stop offset="1" stop-color="#9aa3ad"/></linearGradient></defs>
+      <path d="M3 27l2.6-7h9.8l2.6 7z" fill="url(#sgA)" stroke="#8a6412" stroke-width=".8"/><path d="M15 27l2.6-7h9.8L30 27z" fill="url(#sgS)" stroke="#6e7782" stroke-width=".8"/><path d="M9 19.4l2.6-7h9.8l2.6 7z" fill="url(#sgA)" stroke="#8a6412" stroke-width=".8"/><path d="M12.6 14.6h6.4M7 24h5.6M19 24h5.6" stroke="#fff" stroke-opacity=".55" stroke-width="1"/></svg>`,
+    star: '<svg class="secico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.8l2.8 5.9 6.4.8-4.7 4.4 1.2 6.4L12 17.2l-5.7 3.1 1.2-6.4L2.8 9.5l6.4-.8z" fill="#d9a92c" stroke="#a87a12" stroke-width=".8"/></svg>',
+    chart: '<svg class="secico ln" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 20h18"/><path d="M4 16l5-5 4 3 7-8"/><path d="M16 6h4v4"/></svg>',
+    fx: '<svg class="secico ln" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h13l-3.5-3.5M20 15H7l3.5 3.5"/></svg>',
+    shield: '<svg class="secico ln" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v5c0 4.6-3 8.3-7 10-4-1.7-7-5.4-7-10V6z"/><path d="M9 12l2 2 4-4"/></svg>',
+  };
+  return I[k] || '';
+}
+/* a small coin with the currency's sign, in its own colour */
+const CUR_SIGN = { USD: 'US$', CAD: 'C$', AUD: 'A$', NZD: 'NZ$', HKD: 'HK$', SGD: 'S$', MXN: 'Mex$', EUR: '€', GBP: '£', JPY: '¥', CNY: '元', CHF: 'Fr', INR: '₹', KRW: '₩', RUB: '₽', TRY: '₺', BRL: 'R$', SEK: 'kr', NOK: 'kr', DKK: 'kr', ISK: 'kr', PLN: 'zł', CZK: 'Kč', HUF: 'Ft', ILS: '₪', ZAR: 'R', THB: '฿', PHP: '₱', NGN: '₦', UAH: '₴', IDR: 'Rp', MYR: 'RM', RON: 'lei', BGN: 'лв', AED: 'د.إ', SAR: '﷼', EGP: 'E£', LBP: 'L£', VND: '₫', PKR: '₨' };
+const CUR_COL = { USD: '#2e6b45', CAD: '#b3261e', EUR: '#1f4fa3', GBP: '#4b2a7b', JPY: '#a33a4a', CHF: '#c0392b', AUD: '#1a6b7a', CNY: '#b8312f', INR: '#d07a12', MXN: '#2a7a4b' };
+function curBadge(c) {
+  let col = CUR_COL[c]; if (!col) { let h = 0; for (const ch of String(c)) h = (h * 31 + ch.charCodeAt(0)) % 360; col = `hsl(${h} 42% 36%)`; }
+  const s = CUR_SIGN[c] || String(c).slice(0, 2);
+  return `<span class="cbadge${s.length > 2 ? ' sm' : ''}" style="background:${col}" aria-hidden="true">${esc(s)}</span>`;
+}
 function renderMarkets() {
   const M = mcur();
-  const pre = `<h2 class="sect">Precious metal prices <span class="sub">${M} per troy ounce</span></h2><div class="card">${priceStrip()}
+  const pre = `<h2 class="sect">${secIcon('metals')}Precious metals <span class="sub">${M} per ${pname()}</span></h2><div class="card">${unitSegs()}${priceStrip()}
     <details class="fold"><summary><h2>Compare the sources</h2></summary>${metalSourcesHtml()}</details></div>
-    <h2 class="sect">Price over time</h2>` + chartCard();
+    <h2 class="sect">${secIcon('chart')}Price over time</h2>` + chartCard();
   renderCurrency(pre); bindChart();
 }
 function renderCurrency(prefix) {
@@ -1447,27 +1475,29 @@ function renderCurrency(prefix) {
   const from = getSetting('conv_from', 'USD'), to = getSetting('conv_to', home()), amt = num(getSetting('conv_amt', '100')) || 0;
   const r1 = conv(1, from, to), res = conv(amt, from, to);
   const dec = c => ['JPY', 'KRW', 'IDR', 'HUF', 'ISK', 'CLP', 'VND'].includes(c) ? 0 : 2;
-  let h = missingWarn() + (prefix || '');
-  h += `<h2 class="sect">Currency converter</h2><div class="card conv">
+  let h = missingWarn();
+  /* favourites */
+  const f = favs(), H = home();
+  h += `<h2 class="sect">${secIcon('star')}Favourite currencies <span class="sub">1 ${H} is worth</span></h2><div class="card"><div class="list">` +
+    (f.length ? f.map(c => { const v = conv(1, H, c), inv = conv(1, c, H), v0 = convOn(1, H, c, dstr(dnum(today()) - 1)), ch = v != null && v0 ? v / v0 - 1 : null;
+      return `<div class="item nolink fav">${curBadge(c)}<span class="fn"><b>${c}</b> <span class="sub">${esc(curName(c))}</span></span>
+      <span class="r">${v == null ? '—' : fmtNum(v, 4)}${ch != null && Math.abs(ch) > 0.00005 ? ` <small class="pc ${signCls(ch)}">${ch > 0 ? '▲' : '▼'}${Math.abs(ch * 100).toFixed(2)}%</small>` : ''}<small class="sub">1 ${c} = ${inv == null ? '—' : money(inv, H, { dec: 4 })}</small></span>
+      <button class="iconbtn star on" data-unfav="${c}" aria-label="Remove ${c} from favourites">★</button></div>`; }).join('') : '<p class="sub">No favourites yet.</p>') +
+    `</div><div class="addfav"><select id="fav-add"><option value="">+ Add a favourite currency…</option>${allCurrencies().filter(c => !f.includes(c) && c !== H).map(c => `<option value="${c}">${c} · ${esc(curName(c))}</option>`).join('')}</select></div></div>`;
+  h += (prefix || '');
+  h += `<h2 class="sect">${secIcon('fx')}Currency converter</h2><div class="card conv">
     <label class="f"><span>Amount</span><input id="cv-amt" value="${esc(fmtNum(amt))}" inputmode="decimal" autocomplete="off"></label>
-    <div class="convrow"><label class="f"><span>From</span>${curSelect('cv-from', from)}</label>
+    <div class="convrow"><label class="f"><span>${curBadge(from)} From</span>${curSelect('cv-from', from)}</label>
       <button class="iconbtn swap" id="cv-swap" aria-label="Swap"><svg viewBox="0 0 24 24"><path d="M7 4v16M3 8l4-4 4 4M17 20V4M13 16l4 4 4-4"/></svg></button>
-      <label class="f"><span>To</span>${curSelect('cv-to', to)}</label></div>
+      <label class="f"><span>${curBadge(to)} To</span>${curSelect('cv-to', to)}</label></div>
     <div class="convres"><div class="big">${res == null ? '—' : money(res, to, { dec: dec(to) })}</div>
       <div class="sub">${r1 == null ? 'No rate for this pair yet.' : `1 ${from} = ${fmtNum(r1, 6)} ${to} · 1 ${to} = ${fmtNum(1 / r1, 6)} ${from}`}</div></div></div>`;
   /* sources for this pair */
   const fx = quotes('fx');
   const rows = FX_SOURCES.map(s => { const a = (fx[from] || {})[s.id], b = (fx[to] || {})[s.id]; return [s, a > 0 && b > 0 ? b / a : null]; });
   const vals = rows.map(r => r[1]).filter(Boolean), md = median(vals);
-  h += `<h2 class="sect">Sources for ${from} → ${to}</h2><div class="card"><div class="list">${rows.map(([s, v]) => `<div class="item nolink"><span>${esc(s.name)}</span><span class="r">${v == null ? '<span class="sub">no rate</span>' : fmtNum(v, 6)}${v != null && md ? `<small class="sub"> ${((v / md - 1) * 100 >= 0 ? '+' : '')}${((v / md - 1) * 100).toFixed(2)}%</small>` : ''}</span></div>`).join('')}</div>
+  h += `<h2 class="sect">${secIcon('shield')}Sources for ${from} → ${to}</h2><div class="card"><div class="list">${rows.map(([s, v]) => `<div class="item nolink"><span>${esc(s.name)}</span><span class="r">${v == null ? '<span class="sub">no rate</span>' : fmtNum(v, 6)}${v != null && md ? `<small class="sub"> ${((v / md - 1) * 100 >= 0 ? '+' : '')}${((v / md - 1) * 100).toFixed(2)}%</small>` : ''}</span></div>`).join('')}</div>
     <p class="sub" style="margin:8px 0 0">${vals.length === 1 ? 'Only ' + esc(rows.find(r => r[1])[0].name) + ' has a rate for this pair. ' : ''}${vals.length > 1 ? `The app uses ${getSetting('fx_source', 'auto') === 'auto' ? 'the middle value of the ' + vals.length + ' sources' : esc(SRC_NAME[getSetting('fx_source')])} (change it in Settings).` : vals.length ? '' : 'Press ↻ when you are online to compare the sources.'} Updated ${when(getSetting('prices_updated'))}.</p></div>`;
-  /* favourites */
-  const f = favs(), H = home();
-  h += `<h2 class="sect">Favourites <span class="sub">value of 1 ${H}</span></h2><div class="card"><div class="list">` +
-    (f.length ? f.map(c => { const v = conv(1, H, c), inv = conv(1, c, H); return `<div class="item nolink fav"><span><b>${c}</b> <span class="sub">${esc(curName(c))}</span></span>
-      <span class="r">${v == null ? '—' : fmtNum(v, 4)}<small class="sub">1 ${c} = ${inv == null ? '—' : money(inv, H, { dec: 4 })}</small></span>
-      <button class="iconbtn star on" data-unfav="${c}" aria-label="Remove ${c} from favourites">★</button></div>`; }).join('') : '<p class="sub">No favourites yet.</p>') +
-    `</div><div class="addfav"><select id="fav-add"><option value="">+ Add a favourite currency…</option>${allCurrencies().filter(c => !f.includes(c) && c !== H).map(c => `<option value="${c}">${c} · ${esc(curName(c))}</option>`).join('')}</select></div></div>`;
   view().innerHTML = h;
   const keep = () => { setSetting('conv_from', document.getElementById('cv-from').value); setSetting('conv_to', document.getElementById('cv-to').value); save(); };
   document.getElementById('cv-from').onchange = () => { keep(); render(); };
@@ -1778,7 +1808,7 @@ function goBack() {
 window.__onBack = () => goBack();
 window.addEventListener('resize', () => { for (const [id, k] of [['heroS', 'hpage'], ['cfS', 'cfPage']]) { const el = document.getElementById(id); if (el) fitSwipe(el, state[k] || 0); } });
 view().addEventListener('click', e => {
-  const el = e.target.closest('[data-act],[data-go],[data-metal],[data-prop],[data-item],[data-pval],[data-cfy],[data-cfp],[data-rent],[data-price],[data-fx],[data-chart],[data-range],[data-acct],[data-bal],[data-asset],[data-aval],[data-hpage],[data-prange],[data-unfav],[data-ie],[data-asec],[data-msec],[data-txm],[data-tx],[data-rec],[data-cat],[data-addsub],[data-addcat],[data-rp],[data-remdo],[data-remskip],[data-loan],[data-lpay],[data-txper],[data-rule],[data-cfold],[data-payee],[data-ptick]'); if (!el) return;
+  const el = e.target.closest('[data-act],[data-go],[data-metal],[data-prop],[data-item],[data-pval],[data-cfy],[data-cfp],[data-rent],[data-price],[data-fx],[data-chart],[data-range],[data-acct],[data-bal],[data-asset],[data-aval],[data-hpage],[data-prange],[data-unfav],[data-ie],[data-asec],[data-msec],[data-txm],[data-tx],[data-rec],[data-cat],[data-addsub],[data-addcat],[data-rp],[data-remdo],[data-remskip],[data-loan],[data-lpay],[data-txper],[data-rule],[data-cfold],[data-payee],[data-ptick],[data-punit]'); if (!el) return;
   const d = el.dataset;
   if (d.chart) { state.chart = d.chart; const st = view().scrollTop; render(); view().scrollTop = st; }
   else if (d.range) { state.range = d.range; const st = view().scrollTop; render(); view().scrollTop = st; }
@@ -1792,6 +1822,7 @@ view().addEventListener('click', e => {
   else if (d.rent) rentForm(state.propertyId, +d.rent);
   else if (d.asec) { state.tab = d.asec; state.propertyId = null; state.accountId = null; state.assetId = null; state.loanId = null; render(); view().scrollTop = 0; }
   else if (d.msec) { state.msec = d.msec; render(); view().scrollTop = 0; }
+  else if (d.punit) { setSetting('price_unit', d.punit); save(); const st = view().scrollTop; render(); view().scrollTop = st; }
   else if (d.ptick != null) { state.psel = state.psel || new Set(); if (state.psel.has(d.ptick)) state.psel.delete(d.ptick); else state.psel.add(d.ptick); const st = view().scrollTop; render(); view().scrollTop = st; }
   else if (d.payee != null) payeeForm(d.payee);
   else if (d.cfold) { e.preventDefault(); toggleCard(d.cfold); }
@@ -2046,7 +2077,7 @@ async function securityAction(act) {
   } else if (act === 'pin-off') {
     if (!await confirmCurrent()) return;
     if (!await ask('Turn off the passcode? The data file will no longer be encrypted.', 'Turn off')) return;
-    CRYPT = null; PREFS.pinLength = null; PREFS.bio = false; await savePrefs(); await native('bioDisable', {}); await saveNow(); native('secure', { on: false });
+    CRYPT = null; PREFS.pinLength = null; PREFS.bio = false; await savePrefs(); await native('bioDisable', {}); await saveNow(); native('secure', { on: !!PREFS.noShots });
     toast('Passcode off');
   } else if (act === 'bio-on') {
     const r = await native('bioEnable', { dek: bytesToB64(CRYPT.raw) });
@@ -2063,11 +2094,14 @@ async function securityCard() {
       <label class="f"><span>Lock again after leaving the app</span><select id="set-lock">${[[0, 'Immediately'], [1, 'After 1 minute'], [5, 'After 5 minutes'], [15, 'After 15 minutes']].map(([v, l]) => `<option value="${v}"${v === la ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
       <div class="btns"><button class="btn light" data-act="pin-change">Change passcode</button><button class="btn danger" data-act="pin-off">Turn off</button></div>`
     : `<p class="sub">Protect the app with a number passcode. Your data file is then encrypted, and so are your exports. If you forget the passcode, nobody can open the data, so keep an exported backup and remember the passcode.</p>
-      <div class="btns"><button class="btn" data-act="pin-on">Turn on passcode</button></div>`}</div>`;
+      <div class="btns"><button class="btn" data-act="pin-on">Turn on passcode</button></div>`}
+    <div class="switch"><span>Block screenshots and screen recording${on ? ' (always on with a passcode)' : ''}</span><input type="checkbox" id="set-shots"${on || PREFS.noShots ? ' checked' : ''}${on ? ' disabled' : ''}></div>
+    <p class="sub" style="margin:4px 0 0">Also hides the app's content in the list of open apps. Works on Android; Linux cannot stop screenshots.</p></div>`;
 }
 function bindSecurity() {
   const b = document.getElementById('set-bio'); if (b) b.onchange = () => securityAction(b.checked ? 'bio-on' : 'bio-off');
   const l = document.getElementById('set-lock'); if (l) l.onchange = () => { PREFS.lockAfter = +l.value; savePrefs(); };
+  const sh = document.getElementById('set-shots'); if (sh) sh.onchange = () => { PREFS.noShots = sh.checked; savePrefs(); native('secure', { on: !!CRYPT || PREFS.noShots }); toast(sh.checked ? 'Screenshots are blocked' : 'Screenshots are allowed'); };
 }
 
 /* ---------------- income and expenses, everything together ----------------
@@ -3966,7 +4000,7 @@ window.__updateStatus = msg => toast(msg);
       if (!isOurDb(opened)) throw new Error('The data file is not a KJT Finance database. It was not changed.');
     }
     db = opened || new SQL.Database();
-    native('secure', { on: !!CRYPT });
+    native('secure', { on: !!CRYPT || !!PREFS.noShots });
     prepareDb(); loadFx(); processRecurring(); syncInit();
     await saveNow();   /* also stores any upgrade of an older database */
     render(); APP_READY = true;
