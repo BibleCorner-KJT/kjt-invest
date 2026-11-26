@@ -1,4 +1,4 @@
-# KJT Invest releases (newest version)
+# KJT Finance releases (newest version)
 
 - **Linux computer:** [kjt-invest-linux.flatpak](kjt-invest-linux.flatpak) - download, double-click, press Install.
 - **Linux phone (ARM):** [kjt-invest-linux-arm.flatpak](kjt-invest-linux-arm.flatpak)
