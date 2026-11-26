@@ -1,25 +1,25 @@
 {
   "android": {
-    "version": "1.12",
+    "version": "1.13",
     "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-android.apk",
-    "sha256": "b8a02f940b368bc3db7c745e189eebf44f5f4679773c9486e4a92637cd77f07e",
-    "notes": "The app is now KJT Finance. Cash in hand is counted, not checked with a bank. Menus in your order."
+    "sha256": "f15d5e63cd0a7779fcb90b72fca457ceec5b8afa41f4bfe6fcb3da418b27838e",
+    "notes": "Fold the Overview cards; folded cards and sections can show their totals (setting to hide them)."
   },
   "linux": {
-    "version": "1.12",
+    "version": "1.13",
     "page": "https://github.com/BibleCorner-KJT/kjt-invest/tree/releases",
-    "notes": "The app is now KJT Finance. Cash in hand is counted, not checked with a bank. Menus in your order.",
+    "notes": "Fold the Overview cards; folded cards and sections can show their totals (setting to hide them).",
     "x86_64": {
       "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.flatpak",
-      "sha256": "e297540e29a40a0502c5b37c3da0dd576aa4f1818004d6de5299774f9435748a"
+      "sha256": "b2a6ad66ffe0e76b034139ff6f9ddc5e9a7198061f62c0c7f32b53db7b021b6a"
     },
     "aarch64": {
       "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux-arm.flatpak",
-      "sha256": "7443fbd7ed7d59ccf7971ef9bd1d7b25f99b0d97e1f8dbb7b8483602f3ae765c"
+      "sha256": "ce43d2c677ed86144faa8eb52e300b04d2ebbf8110120603ffcab74ba1a6cc65"
     },
     "zip": {
       "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.zip",
-      "sha256": "ff81ada66331a92e806342abd612ac83f79de8ae2e1ad0447131a88fc7cb5159"
+      "sha256": "24885146f932d2c4676c6e4e70c01680e7ada8ce1a5b1450fe33eb8767af0042"
     }
   }
 }
