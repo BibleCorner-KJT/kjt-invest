@@ -20,7 +20,7 @@ import urllib.request
 import gi
 
 APP_ID = 'today.knowingjesus.Invest'
-VERSION = '1.8.1'
+VERSION = '1.9'
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(os.environ.get('XDG_DATA_HOME') or os.path.expanduser('~/.local/share'), 'kjt-invest')
 OLD_DIR = os.path.join(os.path.expanduser('~/.local/share'), 'investment-tracker')   # where 1.0-1.2 (Investment Tracker) kept the data
@@ -175,7 +175,7 @@ class Tracker:
             elif cmd == 'exportDb':
                 self.export_db(msg_id, args)
             elif cmd == 'importDb':
-                self.import_db(msg_id)
+                self.import_db(msg_id, args)
             else:
                 self.reply(msg_id, {'error': 'unknown command'})
         except Exception as e:
@@ -436,7 +436,7 @@ class Tracker:
             Gio.AppInfo.launch_default_for_uri(gfile.get_uri(), None)
         return False
 
-    def chooser(self, title, save, name=None):
+    def chooser(self, title, save, name=None, filt=None):
         action = Gtk.FileChooserAction.SAVE if save else Gtk.FileChooserAction.OPEN
         dlg = Gtk.FileChooserNative.new(title, self.win, action, 'Save' if save else 'Open', 'Cancel')
         if save:
@@ -452,8 +452,13 @@ class Tracker:
                 pass
         else:
             f = Gtk.FileFilter()
-            f.set_name('KJT Invest database')
-            for pat in ('*.sqlite', '*.db', '*.sqlite3', '*.itdb'):
+            if filt == 'bank':   # files downloaded from online banking
+                f.set_name('Bank files (OFX, QFX, QIF, CSV)')
+                pats = ('*.ofx', '*.qfx', '*.qbo', '*.qif', '*.csv', '*.OFX', '*.QFX', '*.QBO', '*.QIF', '*.CSV', '*.txt')
+            else:
+                f.set_name('KJT Invest database')
+                pats = ('*.sqlite', '*.db', '*.sqlite3', '*.itdb')
+            for pat in pats:
                 f.add_pattern(pat)
             dlg.add_filter(f)
             anyf = Gtk.FileFilter()
@@ -482,8 +487,9 @@ class Tracker:
         dlg.show()
         self.dialog = dlg
 
-    def import_db(self, msg_id):
-        dlg = self.chooser('Import database', False)
+    def import_db(self, msg_id, args=None):
+        args = args or {}
+        dlg = self.chooser(args.get('title') or 'Import database', False, filt=args.get('filter'))
 
         def done(d, resp):
             try:

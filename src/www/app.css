@@ -349,7 +349,7 @@ nav#tabs button.on svg .f { fill-opacity: .3; }
 nav#tabs button.on span { color: var(--brand); }
 nav#tabs button:not(.on):hover .ico { background: var(--soft); }
 .subnav { gap: 5px; padding: 5px; }
-.subnav button { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 7px 2px 6px; font-size: .78rem; line-height: 1.15; }
+.subnav button { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 7px 1px 6px; font-size: .74rem; letter-spacing: -.01em; line-height: 1.15; }
 .subnav button span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .subnav button svg { width: 22px; height: 22px; flex: none; }
 .sico { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
@@ -418,3 +418,23 @@ h2.sect .sub { margin-left: 0; }
   #print .pnote { font-size: 8.5pt; color: #666; }
   #print .pf { margin-top: 16pt; border-top: .5pt solid #ccc; padding-top: 5pt; font-size: 8pt; color: #777; }
 }
+
+/* ---------- 1.9: sections that fold, long lists, quick add, loans ---------- */
+h2.foldh { cursor: pointer; user-select: none; -webkit-user-select: none; padding: 4px 0; border-radius: 8px; }
+h2.foldh:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+h2.foldh .chev { width: 18px; height: 18px; margin-left: auto; align-self: center; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; transition: transform .18s; flex: none; }
+h2.foldh.closed .chev { transform: rotate(-90deg); }
+h2.foldh.closed { margin-bottom: 2px; }
+h2.foldh.closed::after { content: "tap to open"; font-size: .7rem; text-transform: none; letter-spacing: 0; font-weight: 500; color: var(--muted); order: 2; margin-left: 8px; align-self: center; }
+h2.foldh .chev { order: 3; }
+.more-hidden { display: none !important; }
+.morebtn { display: block; width: 100%; margin-top: 8px; padding: 9px; border: 1px dashed var(--line); border-radius: 10px; background: transparent; color: var(--brand); font: inherit; font-weight: 650; font-size: .88rem; cursor: pointer; }
+.morebtn:active { background: var(--soft); }
+.alloc .morebtn, .catbars .morebtn { grid-column: 1 / -1; }
+#fab { position: fixed; right: 18px; bottom: calc(76px + var(--safe-bottom, 0px)); width: 56px; height: 56px; border-radius: 18px; border: 0; background: var(--brand); color: var(--brand-ink); box-shadow: 0 4px 14px rgba(0, 0, 0, .25); cursor: pointer; z-index: 20; display: grid; place-items: center; }
+#fab[hidden] { display: none; }
+#fab svg { width: 28px; height: 28px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; }
+#fab:active { transform: scale(.95); }
+.subnav { grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); }
+.limitbar.paid i { background: var(--up); }
+.txn .limitbar { margin-top: 8px; }

@@ -1,10 +1,10 @@
-/* KJT Invest 1.8.1 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
+/* KJT Invest 1.9 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
    All data stays in one SQLite file on the device. The only network calls are the
    price updates (metal prices from gold-api.com, exchange rates from the European Central Bank). */
 'use strict';
 
-const APP_VERSION = '1.8.1';
-const SCHEMA = 7;
+const APP_VERSION = '1.9';
+const SCHEMA = 8;
 const OZT_G = 31.1034768;
 const METALS = [
   { sym: 'XAU', name: 'Gold', purity: 0.9999 },
@@ -123,6 +123,10 @@ CREATE INDEX IF NOT EXISTS tx_date ON transactions(date);
 CREATE INDEX IF NOT EXISTS tx_acct ON transactions(account_id, date);
 CREATE TABLE IF NOT EXISTS recurring (id INTEGER PRIMARY KEY, account_id INTEGER NOT NULL, kind TEXT NOT NULL, amount REAL NOT NULL, category_id INTEGER,
   payee TEXT, note TEXT, to_account_id INTEGER, link TEXT, freq TEXT NOT NULL, next_date TEXT NOT NULL, end_date TEXT, auto INTEGER DEFAULT 0, active INTEGER DEFAULT 1);
+CREATE TABLE IF NOT EXISTS loans (id INTEGER PRIMARY KEY, person TEXT NOT NULL, amount REAL NOT NULL, currency TEXT, date TEXT NOT NULL, due_date TEXT,
+  rate REAL, notes TEXT, closed INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS loan_payments (id INTEGER PRIMARY KEY, loan_id INTEGER NOT NULL, date TEXT NOT NULL, principal REAL DEFAULT 0, interest REAL DEFAULT 0,
+  account_id INTEGER, note TEXT);
 `;
 function q(sql, params) {
   const st = db.prepare(sql); const out = [];
@@ -167,12 +171,22 @@ function prepareDb() {
   /* when a transaction and a balance check fall on the same day, the one entered later counts as later */
   if (!q('PRAGMA table_info(account_balances)').some(r => r.name === 'created')) run('ALTER TABLE account_balances ADD COLUMN created INTEGER');
   if (!q('PRAGMA table_info(transactions)').some(r => r.name === 'created')) run('ALTER TABLE transactions ADD COLUMN created INTEGER');
+  /* 1.9: bank file import remembers what it imported; categories for transfers and loans */
+  if (!q('PRAGMA table_info(transactions)').some(r => r.name === 'import_id')) run('ALTER TABLE transactions ADD COLUMN import_id TEXT');
+  run('CREATE INDEX IF NOT EXISTS tx_import ON transactions(import_id)');
   for (const tb of ['properties', 'accounts', 'other_assets']) {
     const tc = q(`PRAGMA table_info(${tb})`).map(r => r.name);
     if (!tc.includes('share_pct')) { run(`ALTER TABLE ${tb} ADD COLUMN share_pct REAL`); run(`UPDATE ${tb} SET share_pct = 100.0 / owners WHERE owners > 1`); }
     if (!tc.includes('co_owners')) run(`ALTER TABLE ${tb} ADD COLUMN co_owners TEXT`);
   }
   if (!getSetting('cats_seeded')) { seedCategories(); setSetting('cats_seeded', '1'); }
+  if (!getSetting('cats_v19')) {
+    const addCat = (name, kind, subs) => { if (q('SELECT id FROM categories WHERE parent_id IS NULL AND name=?', [name]).length) return;
+      run('INSERT INTO categories(name,parent_id,kind,sort) VALUES(?,?,?,?)', [name, null, kind, 900]); const pid = q('SELECT last_insert_rowid() id')[0].id;
+      for (const sname of subs) run('INSERT INTO categories(name,parent_id,kind,sort) VALUES(?,?,?,?)', [sname, pid, kind, 901]); };
+    addCat('Transfers & card payments', 'save', []); addCat('Loans', 'save', ['Lent', 'Repaid']);
+    setSetting('cats_v19', '1'); clearCats();
+  }
   if (+getSetting('schema', 1) < SCHEMA) setSetting('schema', SCHEMA);
 }
 function isOurDb(candidate) {
@@ -394,13 +408,14 @@ function totals() {
     const v = conv(b.balance * shareOf(a), a.currency || H, H);
     if (v == null) { missing = true; continue; } cash += v; if (v < 0) debt -= v;
   }
+  const lt = loansTotal();
   let other = 0, otherCost = 0;
   for (const a of q('SELECT * FROM other_assets')) {
     const v = assetValue(a.id); if (!v) continue; const k = shareOf(a);
     const hv = conv(v.value * k, a.currency || H, H); if (hv == null) { missing = true; continue; }
     other += hv; otherCost += conv((a.purchase_price != null ? a.purchase_price : v.value) * k, a.currency || H, H) || 0;
   }
-  return { other, otherCost, cash, metals, metalsCost, metalsM, metalsCostM, re, reInvested, reIncome, reLastNet, reLastYear, debt, total: metals + re + cash + other, missing };
+  return { other, otherCost, cash, metals, metalsCost, metalsM, metalsCostM, re, reInvested, reIncome, reLastNet, reLastYear, debt, loans: lt.total, total: metals + re + cash + other + lt.total, missing: missing || lt.missing };
 }
 
 /* ---------------- price updates ---------------- */
@@ -610,12 +625,13 @@ function setTitle(t, back) {
   document.getElementById('title').textContent = t;
   document.getElementById('back').hidden = !back;
 }
-/* Menus: Overview · Assets (Metals, Property, Cash, Other assets) · Markets (metal prices, currencies) */
+/* Menus: Overview · Assets (Metals, Property, Accounts, Loans, Other assets) · Cash flow · Prices (metal prices, currencies) */
 /* small coloured pictures for the sub-menus */
 const SUBICON = {
   metals: () => metalIcon('XAU', 'bar', 22),
   property: () => `<svg class="sico" viewBox="0 0 24 24"><path class="f" d="M5 10.5 12 5l7 5.5V20H5z"/><path d="M3 11.5 12 4l9 7.5M5 10v10h14V10M10 20v-5.5h4V20"/></svg>`,
   accounts: () => `<svg class="sico" viewBox="0 0 24 24"><rect class="f" x="3" y="7.5" width="18" height="12.5" rx="2.5"/><path d="M5.5 7.5 15.5 4l1.2 3.5M21 12h-4.5a1.75 1.75 0 0 0 0 3.5H21"/></svg>`,
+  loans: () => `<svg class="sico" viewBox="0 0 24 24"><circle class="f" cx="15.5" cy="6.5" r="3"/><path d="M2.5 16l3.5-.5 4 2.5h4a1.5 1.5 0 0 0 0-3h-3M6 15.5l4.2-3.2a2 2 0 0 1 2.3-.1l2.5 1.8 4.5-1.6"/><circle cx="15.5" cy="6.5" r="3"/></svg>`,
   assets: () => `<svg class="sico" viewBox="0 0 24 24"><path class="f" d="M3 16v-3l2-5h14l2 5v3z"/><path d="M3 16v-3l2-5h14l2 5v3zM5 13h14"/><circle cx="7.5" cy="17" r="1.8"/><circle cx="16.5" cy="17" r="1.8"/></svg>`,
   tx: () => `<svg class="sico" viewBox="0 0 24 24"><rect class="f" x="4" y="3" width="16" height="18" rx="2.5"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>`,
   reports: () => `<svg class="sico" viewBox="0 0 24 24"><path class="f" d="M12 3a9 9 0 1 0 9 9h-9z"/><path d="M12 3a9 9 0 1 0 9 9h-9zM15 3.5A8 8 0 0 1 20.5 9H15z"/></svg>`,
@@ -623,7 +639,7 @@ const SUBICON = {
   categories: () => `<svg class="sico" viewBox="0 0 24 24"><path class="f" d="M3.5 12.5V4.5a1 1 0 0 1 1-1h8l8 8-9 9z"/><path d="M3.5 12.5V4.5a1 1 0 0 1 1-1h8l8 8-9 9z"/><circle cx="8" cy="8" r="1.5"/></svg>`,
 };
 const subBtn = (k, l, on, attr) => `<button class="${on ? 'on' : ''}" ${attr}="${k}">${SUBICON[k] ? SUBICON[k]() : ''}<span>${l}</span></button>`;
-const ASECS = [['metals', 'Metals'], ['property', 'Property'], ['accounts', 'Cash'], ['assets', 'Other assets']];
+const ASECS = [['metals', 'Metals'], ['property', 'Property'], ['accounts', 'Accounts'], ['loans', 'Loans'], ['assets', 'Other']];
 const isAsset = t => ASECS.some(a => a[0] === t);
 function render() {
   if (isAsset(state.tab)) state.lastAsec = state.tab;
@@ -635,14 +651,16 @@ function render() {
   else if (state.tab === 'property') state.propertyId ? renderProperty(state.propertyId) : renderProperties();
   else if (state.tab === 'accounts') state.accountId ? renderAccount(state.accountId) : renderAccounts();
   else if (state.tab === 'assets') state.assetId ? renderAsset(state.assetId) : renderAssets();
+  else if (state.tab === 'loans') state.loanId ? renderLoan(state.loanId) : renderLoans();
   else if (state.tab === 'currency') renderMarkets();
   else if (state.tab === 'money') renderMoney();
   else renderMore();
-  const inDetail = state.propertyId && state.tab === 'property' || state.accountId && state.tab === 'accounts' || state.assetId && state.tab === 'assets';
+  const inDetail = state.propertyId && state.tab === 'property' || state.accountId && state.tab === 'accounts' || state.assetId && state.tab === 'assets' || state.loanId && state.tab === 'loans';
   if (isAsset(state.tab) && !inDetail) {
     setTitle('Assets');
     view().insertAdjacentHTML('afterbegin', `<div class="subnav">${ASECS.map(([k, l]) => subBtn(k, l, k === state.tab, 'data-asec')).join('')}</div>`);
   }
+  enhanceView();
 }
 function priceStrip() {
   const H = mcur();
@@ -659,7 +677,7 @@ function missingWarn() {
 function renderOverview() {
   setTitle('KJT Invest');
   const t = totals(), H = home();
-  const nAll = ['metal_holdings', 'properties', 'accounts', 'other_assets'].reduce((n, tb) => n + q(`SELECT COUNT(*) n FROM ${tb}`)[0].n, 0);
+  const nAll = ['metal_holdings', 'properties', 'accounts', 'other_assets', 'loans'].reduce((n, tb) => n + q(`SELECT COUNT(*) n FROM ${tb}`)[0].n, 0);
   let h = missingWarn() + `<h2 class="sect">Summary <span class="sub">swipe the box for more</span></h2>` + heroHtml(t);
   if (!nAll) {
     h += `<div class="card"><h2>Welcome</h2><p class="sub">Add what you own. Everything stays on this device, in one file you can export at any time.</p>
@@ -684,6 +702,8 @@ function renderOverview() {
   h += `<div class="card tap" data-go="assets"><div class="phead"><span class="pbadge">${assetIcon('car')}</span><h2 style="margin:0">Other assets</h2></div>
     <div class="row strong"><span class="k">Value (your estimate)</span><span class="v">${whole(t.other, H)}</span></div>
     ${t.otherCost ? `<div class="row"><span class="k">Paid</span><span class="v">${whole(t.otherCost, H)}</span></div>` : ''}</div>`;
+  if (q('SELECT COUNT(*) n FROM loans')[0].n) h += `<div class="card tap" data-go="loans"><div class="phead"><span class="pbadge">${loanIcon()}</span><h2 style="margin:0">Loans you made</h2></div>
+    <div class="row strong"><span class="k">Owed to you</span><span class="v">${whole(t.loans, H)}</span></div></div>`;
   h += `<h2 class="sect">Income & expenses</h2>` + ieCard();
   h += `<h2 class="sect">Current prices <span class="sub">${mcur()} per troy ounce</span></h2><div class="card">${priceStrip()}</div>`;
   if (nAll) h += `<button class="btn wide light" data-act="print-report">Print the report or save it as a PDF</button>`;
@@ -830,6 +850,8 @@ function worthModel() {
     const f1 = q('SELECT MIN(date) d FROM account_balances WHERE account_id=?', [a.id])[0].d, f2 = q('SELECT MIN(date) d FROM transactions WHERE account_id=? OR to_account_id=?', [a.id, a.id])[0].d;
     const from = [f1, f2].filter(Boolean).sort()[0]; if (!from) continue;
     items.push({ kind: 'c', from, at: d => { const b = acctBalance(a.id, d); return b == null ? 0 : convOn(b.balance * k, c, H, d); }, paid: null }); }
+  for (const l of q('SELECT * FROM loans')) { const c = l.currency || H;
+    items.push({ kind: 'l', from: l.date, at: d => convOn(loanStats(l, d).owed, c, H, d), paid: d => convOn(loanStats(l, d).owed, c, H, d) }); }
   for (const a of q('SELECT * FROM other_assets')) { const k = shareOf(a), c = a.currency || H;
     const an = q('SELECT date, value FROM asset_values WHERE asset_id=? ORDER BY date, id', [a.id]).map(r => [r.date, r.value]);
     if (a.purchase_date && a.purchase_price != null && (!an.length || an[0][0] > a.purchase_date)) an.unshift([a.purchase_date, a.purchase_price]);
@@ -897,7 +919,7 @@ function bindChart() {
 /* ---------------- overview: the top box has pages you swipe ---------------- */
 const CATS = [['metals', 'Precious metals', 'cat-m'], ['re', 'Real estate', 'cat-p'], ['cash', 'Cash & bank', 'cat-c'], ['other', 'Other assets', 'cat-o']];
 function heroPages(t) {
-  const H = home(), parts = { metals: t.metals, re: t.re, cash: Math.max(0, t.cash), other: t.other };
+  const H = home(), parts = { metals: t.metals, re: t.re, cash: Math.max(0, t.cash), other: t.other + (t.loans || 0) };
   const sum = Object.values(parts).reduce((a, b) => a + b, 0) || 1;
   const paid = { metals: t.metalsCost, re: t.reInvested, cash: t.cash, other: t.otherCost };
   const gainOf = { metals: t.metals - t.metalsCost, re: t.re - t.reInvested + t.reIncome, cash: 0, other: t.other - t.otherCost };
@@ -1014,7 +1036,7 @@ function renderMetals() {
   let tv = 0, tc = 0; for (const x of hs) { const st = holdingStats(x); if (st.valueM != null) { tv += st.valueM; tc += st.costM || 0; } }
   let h = missingWarn() + `<h2 class="sect">Total</h2><div class="card hero"><div class="label">Precious metals (${H})</div><div class="big">${whole(tv, H)}</div>
       ${tc ? `<div class="sub">Paid ${whole(tc, H)} (fees included) · <span class="${signCls(tv - tc)}">${pct(tv / tc - 1)}</span></div>` : ''}
-      <div class="sub" style="margin-top:6px"><a href="#" data-go="markets">Prices, sources and the price chart are under Markets ›</a></div></div>`
+      <div class="sub" style="margin-top:6px"><a href="#" data-go="markets">Prices, sources and the price chart are under Prices ›</a></div></div>`
     + `<h2 class="sect">Your holdings</h2>`;
   if (!hs.length) h += `<div class="card empty">No metals yet.</div>`;
   for (const m of METALS) {
@@ -1231,19 +1253,20 @@ function renderAccount(id) {
       ${lim ? `${limitBar(used)}<div class="ie3" style="margin-top:10px"><div class="stat"><div class="k">Limit</div><div class="v">${money(lim, c, { dec: 0 })}</div></div><div class="stat"><div class="k">Available</div><div class="v ${lim - owed < 0 ? 'down' : 'up'}">${money(lim - owed, c, { dec: 0 })}</div></div><div class="stat"><div class="k">Used</div><div class="v ${used > .7 ? 'down' : ''}">${Math.round(used * 100)}%</div></div></div>` : '<p class="sub">Add the credit limit (Edit) to see what is still available.</p>'}
       ${a.interest_rate ? `<div class="sub" style="margin-top:8px">${a.interest_rate}% interest a year on what is not paid in time</div>` : ''}
       <div class="btns"><button class="btn" data-act="add-tx" data-acct-id="${a.id}">+ Expense</button><button class="btn light" data-act="pay-card" data-id="${a.id}">Pay the card</button></div>
-      <div class="btns"><button class="btn light" data-act="add-balance" data-id="${a.id}">Statement / what you owe</button><button class="btn light" data-act="edit-account" data-id="${a.id}">Edit</button></div></div>`;
+      <div class="btns"><button class="btn light" data-act="add-balance" data-id="${a.id}">Statement / what you owe</button><button class="btn light" data-act="bank-import" data-id="${a.id}">Import bank file</button></div>
+      <div class="btns"><button class="btn light" data-act="edit-account" data-id="${a.id}">Edit</button></div></div>`;
   } else {
     h = `<div class="card hero"><div class="label">${esc(ACCT_TYPES[a.type] || 'Account')}${a.institution ? ' · ' + esc(a.institution) : ''}</div>
       <div class="big">${b ? money(b.balance * share, c) : '—'}</div>
       <div class="sub">${b ? 'as of ' + fmtDate(b.date) : 'no balance yet'}${share < 1 ? ' · your share (' + shareLbl(a) + ') of ' + money(b ? b.balance : 0, c) : ''}${a.interest_rate ? ' · ' + a.interest_rate + '% interest' : ''}</div>
       <div class="btns"><button class="btn" data-act="add-tx" data-acct-id="${a.id}">+ Transaction</button><button class="btn light" data-act="add-balance" data-id="${a.id}">Update balance</button></div>
-      <div class="btns"><button class="btn light" data-act="edit-account" data-id="${a.id}">Edit</button></div></div>`;
+      <div class="btns"><button class="btn light" data-act="bank-import" data-id="${a.id}">Import bank file</button><button class="btn light" data-act="edit-account" data-id="${a.id}">Edit</button></div></div>`;
   }
   const txs = q('SELECT * FROM transactions WHERE account_id=? OR to_account_id=? ORDER BY date DESC, id DESC LIMIT 60', [id, id]);
   if (txs.length) {
     const A = Object.fromEntries(q('SELECT * FROM accounts').map(x => [x.id, x]));
     h += `<h2 class="sect">Transactions <span class="sub">latest</span></h2><div class="card"><div class="txlist">` + txs.map(t => `<div class="txday small">${fmtDate(t.date)}</div>` + txRow(t, A)).join('') + `</div>
-      <div class="btns"><button class="btn light" data-act="tx-of" data-id="${a.id}">All of them under Money</button></div></div>`;
+      <div class="btns"><button class="btn light" data-act="tx-of" data-id="${a.id}">All of them under Cash flow</button></div></div>`;
   }
   h += `<h2 class="sect">${cr ? 'Statements' : 'Balance checks'} <span class="sub">${cr ? 'what you owed' : 'the real balance from your bank'}</span></h2><div class="card">`;
   if (!bs.length) h += `<p class="sub">None yet.</p>`;
@@ -1337,7 +1360,7 @@ function renderMarkets() {
   renderCurrency(pre); bindChart();
 }
 function renderCurrency(prefix) {
-  setTitle('Markets');
+  setTitle('Prices');
   const from = getSetting('conv_from', 'USD'), to = getSetting('conv_to', home()), amt = num(getSetting('conv_amt', '100')) || 0;
   const r1 = conv(1, from, to), res = conv(amt, from, to);
   const dec = c => ['JPY', 'KRW', 'IDR', 'HUF', 'ISK', 'CLP', 'VND'].includes(c) ? 0 : 2;
@@ -1408,6 +1431,8 @@ function renderMore() {
   h += `<h2 class="sect">Your data</h2><div class="card">
     <p class="sub">Everything is kept in one SQLite database file on this device. Export it to back it up or to move it to another phone or computer; import it there.</p>
     <div class="btns"><button class="btn" data-act="export">Export database</button><button class="btn light" data-act="import">Import database</button></div>
+    <h3 class="ieh">From your bank</h3><p class="sub">In your online banking, download your account's history (OFX, QFX, QIF or CSV), then import it here. Your bank password is never needed and the file is read only on this device. Transactions already here are skipped.</p>
+    <div class="btns"><button class="btn" data-act="bank-import">Import bank file</button></div>
     <h3 class="ieh">Printable report</h3><p class="sub">A clean summary on paper: net worth, every holding, income & expenses, bills coming. Print it, or choose "Save as PDF" (Android) / "Print to File" (Linux) to keep a PDF.</p>
     <div class="btns"><button class="btn" data-act="print-report">Print or save as PDF</button></div>
     <h3 class="ieh">For a spreadsheet (CSV)</h3><p class="sub">Opens in LibreOffice Calc, Excel or Google Sheets. Amounts in each item's own currency, with your share.</p>
@@ -1430,7 +1455,7 @@ function renderMore() {
 
 /* ---------------- forms ---------------- */
 function openSheet(html, onReady) {
-  const sh = document.getElementById('sheet'), bx = sh.querySelector('.sheet-box'); bx.oninput = bx.onclick = null; bx.innerHTML = html; sh.hidden = false;
+  const sh = document.getElementById('sheet'), bx = sh.querySelector('.sheet-box'); bx.oninput = bx.onclick = bx.onchange = null; bx.innerHTML = html; sh.hidden = false;
   sh.querySelector('.sheet-box').scrollTop = 0; if (onReady) onReady(sh.querySelector('.sheet-box'));
 }
 function closeSheet() { document.getElementById('sheet').hidden = true; }
@@ -1637,9 +1662,10 @@ function toast(msg) { const t = document.getElementById('toast'); t.textContent 
 document.getElementById('tabs').onclick = e => { const b = e.target.closest('button'); if (!b) return;
   let t = b.dataset.tab;
   if (t === 'assetsgroup') t = isAsset(state.tab) ? state.tab : (state.lastAsec || 'metals');
-  if (state.tab === t || b.dataset.tab === 'assetsgroup') { state.propertyId = null; state.accountId = null; state.assetId = null; }
+  if (state.tab === t || b.dataset.tab === 'assetsgroup') { state.propertyId = null; state.accountId = null; state.assetId = null; state.loanId = null; }
   state.tab = t; render(); view().scrollTop = 0; };
 document.getElementById('refresh').onclick = () => updatePrices(false);
+document.getElementById('fab').onclick = () => txForm(null, null, state.txAcct ? { account_id: +state.txAcct } : null);
 document.getElementById('settings').onclick = () => { state.tab = 'more'; render(); view().scrollTop = 0; };
 document.getElementById('back').onclick = () => goBack();
 function goBack() {
@@ -1648,17 +1674,18 @@ function goBack() {
   if (state.tab === 'property' && state.propertyId) { state.propertyId = null; render(); return true; }
   if (state.tab === 'accounts' && state.accountId) { state.accountId = null; render(); return true; }
   if (state.tab === 'assets' && state.assetId) { state.assetId = null; render(); return true; }
+  if (state.tab === 'loans' && state.loanId) { state.loanId = null; render(); return true; }
   if (state.tab !== 'overview') { state.tab = 'overview'; render(); return true; }
   return false;
 }
 window.__onBack = () => goBack();
 window.addEventListener('resize', () => { for (const [id, k] of [['heroS', 'hpage'], ['cfS', 'cfPage']]) { const el = document.getElementById(id); if (el) fitSwipe(el, state[k] || 0); } });
 view().addEventListener('click', e => {
-  const el = e.target.closest('[data-act],[data-go],[data-metal],[data-prop],[data-item],[data-pval],[data-cfy],[data-cfp],[data-rent],[data-price],[data-fx],[data-chart],[data-range],[data-acct],[data-bal],[data-asset],[data-aval],[data-hpage],[data-prange],[data-unfav],[data-ie],[data-asec],[data-msec],[data-txm],[data-tx],[data-rec],[data-cat],[data-addsub],[data-addcat],[data-rp],[data-remdo],[data-remskip]'); if (!el) return;
+  const el = e.target.closest('[data-act],[data-go],[data-metal],[data-prop],[data-item],[data-pval],[data-cfy],[data-cfp],[data-rent],[data-price],[data-fx],[data-chart],[data-range],[data-acct],[data-bal],[data-asset],[data-aval],[data-hpage],[data-prange],[data-unfav],[data-ie],[data-asec],[data-msec],[data-txm],[data-tx],[data-rec],[data-cat],[data-addsub],[data-addcat],[data-rp],[data-remdo],[data-remskip],[data-loan],[data-lpay]'); if (!el) return;
   const d = el.dataset;
   if (d.chart) { state.chart = d.chart; const st = view().scrollTop; render(); view().scrollTop = st; }
   else if (d.range) { state.range = d.range; const st = view().scrollTop; render(); view().scrollTop = st; }
-  else if (d.go) { e.preventDefault(); state.tab = d.go; state.propertyId = null; state.accountId = null; state.assetId = null; render(); view().scrollTop = 0; }
+  else if (d.go) { e.preventDefault(); state.tab = d.go; state.propertyId = null; state.accountId = null; state.assetId = null; state.loanId = d.loanid ? +d.loanid : null; render(); view().scrollTop = 0; }
   else if (d.metal) metalForm(+d.metal);
   else if (d.prop) { state.propertyId = +d.prop; render(); view().scrollTop = 0; }
   else if (d.item) itemForm(state.propertyId, +d.item);
@@ -1666,10 +1693,12 @@ view().addEventListener('click', e => {
   else if (d.cfy) { state.cfYear = +d.cfy; if (el.classList.contains('yrow')) state.cfPage = 0; const st = view().scrollTop; render(); view().scrollTop = st; }
   else if (d.cfp) { state.cfPage = +d.cfp; const sc = document.getElementById('cfS'); if (sc) sc.scrollTo({ left: +d.cfp * sc.clientWidth, behavior: 'smooth' }); document.querySelectorAll('.cftabs .seg').forEach((b, j) => b.classList.toggle('on', j === +d.cfp)); }
   else if (d.rent) rentForm(state.propertyId, +d.rent);
-  else if (d.asec) { state.tab = d.asec; state.propertyId = null; state.accountId = null; state.assetId = null; render(); view().scrollTop = 0; }
+  else if (d.asec) { state.tab = d.asec; state.propertyId = null; state.accountId = null; state.assetId = null; state.loanId = null; render(); view().scrollTop = 0; }
   else if (d.msec) { state.msec = d.msec; render(); view().scrollTop = 0; }
   else if (d.txm) { state.txMonth = d.txm; const st = view().scrollTop; render(); view().scrollTop = st; }
   else if (d.tx) txForm(+d.tx);
+  else if (d.loan) { state.loanId = +d.loan; render(); view().scrollTop = 0; }
+  else if (d.lpay) loanPayForm(state.loanId, +d.lpay);
   else if (d.rec) recForm(+d.rec);
   else if (d.cat) catForm(+d.cat);
   else if (d.addsub) catForm(null, +d.addsub);
@@ -1700,6 +1729,10 @@ view().addEventListener('click', e => {
       const ow = acctBalance(+d.id); txForm(null, null, { kind: 'transfer', account_id: bank.id, to_account_id: +d.id, amount: ow && ow.balance < 0 ? +(-ow.balance).toFixed(2) : null, note: 'Card payment' }); break; }
     case 'tx-of': state.tab = 'money'; state.msec = 'tx'; state.txAcct = d.id; state.accountId = null; render(); view().scrollTop = 0; break;
     case 'csv': exportCsv(d.which); break;
+    case 'add-loan': loanForm(); break;
+    case 'edit-loan': loanForm(+d.id); break;
+    case 'add-loanpay': loanPayForm(+d.id); break;
+    case 'bank-import': bankImport(d.id ? +d.id : null); break;
     case 'print-report': printReport(); break;
     case 'add-asset': assetForm(); break;
     case 'check-update': checkUpdate(true); break;
@@ -1934,6 +1967,9 @@ function ieModel() {
     const a = A[t.account_id] || {}, v = convOn(t.amount * shareOf(a), a.currency || H, H, t.date) || 0, x = slot(t.date.slice(0, 7));
     if (t.kind === 'in') x.hin += v; else { x.costs += v; const kk = 'cat:' + (top ? top.name : 'No category'); x.byKind[kk] = (x.byKind[kk] || 0) + v; }
   }
+  /* interest from loans you made, received outside your accounts (in your accounts it is already a transaction) */
+  for (const p of q('SELECT p.*, l.currency FROM loan_payments p JOIN loans l ON l.id=p.loan_id WHERE p.interest>0 AND p.account_id IS NULL'))
+    if (p.date <= now) slot(p.date.slice(0, 7)).hin += convOn(p.interest, p.currency || H, H, p.date) || 0;
   for (const a of q("SELECT * FROM accounts WHERE interest_rate > 0 AND type<>'credit'")) {
     const bs = q('SELECT date, balance FROM account_balances WHERE account_id=? ORDER BY date, id', [a.id]).map(r => [r.date, r.balance]);
     if (!bs.length) continue;
@@ -1961,7 +1997,7 @@ function ieRange(model, range) {
 }
 function ieCard() {
   const H = home(), model = ieModel();
-  if (!Object.keys(model).length) return `<div class="card"><p class="sub">Add transactions under Money, rent periods and costs to your properties, and interest rates to your savings accounts, to see your income and expenses here.</p></div>`;
+  if (!Object.keys(model).length) return `<div class="card"><p class="sub">Add transactions under Cash flow, rent periods and costs to your properties, and interest rates to your savings accounts, to see your income and expenses here.</p></div>`;
   state.ieRange = state.ieRange || 'L12';
   const t = ieRange(model, state.ieRange), yNow = new Date().getFullYear();
   const segs = [['L12', 'Last 12 months'], ['Y', String(yNow) + ' so far'], ['PY', String(yNow - 1)]].map(([kk, l]) => `<button class="seg${state.ieRange === kk ? ' on' : ''}" data-ie="${kk}">${l}</button>`).join('');
@@ -1980,7 +2016,7 @@ function ieCard() {
     ${bars}
     <h3 class="ieh">Income</h3><div class="alloc">${rows(inc, t.income)}</div>
     <h3 class="ieh">Expenses</h3><div class="alloc">${rows(exp, t.costs)}</div>
-    <p class="sub" style="margin:10px 0 0">From your transactions (savings and transfers left out), your properties (your share) and the interest your accounts earn, estimated from their rate and balance. Details under Money › Reports.</p></div>`;
+    <p class="sub" style="margin:10px 0 0">From your transactions (savings and transfers left out), your properties (your share) and the interest your accounts earn, estimated from their rate and balance. Details under Cash flow › Reports.</p></div>`;
 }
 
 /* ---------------- Money: transactions, recurring, reminders, categories, reports ----------------
@@ -1997,6 +2033,7 @@ const DEFAULT_CATS = [
   ['out', 'Travel', []], ['out', 'Taxes', []], ['out', 'Other', []],
   ['in', 'Salary', []], ['in', 'Rent received', []], ['in', 'Interest', []], ['in', 'Gifts received', []], ['in', 'Other income', []],
   ['save', 'Savings & investments', ['Precious metals', 'Property', 'Big purchases']],
+  ['save', 'Transfers & card payments', []], ['save', 'Loans', ['Lent', 'Repaid']],
 ];
 const KIND_NAME = { out: 'Expense', in: 'Income', transfer: 'Transfer' };
 const FREQS = { weekly: 'Every week', biweekly: 'Every 2 weeks', monthly: 'Every month', yearly: 'Every year' };
@@ -2077,9 +2114,13 @@ function reminders(days) {   /* due (or overdue) reminders, and what is coming i
   return q('SELECT * FROM recurring WHERE active=1 AND next_date<=? ORDER BY next_date', [until]);
 }
 function remindersCard() {
-  const rs = reminders(14); if (!rs.length) return '';
-  const now = today();
-  return `<h2 class="sect">Coming up <span class="sub">next 14 days</span></h2><div class="card"><div class="txns" style="margin-top:0">` + rs.map(r => {
+  const rs = reminders(14), now = today(), until = dstr(dnum(now) + 14);
+  const ls = q('SELECT * FROM loans WHERE closed=0 AND due_date IS NOT NULL AND due_date<=? ORDER BY due_date', [until]);
+  if (!rs.length && !ls.length) return '';
+  const loanRows = ls.map(l => { const s = loanStats(l); if (s.owed <= 0.005) return ''; const late = l.due_date < now;
+    return `<div class="txn ${late ? 'cost' : 'inc'}" data-go="loans" data-loanid="${l.id}"><div class="txn-top"><span class="txn-date${late ? ' warn-t' : ''}">${late ? 'overdue · ' : ''}${fmtDate(l.due_date)}</span><span class="txn-desc">${esc(l.person)} repays you</span></div>
+      <div class="txn-body"><div class="sub">loan of ${money(l.amount, l.currency || home(), { dec: 0 })}</div><div class="r"><div class="strongv">${money(s.owed, l.currency || home())}</div></div></div></div>`; }).join('');
+  return `<h2 class="sect">Coming up <span class="sub">next 14 days</span></h2><div class="card"><div class="txns" style="margin-top:0">` + loanRows + rs.map(r => {
     const a = q('SELECT * FROM accounts WHERE id=?', [r.account_id])[0], c = (a && a.currency) || home(), due = r.next_date <= now;
     return `<div class="txn ${r.kind === 'in' ? 'inc' : 'cost'}"><div class="txn-top"><span class="txn-date${due ? ' warn-t' : ''}">${due ? (r.next_date < now ? 'overdue · ' : 'today · ') : ''}${fmtDate(r.next_date)}</span><span class="txn-desc">${esc(r.payee || cats().label(r.category_id))}</span></div>
       <div class="txn-body"><div class="sub">${esc(FREQS[r.freq] || '')} · ${esc(a ? a.name : '')}${r.auto ? ' · added by itself' : ''}</div><div class="r"><div class="strongv">${r.kind === 'in' ? '+' : '−'}${money(r.amount, c)}</div></div></div>
@@ -2088,11 +2129,11 @@ function remindersCard() {
 /* ---- money tab ---- */
 const MSECS = [['tx', 'Transactions'], ['reports', 'Reports'], ['recurring', 'Recurring'], ['categories', 'Categories']];
 function renderMoney() {
-  setTitle('Money');
+  setTitle('Cash flow');
   state.msec = state.msec || 'tx';
   let h = `<div class="subnav">${MSECS.map(([k, l]) => subBtn(k, l, k === state.msec, 'data-msec')).join('')}</div>`;
   if (!q('SELECT COUNT(*) n FROM accounts')[0].n) {
-    view().innerHTML = h + `<div class="card empty">First add a bank account, a credit card or cash under Assets › Cash; then your transactions go here.<div class="btns"><button class="btn" data-act="add-account">Add an account</button></div></div>`; return;
+    view().innerHTML = h + `<div class="card empty">First add a bank account, a credit card or cash under Assets › Accounts; then your transactions go here.<div class="btns"><button class="btn" data-act="add-account">Add an account</button></div></div>`; return;
   }
   if (state.msec === 'reports') h += reportsHtml();
   else if (state.msec === 'recurring') h += recurringHtml();
@@ -2118,7 +2159,7 @@ function txListHtml() {
     <div class="f2"><label class="f"><span>Account</span><select id="tx-acct"><option value="">All accounts</option>${accts.map(a => `<option value="${a.id}"${String(a.id) === String(state.txAcct || '') ? ' selected' : ''}>${esc(a.name)}</option>`).join('')}</select></label>
     <label class="f"><span>Search</span><input id="tx-search" value="${esc(state.txSearch || '')}" placeholder="payee, category, note…" autocomplete="off"></label></div>
     <div class="ie3"><div class="stat"><div class="k">In</div><div class="v up">${whole(inn, H)}</div></div><div class="stat"><div class="k">Out</div><div class="v down">${whole(out, H)}</div></div><div class="stat"><div class="k">Net</div><div class="v ${signCls(inn - out)}">${whole(inn - out, H)}</div></div></div>
-    <div class="btns"><button class="btn" data-act="add-tx">+ Add transaction</button></div></div>`;
+    <div class="btns"><button class="btn" data-act="add-tx">+ Add transaction</button><button class="btn light" data-act="bank-import"${state.txAcct ? ` data-id="${state.txAcct}"` : ''}>Import bank file</button></div></div>`;
   if (!txs.length) return h + `<div class="card empty">No transactions in this month${srch ? ' match your search' : ''}.</div>`;
   let day = '';
   h += `<div class="card"><div class="txlist">`;
@@ -2157,7 +2198,7 @@ function linkedTxHtml(link, title) {
   return `<h2 class="sect">${title || 'Transactions linked to this'}</h2><div class="card"><div class="txlist">${txs.map(t => `<div class="txday small">${fmtDate(t.date)}</div>` + txRow(t, A)).join('')}</div></div>`;
 }
 function txForm(id, copyOf, preset) {
-  const accts = q('SELECT * FROM accounts ORDER BY name'); if (!accts.length) return toast('First add an account under Assets › Cash.');
+  const accts = q('SELECT * FROM accounts ORDER BY name'); if (!accts.length) return toast('First add an account under Assets › Accounts.');
   const t = id ? q('SELECT * FROM transactions WHERE id=?', [id])[0] : Object.assign({ kind: 'out', date: today(), account_id: +(state.txAcct || accts[0].id) }, copyOf || {}, preset || {});
   if (copyOf) t.date = today();
   const payees = q("SELECT DISTINCT payee FROM transactions WHERE payee IS NOT NULL AND payee<>'' ORDER BY payee LIMIT 300").map(r => r.payee);
@@ -2171,7 +2212,7 @@ function txForm(id, copyOf, preset) {
     ${field('payee', 'Paid to / received from (optional)', t.payee, 'autocomplete="off" list="payees"')}<datalist id="payees">${payees.map(p => `<option value="${esc(p)}">`).join('')}</datalist></div>
     ${field('note', 'Note (optional)', t.note, 'autocomplete="off"')}
     <label class="f"><span>Linked to something you own (optional)</span><select name="link">${linkOptions(t.link || '')}</select></label>
-    ${id ? (rec ? `<p class="hint">Part of a repeating transaction (${esc(FREQS[rec.freq])}); change the repeat under Money › Recurring.</p>` : '') : `<div class="f2"><label class="f"><span>Repeat</span><select name="freq"><option value="">Only once</option>${Object.entries(FREQS).map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></label>
+    ${id ? (rec ? `<p class="hint">Part of a repeating transaction (${esc(FREQS[rec.freq])}); change the repeat under Cash flow › Recurring.</p>` : '') : `<div class="f2"><label class="f"><span>Repeat</span><select name="freq"><option value="">Only once</option>${Object.entries(FREQS).map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></label>
       <label class="f" id="auto-wrap"><span>Next times</span><select name="auto"><option value="0">Remind me</option><option value="1">Add by itself</option></select></label></div>`}
     <div class="btns"><button class="btn" data-f="save">Save</button><button class="btn light" data-f="cancel">Cancel</button></div>
     ${id ? '<div class="btns"><button class="btn light" data-f="dup">Duplicate</button><button class="btn danger" data-f="delete">Delete</button></div>' : ''}`, box => {
@@ -2182,6 +2223,10 @@ function txForm(id, copyOf, preset) {
       const cs = box.querySelector('[name=category_id]'), cur = +cs.value || t.category_id; cs.innerHTML = catOptions(k === 'in' ? 'in' : 'out', cur);
       const fr = box.querySelector('[name=freq]'); if (fr) box.querySelector('#auto-wrap').style.display = fr.value ? '' : 'none'; };
     box.querySelectorAll('[name=kind]').forEach(r => r.onchange = sync); const fr = box.querySelector('[name=freq]'); if (fr) fr.onchange = sync; sync();
+    const pe = box.querySelector('[name=payee]');   /* a payee you used before brings back its category */
+    if (pe && !id) pe.onchange = () => { const cs = box.querySelector('[name=category_id]'); if (cs.value) return;
+      const last = q("SELECT category_id, kind FROM transactions WHERE payee=? AND category_id IS NOT NULL ORDER BY date DESC, id DESC LIMIT 1", [pe.value.trim()])[0];
+      if (!last) return; const kr = box.querySelector(`[name=kind][value="${last.kind}"]`); if (kr && !kr.checked) { kr.checked = true; sync(); } cs.value = String(last.category_id); };
     box.onclick = e => { const f = e.target.dataset.f; if (!f) return;
       if (f === 'cancel') return closeSheet();
       if (f === 'dup') { const cp = Object.assign({}, t); delete cp.id; delete cp.recurring_id; return txForm(null, cp); }
@@ -2199,7 +2244,12 @@ function txForm(id, copyOf, preset) {
         run('INSERT INTO transactions(account_id,date,kind,amount,category_id,payee,note,to_account_id,link,recurring_id,created) VALUES(?,?,?,?,?,?,?,?,?,?,?)', vals.concat([rid, Date.now()]));
         state.txMonth = d.date.slice(0, 7);
       }
-      save(); closeSheet(); render(); };
+      save(); closeSheet(); render();
+      /* sorting one transaction can sort the others from the same payee */
+      const cat = vals[4], py = vals[5];
+      if (cat && py) { const others = q("SELECT id, payee FROM transactions WHERE category_id IS NULL AND kind<>'transfer' AND payee<>'' AND id<>?", [id || -1]).filter(o => firstWord(o.payee) === firstWord(py) && firstWord(py));
+        if (others.length) ask(`Put the ${others.length} other transaction${others.length > 1 ? 's' : ''} from ${py} in ${cats().label(cat)} too?`, 'Yes, sort them').then(y => {
+          if (!y) return; for (const o of others) run('UPDATE transactions SET category_id=? WHERE id=?', [cat, o.id]); save(); toast(others.length + ' more sorted'); render(); }); } };
   });
 }
 /* ---- recurring list ---- */
@@ -2307,9 +2357,12 @@ function reportsHtml() {
   if (bigChange && prev.total > 0) notes.push(`Biggest change: <b>${esc(bigChange[0])}</b> ${bigChange[1] > 0 ? 'up' : 'down'} ${whole(Math.abs(bigChange[1]), H)}.`);
   if (cur.totalIn > 0) notes.push(`You kept <b class="${signCls(cur.totalIn - cur.total)}">${Math.round((cur.totalIn - cur.total) / cur.totalIn * 100)}%</b> of your income (household only).`);
   if (cur.count) notes.push(`On average ${whole(cur.total / len, H)} a day, ${whole(cur.total / months, H)} a month.`);
+  const unsorted = q("SELECT COUNT(*) n FROM transactions WHERE category_id IS NULL AND kind<>'transfer' AND date>=? AND date<=?", [a, b])[0].n;
+  if (unsorted) notes.push(`<b>${unsorted}</b> transaction${unsorted > 1 ? 's have' : ' has'} no category yet: tap one under Transactions to choose; the others from the same payee follow, and future imports remember it.`);
   if (cur.big.length) { const [v, t] = cur.big[0]; notes.push(`Largest expense: ${whole(v, H)}${t.payee ? ' to ' + esc(t.payee) : ''} on ${fmtDate(t.date)}.`); }
   const due = reminders(30).filter(r => r.kind === 'out');
   if (due.length) { let s = 0; for (const r of due) s += r.amount; notes.push(`Coming in the next 30 days: <b>${due.length}</b> bill${due.length > 1 ? 's' : ''}, about ${whole(s, H)}.`); }
+  for (const l of q('SELECT * FROM loans WHERE closed=0 AND due_date<?', [today()])) { const s = loanStats(l); if (s.owed > 0.005) notes.push(`<span class="down">${esc(l.person)} is late repaying ${money(s.owed, l.currency || H)} (due ${fmtDate(l.due_date)}).</span>`); }
   for (const c of q("SELECT * FROM accounts WHERE type='credit' AND credit_limit>0")) { const bl = acctBalance(c.id); if (bl && -bl.balance / c.credit_limit > 0.7) notes.push(`<span class="down">${esc(c.name)} is at ${Math.round(-bl.balance / c.credit_limit * 100)}% of its limit.</span>`); }
   const max = sorted.length ? sorted[0][1] : 1;
   let h = `<h2 class="sect">Reports</h2><div class="card"><div class="segs">${segs}</div>
@@ -2342,6 +2395,7 @@ async function exportCsv(which) {
     for (const p of q('SELECT * FROM properties')) { const s = propertyStats(p); rows.push(['Property', p.name, (PROP_TYPES[p.type] || PROP_TYPES.house)[0] + (p.address ? ', ' + p.address : ''), p.currency, s.invested.toFixed(2), s.value.toFixed(2), (s.share * 100).toFixed(2), (conv(s.value * s.share, p.currency, H) || 0).toFixed(2)]); }
     for (const a of q('SELECT * FROM accounts')) { const b = acctBalance(a.id), k = shareOf(a); rows.push([a.type === 'credit' ? 'Credit card' : 'Account', a.name, (ACCT_TYPES[a.type] || '') + (a.institution ? ', ' + a.institution : ''), a.currency, '', b ? b.balance.toFixed(2) : '', (k * 100).toFixed(2), b ? (conv(b.balance * k, a.currency, H) || 0).toFixed(2) : '']); }
     for (const o of q('SELECT * FROM other_assets')) { const v = assetValue(o.id), k = shareOf(o); rows.push(['Other asset', o.name, (ASSET_TYPES[o.type] || ASSET_TYPES.other)[0], o.currency, o.purchase_price, v ? v.value : '', (k * 100).toFixed(2), v ? (conv(v.value * k, o.currency, H) || 0).toFixed(2) : '']); }
+    for (const l of q('SELECT * FROM loans')) { const s = loanStats(l); rows.push(['Loan you made', l.person, 'lent ' + l.date + (l.due_date ? ', due ' + l.due_date : '') + (l.closed ? ', repaid' : ''), l.currency, l.amount, s.owed.toFixed(2), 100, (conv(s.owed, l.currency || H, H) || 0).toFixed(2)]); }
     name = 'kjt-invest-assets-' + today() + '.csv';
   } else {
     rows = [['Property', 'Month', 'Rent', 'Other income', 'Costs', 'Net', 'Months empty', 'Your share %', 'Currency']];
@@ -2371,6 +2425,7 @@ function printReport() {
     <tr><td>Bank accounts & cash</td>${td(m(cashOnly))}</tr>
     ${debt > 0.005 ? `<tr><td>Owed on credit cards</td>${td('−' + m(debt), 'down')}</tr>` : ''}
     <tr><td>Other assets</td>${td(m(t.other))}</tr>
+    ${t.loans ? `<tr><td>Loans you made (still owed to you)</td>${td(m(t.loans))}</tr>` : ''}
     <tr class="tot"><td>Total</td>${td(m(t.total))}</tr></tbody></table>
     ${t.missing ? '<p class="pnote">Some items have no price or exchange rate yet and are left out.</p>' : ''}`;
   /* metals */
@@ -2409,6 +2464,13 @@ function printReport() {
         return `<tr><td>${esc(o.name)}<div class="psub">${(ASSET_TYPES[o.type] || ASSET_TYPES.other)[0]}${o.purchase_date ? ' · bought ' + fmtDate(o.purchase_date) : ''}</div></td>
           ${td(shareLbl(o))}${td(m(o.purchase_price != null ? conv(o.purchase_price * k, c, H) : null))}${td(m(v ? conv(v.value * k, c, H) : null))}</tr>`; }).join('') + `</tbody></table>`;
   }
+  /* loans */
+  const lns = q('SELECT * FROM loans ORDER BY closed, person');
+  if (lns.length) {
+    h += `<h2>Loans you made</h2><table><thead><tr><th>Lent to</th><th>Lent on</th><th>Due</th><th class="n">Lent</th><th class="n">Repaid</th><th class="n">Still owed</th></tr></thead><tbody>` +
+      lns.map(l => { const s = loanStats(l), c = l.currency || H;
+        return `<tr><td>${esc(l.person)}${l.rate ? `<div class="psub">${l.rate}% a year</div>` : ''}</td><td>${fmtDate(l.date)}</td><td class="${s.overdue ? 'down' : ''}">${l.closed ? 'repaid' : l.due_date ? fmtDate(l.due_date) : ''}</td>${td(money(l.amount, c, { dec: 0 }))}${td(money(s.repaid, c, { dec: 0 }))}${td(money(s.owed, c, { dec: 0 }))}</tr>`; }).join('') + `</tbody></table>`;
+  }
   /* income & expenses, last 12 months */
   const model = ieModel();
   if (Object.keys(model).length) {
@@ -2441,6 +2503,413 @@ function printReport() {
     else if (r && r.error) toast('Could not print: ' + r.error);
   });
 }
+
+/* ---------------- Loans you make to people ----------------
+   Each loan: who, how much, when, an optional due date and interest rate. Repayments lower what is still owed;
+   interest received is income. A loan can take the money from one of your accounts, and a repayment can go into one:
+   those movements are recorded as transactions in the "Loans" category, which is not counted as spending or income. */
+function loanCat(sub) {
+  const C = cats(), top = C.rows.find(c => !c.parent_id && c.name === 'Loans');
+  if (!top) return null; const s = C.rows.find(c => c.parent_id === top.id && c.name === sub); return s ? s.id : top.id;
+}
+function interestCat() { const r = cats().rows.find(c => !c.parent_id && c.kind === 'in' && c.name === 'Interest'); return r ? r.id : null; }
+function loanStats(l, onDate) {
+  const d = onDate || today();
+  const pays = q('SELECT * FROM loan_payments WHERE loan_id=? ORDER BY date DESC, id DESC', [l.id]);
+  let repaid = 0, interest = 0;
+  for (const p of pays) if (p.date <= d) { repaid += p.principal || 0; interest += p.interest || 0; }
+  const owed = l.date > d ? 0 : Math.max(0, l.amount - repaid);
+  const overdue = !l.closed && owed > 0.005 && l.due_date && l.due_date < today();
+  return { pays, repaid, interest, owed, overdue, paidPct: l.amount ? Math.min(1, repaid / l.amount) : 0 };
+}
+function loansTotal() {   /* what people owe you, in your home currency */
+  const H = home(); let total = 0, missing = false;
+  for (const l of q('SELECT * FROM loans WHERE closed=0')) { const v = conv(loanStats(l).owed, l.currency || H, H); if (v == null) missing = true; else total += v; }
+  return { total, missing };
+}
+const loanIcon = (size) => `<svg class="picon" viewBox="0 0 24 24" width="${size || 26}" height="${size || 26}" aria-hidden="true"><path d="M3 15.5l3.5-.5 4 2.5h4a1.5 1.5 0 0 0 0-3h-3"/><path d="M6.5 15l4.2-3.2a2 2 0 0 1 2.3-.1L16 13.5l4-1.5"/><circle cx="15.5" cy="6" r="2.6"/></svg>`;
+function renderLoans() {
+  setTitle('Assets');
+  const H = home(), ls = q('SELECT * FROM loans ORDER BY closed, COALESCE(due_date, "9999"), person');
+  let h = missingWarn(), open = 0, n = 0;
+  const rows = ls.map(l => { const s = loanStats(l), c = l.currency || H; if (!l.closed) { open += conv(s.owed, c, H) || 0; n++; }
+    return `<div class="txn${l.closed ? ' off' : s.overdue ? ' cost' : ' inc'}" data-loan="${l.id}"><div class="txn-top"><span class="txn-date${s.overdue ? ' warn-t' : ''}">${l.closed ? 'repaid' : l.due_date ? (s.overdue ? 'overdue since ' : 'due ') + fmtDate(l.due_date) : 'lent ' + fmtDate(l.date)}</span><span class="txn-desc">${esc(l.person)}</span></div>
+      <div class="txn-body"><div class="sub">lent ${money(l.amount, c, { dec: 0 })}${l.rate ? ' · ' + l.rate + '% a year' : ''}${s.repaid ? ' · repaid ' + money(s.repaid, c, { dec: 0 }) : ''}</div>
+      <div class="r"><div class="strongv">${money(s.owed, c)}</div><div class="sub">still owed</div></div></div>${limitBar(s.paidPct).replace('limitbar', 'limitbar paid')}</div>`; });
+  h += `<h2 class="sect">Total</h2><div class="card hero"><div class="label">Owed to you (${H})</div><div class="big">${whole(open, H)}</div><div class="sub">${n} open loan${n === 1 ? '' : 's'}</div></div>`;
+  h += `<h2 class="sect">Your loans <span class="sub">money you lent</span></h2>` + (ls.length ? `<div class="card"><div class="txns" style="margin-top:0">${rows.join('')}</div></div>` : `<div class="card empty">No loans yet. Add money you lent to someone: the app keeps track of what is repaid and what is still owed.</div>`);
+  h += `<button class="btn wide" data-act="add-loan">+ Add a loan</button>`;
+  view().innerHTML = h;
+}
+function renderLoan(id) {
+  const l = q('SELECT * FROM loans WHERE id=?', [id])[0];
+  if (!l) { state.loanId = null; return renderLoans(); }
+  setTitle(l.person, true);
+  const c = l.currency || home(), s = loanStats(l);
+  let h = `<div class="card hero"><div class="label">Lent to ${esc(l.person)} · ${fmtDate(l.date)}</div>
+    <div class="big ${s.overdue ? 'down' : ''}">${money(s.owed, c)}</div><div class="sub">${l.closed ? 'repaid in full' : 'still owed'}${l.due_date ? ' · due ' + fmtDate(l.due_date) : ''}${s.overdue ? ' · <b class="down">overdue</b>' : ''}</div>
+    ${limitBar(s.paidPct).replace('limitbar', 'limitbar paid')}
+    <div class="ie3" style="margin-top:10px"><div class="stat"><div class="k">Lent</div><div class="v">${money(l.amount, c, { dec: 0 })}</div></div><div class="stat"><div class="k">Repaid</div><div class="v up">${money(s.repaid, c, { dec: 0 })}</div></div><div class="stat"><div class="k">Interest</div><div class="v up">${money(s.interest, c, { dec: 0 })}</div></div></div>
+    ${l.rate ? `<p class="sub" style="margin:8px 0 0">${l.rate}% a year: about ${money(s.owed * l.rate / 100 / 12, c)} interest a month on what is owed now.</p>` : ''}
+    ${l.notes ? `<div class="note" style="margin-top:10px;text-align:left">${esc(l.notes)}</div>` : ''}
+    <div class="btns">${l.closed ? '' : `<button class="btn" data-act="add-loanpay" data-id="${l.id}">+ Repayment</button>`}<button class="btn light" data-act="edit-loan" data-id="${l.id}">Edit</button></div></div>`;
+  h += `<h2 class="sect">Repayments</h2><div class="card">` + (s.pays.length ? `<div class="txns" style="margin-top:0">` + s.pays.map(p => `<div class="txn inc" data-lpay="${p.id}"><div class="txn-top"><span class="txn-date">${fmtDate(p.date)}</span><span class="txn-desc">${esc(p.note || 'Repayment')}</span></div>
+      <div class="txn-body"><div class="sub">${p.interest ? 'interest ' + money(p.interest, c) : ''}${p.account_id ? (p.interest ? ' · ' : '') + 'into ' + esc((q('SELECT name FROM accounts WHERE id=?', [p.account_id])[0] || {}).name || '') : ''}</div><div class="r"><div class="strongv">${money((p.principal || 0) + (p.interest || 0), c)}</div></div></div></div>`).join('') + `</div>` : '<p class="sub">No repayments yet.</p>') + `</div>`;
+  view().innerHTML = h;
+}
+function loanForm(id) {
+  const l = id ? q('SELECT * FROM loans WHERE id=?', [id])[0] : { date: today(), currency: home() };
+  const accts = q("SELECT * FROM accounts WHERE type<>'credit' ORDER BY name");
+  const people = q('SELECT DISTINCT person FROM loans ORDER BY person').map(r => r.person);
+  openSheet(`<h2>${id ? 'Edit' : 'New'} loan</h2>
+    ${field('person', 'Lent to', l.person, 'autocomplete="off" list="lpeople" placeholder="name"')}<datalist id="lpeople">${people.map(p => `<option value="${esc(p)}">`).join('')}</datalist>
+    <div class="f2">${field('amount', 'Amount lent', l.amount)}<label class="f"><span>Currency</span><select name="currency">${curOptions(l.currency || home())}</select></label></div>
+    <div class="f2">${field('date', 'Date lent', l.date, 'type="date"')}${field('due_date', 'Due date (optional)', l.due_date, 'type="date"')}</div>
+    ${field('rate', 'Interest % a year (optional)', l.rate)}
+    ${id ? '' : `<label class="f"><span>The money came from (optional)</span><select name="account_id"><option value="">Not from an account here</option>${accts.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('')}</select></label>`}
+    <label class="f"><span>Notes</span><textarea name="notes">${esc(l.notes)}</textarea></label>
+    ${id ? `<label class="switch"><span>Repaid in full / closed</span><input type="checkbox" name="closed"${l.closed ? ' checked' : ''}></label>` : ''}
+    <div class="btns"><button class="btn" data-f="save">Save</button><button class="btn light" data-f="cancel">Cancel</button></div>
+    ${id ? '<div class="btns"><button class="btn danger" data-f="delete">Delete loan</button></div>' : ''}`, box => {
+    box.onclick = e => { const f = e.target.dataset.f; if (!f) return;
+      if (f === 'cancel') return closeSheet();
+      if (f === 'delete') { ask('Delete this loan and its repayments? Transactions already in your accounts stay.').then(y => { if (!y) return;
+        run('DELETE FROM loan_payments WHERE loan_id=?', [id]); run('DELETE FROM loans WHERE id=?', [id]); run('UPDATE transactions SET link=NULL WHERE link=?', ['loan:' + id]);
+        state.loanId = null; save(); closeSheet(); render(); }); return; }
+      const d = formData(box), amt = num(d.amount), rate = num(d.rate);
+      if (!(d.person || '').trim()) return bad('Who did you lend to?');
+      if (!(amt > 0)) return bad('Enter the amount lent.');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d.date)) return bad('Enter the date.');
+      if (Number.isNaN(rate)) return bad('Check the interest rate.');
+      const closed = box.querySelector('[name=closed]') && box.querySelector('[name=closed]').checked ? 1 : 0;
+      const vals = [d.person.trim(), amt, d.currency, d.date, d.due_date || null, rate, (d.notes || '').trim()];
+      if (id) run('UPDATE loans SET person=?,amount=?,currency=?,date=?,due_date=?,rate=?,notes=?,closed=? WHERE id=?', vals.concat([closed, id]));
+      else {
+        run('INSERT INTO loans(person,amount,currency,date,due_date,rate,notes,closed) VALUES(?,?,?,?,?,?,?,0)', vals);
+        const nid = q('SELECT last_insert_rowid() id')[0].id;
+        if (d.account_id) run('INSERT INTO transactions(account_id,date,kind,amount,category_id,payee,note,to_account_id,link,recurring_id,created) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+          [+d.account_id, d.date, 'out', amt, loanCat('Lent'), d.person.trim(), 'Loan', null, 'loan:' + nid, null, Date.now()]);
+        state.tab = 'loans'; state.loanId = nid;
+      }
+      save(); closeSheet(); render(); };
+  });
+}
+function loanPayForm(loanId, payId) {
+  const l = q('SELECT * FROM loans WHERE id=?', [loanId])[0]; if (!l) return;
+  const p = payId ? q('SELECT * FROM loan_payments WHERE id=?', [payId])[0] : { date: today() };
+  const s = loanStats(l), c = l.currency || home(), accts = q("SELECT * FROM accounts WHERE type<>'credit' ORDER BY name");
+  openSheet(`<h2>${esc(l.person)}: ${payId ? 'edit' : 'new'} repayment</h2>
+    <p class="sub">Still owed: <b>${money(s.owed, c)}</b></p>
+    <div class="f2">${field('principal', 'Repaid (' + c + ')', p.principal)}${field('interest', 'Interest received (optional)', p.interest)}</div>
+    ${field('date', 'Date', p.date, 'type="date"')}
+    ${payId ? '' : `<label class="f"><span>Paid into (optional)</span><select name="account_id"><option value="">Not into an account here (cash in hand…)</option>${accts.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('')}</select></label>`}
+    ${field('note', 'Note (optional)', p.note, 'autocomplete="off"')}
+    <div class="btns"><button class="btn" data-f="save">Save</button><button class="btn light" data-f="cancel">Cancel</button></div>
+    ${payId ? '<div class="btns"><button class="btn danger" data-f="delete">Delete</button></div>' : `<div class="btns"><button class="btn light" data-f="all">All of it (${money(s.owed, c)})</button></div>`}`, box => {
+    box.onclick = e => { const f = e.target.dataset.f; if (!f) return;
+      if (f === 'cancel') return closeSheet();
+      if (f === 'all') { box.querySelector('[name=principal]').value = fmtNum(+s.owed.toFixed(2)); return; }
+      if (f === 'delete') { ask('Delete this repayment? A transaction already in your account stays.').then(y => { if (!y) return; run('DELETE FROM loan_payments WHERE id=?', [payId]); run('UPDATE loans SET closed=0 WHERE id=?', [loanId]); save(); closeSheet(); render(); }); return; }
+      const d = formData(box), pr = num(d.principal) || 0, it = num(d.interest) || 0;
+      if (Number.isNaN(pr) || Number.isNaN(it) || !(pr + it > 0)) return bad('Enter the amount repaid.');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d.date)) return bad('Enter the date.');
+      if (payId) run('UPDATE loan_payments SET date=?,principal=?,interest=?,note=? WHERE id=?', [d.date, pr, it, (d.note || '').trim(), payId]);
+      else {
+        run('INSERT INTO loan_payments(loan_id,date,principal,interest,account_id,note) VALUES(?,?,?,?,?,?)', [loanId, d.date, pr, it, +d.account_id || null, (d.note || '').trim()]);
+        if (d.account_id) {
+          const ins = (amt, cat, note) => run('INSERT INTO transactions(account_id,date,kind,amount,category_id,payee,note,to_account_id,link,recurring_id,created) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+            [+d.account_id, d.date, 'in', amt, cat, l.person, note, null, 'loan:' + loanId, null, Date.now()]);
+          if (pr > 0) ins(pr, loanCat('Repaid'), 'Loan repayment');
+          if (it > 0) ins(it, interestCat(), 'Loan interest');
+        }
+      }
+      const st = loanStats(l); if (st.owed <= 0.005) { run('UPDATE loans SET closed=1 WHERE id=?', [loanId]); toast(l.person + ' has repaid everything'); }
+      save(); closeSheet(); render(); };
+  });
+}
+
+/* ---------------- Bank files: OFX / QFX / QIF / CSV downloaded from online banking ----------------
+   Fully private: you download the file from your bank yourself; the app reads it on this device.
+   No bank password is ever asked for and nothing is sent anywhere.
+   - Transactions already in the app are skipped (bank reference number, or same date + amount + description,
+     or one you typed in yourself with the same amount within 3 days).
+   - Categories are guessed from what you chose before for the same payee.
+   - The balance in the file (OFX, or a CSV balance column) becomes a balance check. */
+function bankText(bytes) {
+  let t = new TextDecoder('utf-8').decode(bytes);
+  if (t.includes('�')) t = new TextDecoder('windows-1252').decode(bytes);
+  return t.replace(/^﻿/, '');
+}
+function ofxDate(s) { const m = /^(\d{4})(\d{2})(\d{2})/.exec(s || ''); return m ? `${m[1]}-${m[2]}-${m[3]}` : null; }
+function ofxTag(block, tag) { const m = new RegExp('<' + tag + '>\\s*([^<\\r\\n]*)', 'i').exec(block); return m ? m[1].trim().replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>') : null; }
+function parseOfx(t) {
+  const credit = /<CCSTMTRS>/i.test(t), out = { format: 'OFX', credit, txs: [] };
+  out.acctId = ofxTag(t, 'ACCTID'); out.currency = ofxTag(t, 'CURDEF');
+  const lb = /<LEDGERBAL>([\s\S]*?)(<\/LEDGERBAL>|<AVAILBAL>|<\/STMTRS>|<\/CCSTMTRS>)/i.exec(t);
+  if (lb) { const v = num(ofxTag(lb[1], 'BALAMT')); if (v != null && !Number.isNaN(v)) { out.balance = v; out.balDate = ofxDate(ofxTag(lb[1], 'DTASOF')); } }
+  const re = /<STMTTRN>([\s\S]*?)(<\/STMTTRN>|(?=<STMTTRN>)|<\/BANKTRANLIST>)/gi; let m;
+  while ((m = re.exec(t))) {
+    const b = m[1], amt = num(ofxTag(b, 'TRNAMT')), date = ofxDate(ofxTag(b, 'DTPOSTED') || ofxTag(b, 'DTUSER'));
+    if (amt == null || Number.isNaN(amt) || !date) continue;
+    const name = ofxTag(b, 'NAME') || '', memo = ofxTag(b, 'MEMO') || '';
+    out.txs.push({ date, amount: amt, payee: name || memo, memo: name && memo && memo !== name ? memo : '', ref: ofxTag(b, 'FITID') });
+  }
+  return out;
+}
+/* dates written as 2026-11-26, 11/26/2026, 26/11/2026, 26-Nov-2026, Nov 26, 2026, 20261126 … */
+const MON = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+function dateParts(s) {
+  s = String(s || '').trim().replace(/'/g, '/'); let m;
+  if ((m = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/.exec(s))) return { y: +m[1], a: +m[2], b: +m[3], iso: true };
+  if ((m = /^(\d{4})(\d{2})(\d{2})$/.exec(s))) return { y: +m[1], a: +m[2], b: +m[3], iso: true };
+  if ((m = /^(\d{1,2})[-/. ]([A-Za-z]{3})[A-Za-z]*\.?[-/. ,]+(\d{2,4})/.exec(s)) && MON[m[2].toLowerCase()]) return { y: +m[3] < 100 ? 2000 + +m[3] : +m[3], a: MON[m[2].toLowerCase()], b: +m[1], iso: true };
+  if ((m = /^([A-Za-z]{3})[A-Za-z]*\.? (\d{1,2}),? (\d{4})/.exec(s)) && MON[m[1].toLowerCase()]) return { y: +m[3], a: MON[m[1].toLowerCase()], b: +m[2], iso: true };
+  if ((m = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})/.exec(s))) return { y: +m[3] < 100 ? 2000 + +m[3] : +m[3], a: +m[1], b: +m[2], iso: false };
+  return null;
+}
+function guessDayFirst(values) { for (const v of values) { const p = dateParts(v); if (p && !p.iso) { if (p.a > 12) return true; if (p.b > 12) return false; } } return null; }
+function toIso(v, dayFirst) {
+  const p = dateParts(v); if (!p) return null;
+  const mo = p.iso ? p.a : dayFirst ? p.b : p.a, d = p.iso ? p.b : dayFirst ? p.a : p.b;
+  if (mo < 1 || mo > 12 || d < 1 || d > 31 || p.y < 1900) return null;
+  return `${p.y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}
+function moneyNum(s) {
+  if (s == null) return null; let t = String(s).trim(); if (!t) return null;
+  const neg = /^\(.*\)$/.test(t) || /-$/.test(t) || /^-/.test(t.replace(/^[^\d-]*/, '')) || /\bDR\b/i.test(t);
+  t = t.replace(/[()]/g, '').replace(/\bCR\b|\bDR\b/ig, '').replace(/[^\d.,-]/g, '').replace(/-/g, '');
+  if (/,\d{2}$/.test(t) && !/\.\d/.test(t)) t = t.replace(/\./g, '').replace(',', '.'); else t = t.replace(/,/g, '');
+  if (!t) return null; const n = Number(t); return isFinite(n) ? (neg ? -n : n) : null;
+}
+function parseQif(t) {
+  const out = { format: 'QIF', txs: [], credit: /!Type:(CCard)/i.test(t) }, raw = [];
+  let cur = {};
+  for (const line of t.split(/\r?\n/)) {
+    const k = line[0], v = line.slice(1).trim();
+    if (k === '^') { if (cur.D && cur.T != null) raw.push(cur); cur = {}; }
+    else if (k === 'D') cur.D = v; else if (k === 'T' || k === 'U') cur.T = v; else if (k === 'P') cur.P = v; else if (k === 'M') cur.M = v; else if (k === 'N') cur.N = v;
+  }
+  const df = guessDayFirst(raw.map(r => r.D));
+  for (const r of raw) { const date = toIso(r.D, df), amount = moneyNum(r.T); if (date && amount != null) out.txs.push({ date, amount, payee: r.P || r.M || '', memo: r.P && r.M ? r.M : '', ref: r.N || null }); }
+  return out;
+}
+function csvRows(t) {
+  const first = t.split(/\r?\n/, 1)[0], delim = [',', ';', '\t'].sort((a, b) => first.split(b).length - first.split(a).length)[0];
+  const rows = []; let row = [], cell = '', inQ = false;
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    if (inQ) { if (ch === '"') { if (t[i + 1] === '"') { cell += '"'; i++; } else inQ = false; } else cell += ch; }
+    else if (ch === '"') inQ = true;
+    else if (ch === delim) { row.push(cell.trim()); cell = ''; }
+    else if (ch === '\n' || ch === '\r') { if (ch === '\r' && t[i + 1] === '\n') i++; row.push(cell.trim()); if (row.some(x => x !== '')) rows.push(row); row = []; cell = ''; }
+    else cell += ch;
+  }
+  row.push(cell.trim()); if (row.some(x => x !== '')) rows.push(row);
+  return rows;
+}
+function guessCsv(rows) {   /* which column is which, from the header words and the values */
+  const hasHeader = rows.length > 1 && !rows[0].some(c => dateParts(c)) ; const head = hasHeader ? rows[0].map(h => h.toLowerCase()) : [];
+  const body = hasHeader ? rows.slice(1) : rows, n = Math.max(...rows.map(r => r.length));
+  const find = re => head.findIndex(h => re.test(h));
+  const score = (i, f) => body.slice(0, 40).filter(r => f(r[i])).length;
+  const isNum = v => v != null && v !== '' && moneyNum(v) != null && /\d/.test(v);
+  let date = find(/date|posted/); if (date < 0) { let best = -1, bs = 0; for (let i = 0; i < n; i++) { const s = score(i, v => dateParts(v)); if (s > bs) { bs = s; best = i; } } date = best; }
+  let out = find(/debit|withdraw|paid out|money out|^out|charge/), inn = find(/credit|deposit|paid in|money in|^in$|payment/);
+  let amount = find(/amount|cad\$|montant|value/);
+  let bal = find(/balance|solde/);
+  let desc = [/^desc|description( 1)?$|payee|^name|merchant|libell/, /detail|memo|narrative/, /transaction(?! date)/].reduce((f, re) => f >= 0 ? f : head.findIndex((h, i) => i !== date && re.test(h)), -1);
+  let desc2 = head.findIndex((h, i) => i !== desc && /description 2|desc.*2|memo|detail/.test(h));
+  const numericCols = []; for (let i = 0; i < n; i++) { if (i === date) continue; const vals = body.slice(0, 40).map(r => r[i]).filter(v => v != null && v !== '');
+    if (vals.length && vals.every(isNum) && !vals.every(v => /^\d{4,}[-\d]*$/.test(v.replace(/\s/g, '')))) numericCols.push(i); }
+  if (amount < 0 && out < 0 && inn < 0) {
+    if (!hasHeader && numericCols.length >= 2) { out = numericCols[0]; inn = numericCols[1]; if (numericCols.length >= 3 && bal < 0) bal = numericCols[2]; }   /* TD style: date, description, out, in, balance */
+    else if (numericCols.length) amount = numericCols[0];
+  }
+  if (desc < 0) { let best = -1, bl = 0; for (let i = 0; i < n; i++) { if (i === date || numericCols.includes(i)) continue; const l = body.slice(0, 20).reduce((s, r) => s + String(r[i] || '').length, 0); if (l > bl) { bl = l; best = i; } } desc = best; }
+  return { hasHeader, date, desc, desc2, amount: out >= 0 || inn >= 0 ? -1 : amount, out, inn, bal, dayFirst: guessDayFirst(body.map(r => r[date])) };
+}
+function csvToTxs(rows, map) {
+  const body = map.hasHeader ? rows.slice(1) : rows, txs = []; let balance = null, balDate = null;
+  for (const r of body) {
+    const date = toIso(r[map.date], map.dayFirst); if (!date) continue;
+    let amt = null;
+    if (map.amount >= 0) amt = moneyNum(r[map.amount]);
+    else { const o = map.out >= 0 ? moneyNum(r[map.out]) : null, i = map.inn >= 0 ? moneyNum(r[map.inn]) : null; if (o == null && i == null) continue; amt = (i ? Math.abs(i) : 0) - (o ? Math.abs(o) : 0); }
+    if (amt == null || amt === 0) continue;
+    if (map.flip) amt = -amt;
+    const extra = (map.desc2 >= 0 && r[map.desc2]) ? r[map.desc2] : '';
+    txs.push({ date, amount: amt, payee: r[map.desc] || extra || '', memo: r[map.desc] && extra ? extra : '' });
+    if (map.bal >= 0) { const b = moneyNum(r[map.bal]); if (b != null && (!balDate || date >= balDate)) { balance = b; balDate = date; } }
+  }
+  return { format: 'CSV', txs, balance, balDate };
+}
+/* ---- matching and guessing ---- */
+const normPayee = s => String(s || '').toLowerCase().replace(/[#*]\s*\d+|\d{3,}|\s+/g, ' ').replace(/[^a-z& ]/g, '').trim();
+const firstWord = s => (normPayee(s).split(' ').find(w => w.length >= 4) || '');
+function payeeMemory() {   /* the category you chose most recently for each payee (or, failing that, its first word: "METRO #456" like "METRO #123") */
+  const full = {}, first = {};
+  for (const t of q("SELECT payee, category_id FROM transactions WHERE payee IS NOT NULL AND payee<>'' AND category_id IS NOT NULL ORDER BY date, id")) {
+    full[normPayee(t.payee)] = t.category_id; const w = firstWord(t.payee); if (w) first[w] = t.category_id; }
+  return { get: p => full[normPayee(p)] || first[firstWord(p)] || null };
+}
+function prepareImport(parsed, accountId) {
+  const a = q('SELECT * FROM accounts WHERE id=?', [accountId])[0], credit = a && a.type === 'credit';
+  const have = q('SELECT * FROM transactions WHERE account_id=? OR to_account_id=?', [accountId, accountId]);
+  const refs = new Set(have.filter(t => t.import_id).map(t => t.import_id)), used = new Set(), mem = payeeMemory(), cardPay = transferCat();
+  const seen = {}, rows = [];
+  for (const x of parsed.txs) {
+    const base = `${x.date}|${x.amount.toFixed(2)}|${normPayee(x.payee)}`; seen[base] = (seen[base] || 0) + 1;
+    const iid = x.ref ? `ref:${parsed.acctId || ''}:${x.ref}` : `h:${base}|${seen[base]}`;
+    let dup = refs.has(iid);
+    if (!dup) {   /* typed in by hand before: same account, same amount, within 3 days, not imported */
+      const kind = x.amount >= 0 ? 'in' : 'out', abs = Math.abs(x.amount);
+      const hit = have.find(t => !t.import_id && !used.has(t.id) && Math.abs(t.amount - abs) < 0.005 && Math.abs(dnum(t.date) - dnum(x.date)) <= 3 &&
+        (t.kind === kind || (t.kind === 'transfer' && ((kind === 'out' && t.account_id === accountId) || (kind === 'in' && t.to_account_id === accountId)))));
+      if (hit) { used.add(hit.id); dup = 'match'; x.matchId = hit.id; }
+      /* already imported from another kind of file (a CSV after an OFX…): same day, same amount, same payee */
+      else if (have.some(t => t.import_id && !used.has(t.id) && Math.abs(dnum(t.date) - dnum(x.date)) <= 3 && Math.abs(t.amount - abs) < 0.005 && firstWord(t.payee) === firstWord(x.payee) && used.add(t.id))) dup = true;
+    }
+    const kind = x.amount >= 0 ? 'in' : 'out';
+    let cat = mem.get(x.payee);
+    if (!cat && credit && kind === 'in') cat = cardPay;   /* a payment to the card is not income */
+    rows.push(Object.assign({}, x, { iid, dup, kind, cat }));
+  }
+  return { rows, account: a };
+}
+function transferCat() { const r = cats().rows.find(c => !c.parent_id && c.name === 'Transfers & card payments'); return r ? r.id : null; }
+/* ---- the screens ---- */
+async function bankImport(accountId) {
+  if (!q('SELECT COUNT(*) n FROM accounts')[0].n) return toast('First add the account (Assets › Accounts), then import its bank file.');
+  const r = await native('importDb', { title: 'Choose the file from your bank', filter: 'bank' });
+  if (!r.b64) { if (r.error) toast('Could not open the file: ' + r.error); return; }
+  const t = bankText(b64ToBytes(r.b64));
+  let parsed;
+  if (/<OFX>|OFXHEADER/i.test(t)) parsed = parseOfx(t);
+  else if (/^\s*!Type:/i.test(t)) parsed = parseQif(t);
+  else { const rows = csvRows(t); if (rows.length < 1) return toast('This file has no transactions in it.'); return csvMapForm(rows, accountId); }
+  if (!parsed.txs.length) return toast('No transactions found in this file.');
+  importReview(parsed, accountId);
+}
+function csvMapForm(rows, accountId) {
+  const g0 = guessCsv(rows), sig = 'csvmap:' + (g0.hasHeader ? rows[0].join('|').toLowerCase() : 'cols' + Math.max(...rows.map(r => r.length)));
+  let saved = null; try { saved = JSON.parse(getSetting(sig, 'null')); } catch (e) { saved = null; }
+  const g = Object.assign(g0, saved || {}), head = g.hasHeader ? rows[0] : rows[0].map((_, i) => 'Column ' + (i + 1));
+  const opt = (sel, none) => (none ? `<option value="-1">${none}</option>` : '') + head.map((h, i) => `<option value="${i}"${i === sel ? ' selected' : ''}>${esc(h || 'Column ' + (i + 1))}${g.hasHeader ? '' : ' (' + esc(String(rows[0][i] || '').slice(0, 18)) + ')'}</option>`).join('');
+  const two = g.amount < 0;
+  openSheet(`<h2>Which column is which?</h2><p class="sub">The app guessed from your file; correct anything that is wrong. It is remembered for next time.</p>
+    <div class="f2"><label class="f"><span>Date</span><select name="date">${opt(g.date)}</select></label><label class="f"><span>Date written as</span><select name="df"><option value="0"${g.dayFirst ? '' : ' selected'}>month / day</option><option value="1"${g.dayFirst ? ' selected' : ''}>day / month</option></select></label></div>
+    <div class="f2"><label class="f"><span>Description</span><select name="desc">${opt(g.desc)}</select></label><label class="f"><span>More description</span><select name="desc2">${opt(g.desc2 == null ? -1 : g.desc2, 'none')}</select></label></div>
+    <div class="freqs" style="grid-template-columns:1fr 1fr"><label class="freqo"><input type="radio" name="mode" value="one"${two ? '' : ' checked'}><span>One amount column</span></label><label class="freqo"><input type="radio" name="mode" value="two"${two ? ' checked' : ''}><span>Money out / in</span></label></div>
+    <div id="m-one"><label class="f"><span>Amount</span><select name="amount">${opt(Math.max(0, g.amount))}</select></label>
+      <label class="switch"><span>Spending is shown as a positive number</span><input type="checkbox" name="flip"${g.flip ? ' checked' : ''}></label></div>
+    <div id="m-two" class="f2"><label class="f"><span>Money out</span><select name="out">${opt(g.out, 'none')}</select></label><label class="f"><span>Money in</span><select name="inn">${opt(g.inn, 'none')}</select></label></div>
+    <label class="f"><span>Balance (optional)</span><select name="bal">${opt(g.bal, 'none')}</select></label>
+    <div id="csv-prev" class="preview"></div>
+    <div class="btns"><button class="btn" data-f="next">Next</button><button class="btn light" data-f="cancel">Cancel</button></div>`, box => {
+    const read = () => { const d = formData(box), m = (box.querySelector('[name=mode]:checked') || {}).value;
+      return { hasHeader: g.hasHeader, date: +d.date, desc: +d.desc, desc2: +d.desc2, dayFirst: d.df === '1', amount: m === 'one' ? +d.amount : -1, out: m === 'two' ? +d.out : -1, inn: m === 'two' ? +d.inn : -1, bal: +d.bal, flip: m === 'one' && box.querySelector('[name=flip]').checked }; };
+    const show = () => { const m = (box.querySelector('[name=mode]:checked') || {}).value;
+      box.querySelector('#m-one').style.display = m === 'one' ? '' : 'none'; box.querySelector('#m-two').style.display = m === 'two' ? '' : 'none';
+      const p = csvToTxs(rows, read()), H = home();
+      box.querySelector('#csv-prev').innerHTML = p.txs.length ? `<b>${p.txs.length}</b> transactions found. First ones:<br>` + p.txs.slice(0, 4).map(x => `${fmtDate(x.date)} · ${esc(x.payee.slice(0, 28))} · <span class="${x.amount < 0 ? 'down' : 'up'}">${x.amount < 0 ? '−' : '+'}${money(Math.abs(x.amount), H)}</span>`).join('<br>') : '<span class="down">No transactions with these columns.</span>'; };
+    box.oninput = show; box.onchange = show; show();
+    box.onclick = e => { const f = e.target.dataset.f; if (!f) return;
+      if (f === 'cancel') return closeSheet();
+      const mp = read(), p = csvToTxs(rows, mp); if (!p.txs.length) return bad('No transactions with these columns.');
+      setSetting(sig, JSON.stringify(mp));
+      importReview(p, accountId); };
+  });
+}
+function importReview(parsed, accountId) {
+  const accts = q('SELECT * FROM accounts ORDER BY name');
+  let map = {}; try { map = JSON.parse(getSetting('import_map', '{}')) || {}; } catch (e) { map = {}; }
+  let acc = accountId || (parsed.acctId && map[parsed.acctId]) || (accts.find(a => parsed.credit ? a.type === 'credit' : a.type !== 'credit') || accts[0]).id;
+  if (!accts.some(a => a.id === +acc)) acc = accts[0].id;
+  const dates = parsed.txs.map(x => x.date).sort();
+  openSheet(`<h2>Import ${parsed.format} file</h2>
+    <label class="f"><span>Into which account?</span><select name="acct">${accts.map(a => `<option value="${a.id}"${a.id === +acc ? ' selected' : ''}>${esc(a.name)}${a.type === 'credit' ? ' (credit card)' : ''}</option>`).join('')}</select></label>
+    <div id="imp-sum"></div>
+    <div class="btns"><button class="btn" data-f="go">Import</button><button class="btn light" data-f="cancel">Cancel</button></div>`, box => {
+    let prep = null;
+    const show = () => {
+      const id = +box.querySelector('[name=acct]').value; prep = prepareImport(parsed, id);
+      const a = prep.account, c = a.currency || home(), fresh = prep.rows.filter(r => !r.dup), dup = prep.rows.length - fresh.length;
+      const guessed = fresh.filter(r => r.cat).length;
+      box.querySelector('#imp-sum').innerHTML = `<div class="ie3"><div class="stat"><div class="k">New</div><div class="v">${fresh.length}</div></div><div class="stat"><div class="k">Already here</div><div class="v">${dup}</div></div><div class="stat"><div class="k">Categorised</div><div class="v">${guessed}</div></div></div>
+        <p class="sub" style="margin:8px 0">${fmtDate(dates[0])} to ${fmtDate(dates[dates.length - 1])}${parsed.balance != null ? ` · balance in the file: <b>${money(a.type === 'credit' ? Math.abs(parsed.balance) : parsed.balance, c)}</b>${a.type === 'credit' ? ' owed' : ''} on ${fmtDate(parsed.balDate || dates[dates.length - 1])}` : ''}</p>
+        ${parsed.currency && a.currency && parsed.currency !== a.currency ? `<div class="warn">The file is in ${esc(parsed.currency)} but this account is in ${esc(a.currency)}.</div>` : ''}
+        ${fresh.length ? `<div class="preview">${fresh.slice(0, 6).map(r => `${fmtDate(r.date)} · ${esc((r.payee || '').slice(0, 26))} · <span class="${r.amount < 0 ? 'down' : 'up'}">${r.amount < 0 ? '−' : '+'}${money(Math.abs(r.amount), c)}</span>${r.cat ? ' · <i>' + esc(cats().label(r.cat)) + '</i>' : ''}`).join('<br>')}${fresh.length > 6 ? '<br>…and ' + (fresh.length - 6) + ' more' : ''}</div>` : '<p class="sub">Everything in this file is already in the app.</p>'}
+        <p class="hint">Transactions without a category can be sorted later: tap one under Cash flow. Next time, the same payee gets the same category by itself.</p>`;
+      box.querySelector('[data-f=go]').textContent = fresh.length ? `Import ${fresh.length}` : 'Update the balance only';
+    };
+    box.querySelector('[name=acct]').onchange = show; show();
+    box.onclick = e => { const f = e.target.dataset.f; if (!f) return;
+      if (f === 'cancel') return closeSheet();
+      const id = +box.querySelector('[name=acct]').value, a = prep.account, now = Date.now(); let n = 0;
+      db.exec('BEGIN');
+      try {
+        for (const r of prep.rows) {
+          if (r.dup === 'match') { run('UPDATE transactions SET import_id=? WHERE id=?', [r.iid, r.matchId]); continue; }
+          if (r.dup) continue;
+          run('INSERT INTO transactions(account_id,date,kind,amount,category_id,payee,note,to_account_id,link,recurring_id,created,import_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+            [id, r.date, r.kind, Math.abs(r.amount), r.cat, r.payee.slice(0, 120), (r.memo || '').slice(0, 200), null, null, null, now, r.iid]); n++;
+        }
+        if (parsed.balance != null) {
+          const bd = parsed.balDate || dates[dates.length - 1], bv = a.type === 'credit' ? Math.abs(parsed.balance) : parsed.balance;
+          if (!q('SELECT id FROM account_balances WHERE account_id=? AND date=? AND ABS(balance-?)<0.005', [id, bd, bv]).length)
+            run('INSERT INTO account_balances(account_id,date,balance,note,created) VALUES(?,?,?,?,?)', [id, bd, bv, 'From the bank file', now + 1]);
+        }
+        db.exec('COMMIT');
+      } catch (err) { db.exec('ROLLBACK'); return bad('Import failed: ' + err.message); }
+      if (parsed.acctId) { map[parsed.acctId] = id; setSetting('import_map', JSON.stringify(map)); }
+      save(); closeSheet(); toast(n ? n + ' transaction' + (n > 1 ? 's' : '') + ' imported' : 'Nothing new; balance updated');
+      state.tab = 'accounts'; state.accountId = id; render(); view().scrollTop = 0; };
+  });
+}
+
+/* ---------------- 1.9: every section folds; long lists show a few and "Show all" ----------------
+   Runs after each screen is drawn. Tap a section's heading to fold or unfold it; the app remembers. */
+let FOLDED = null;
+function folded() { if (!FOLDED) { try { FOLDED = new Set(JSON.parse(getSetting('folded', '[]'))); } catch (e) { FOLDED = new Set(); } } return FOLDED; }
+const LIST_SHOW = 6;
+function enhanceView() {
+  const v = view(), F = folded(), page = state.tab + (state.msec && state.tab === 'money' ? '/' + state.msec : '');
+  /* sections */
+  for (const h of Array.from(v.querySelectorAll(':scope > h2.sect'))) {
+    const title = (h.childNodes[0] && h.childNodes[0].textContent || h.textContent).trim(), key = page + ':' + title;
+    const body = document.createElement('div'); body.className = 'foldbody';
+    let n = h.nextSibling;
+    while (n && !(n.nodeType === 1 && n.matches('h2.sect'))) { const nx = n.nextSibling; body.appendChild(n); n = nx; }
+    h.after(body);
+    h.classList.add('foldh'); h.setAttribute('role', 'button'); h.tabIndex = 0;
+    h.insertAdjacentHTML('beforeend', '<svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>');
+    const set = closed => { h.classList.toggle('closed', closed); body.hidden = closed; h.setAttribute('aria-expanded', String(!closed)); };
+    set(F.has(key));
+    const toggle = () => { const c = !h.classList.contains('closed'); set(c); if (c) F.add(key); else F.delete(key); setSetting('folded', JSON.stringify(Array.from(F))); save();
+      if (!c) for (const [id, k] of [['heroS', 'hpage'], ['cfS', 'cfPage']]) { const el = document.getElementById(id); if (el) fitSwipe(el, state[k] || 0); } };
+    h.onclick = toggle; h.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } };
+  }
+  /* long lists */
+  state.showAll = state.showAll || {};
+  v.querySelectorAll('.txns, .txlist, .catlist, .alloc, .catbars').forEach((list, li) => {
+    const items = Array.from(list.children).filter(c => !c.classList.contains('txday') && !c.classList.contains('morebtn'));
+    if (items.length <= LIST_SHOW + 2) return;
+    const key = page + ':' + li + ':' + (state.propertyId || state.accountId || state.assetId || state.loanId || '');
+    const open = !!state.showAll[key], cut = items[LIST_SHOW];
+    let hide = false;
+    for (const c of Array.from(list.children)) { if (c === cut) hide = true; if (hide && !open) c.classList.add('more-hidden'); }
+    /* a day heading with nothing visible under it goes too */
+    if (!open) list.querySelectorAll('.txday').forEach(d => { let s = d.nextElementSibling; if (!s || s.classList.contains('more-hidden') || s.classList.contains('txday')) d.classList.add('more-hidden'); });
+    const b = document.createElement('button'); b.className = 'morebtn';
+    b.textContent = open ? 'Show fewer' : `Show all ${items.length}`;
+    b.onclick = e => { e.stopPropagation(); state.showAll[key] = !open; const st = view().scrollTop; render(); view().scrollTop = st; };
+    list.appendChild(b);
+  });
+  /* quick add on the Cash flow pages */
+  const fab = document.getElementById('fab');
+  if (fab) { fab.hidden = !(state.tab === 'money' && q('SELECT COUNT(*) n FROM accounts')[0].n); v.style.paddingBottom = fab.hidden ? '' : '96px'; }
+}
+
 
 /* ---------------- updates ----------------
    The app looks at one small public file (latest.json on the project's GitHub) to see whether a newer version exists.
