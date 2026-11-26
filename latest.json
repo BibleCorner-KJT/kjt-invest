@@ -1,13 +1,21 @@
 {
   "android": {
-    "version": "1.6.1",
+    "version": "1.7",
     "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-android.apk",
-    "sha256": "133bd75e5f1522705d62fc7862bf3217daf4f58ccf2c95c91ae23ef882c22130",
-    "notes": "Readable lists in dark mode"
+    "sha256": "f55a51f629abab024e634015fcd1dc588058516cfb8a642e03e648bf4f1b8546",
+    "notes": "Simpler menus: Overview, Assets, Markets"
   },
   "linux": {
-    "version": "1.6.1",
-    "page": "https://biblecorner-kjt.github.io/kjt-invest/",
-    "notes": "Readable lists in dark mode"
+    "version": "1.7",
+    "page": "https://github.com/BibleCorner-KJT/kjt-invest/tree/releases",
+    "notes": "Simpler menus: Overview, Assets, Markets",
+    "x86_64": {
+      "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.flatpak",
+      "sha256": "f6a7ca7cb886e99624b3a94a97a0d7560de6ae254a73b15c750966a79d78e284"
+    },
+    "aarch64": {
+      "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux-arm.flatpak",
+      "sha256": "55c06c3158f640fae0ab4241a57dcc756a96fc13f7953bcb1373cbf2dee5520f"
+    }
   }
 }
