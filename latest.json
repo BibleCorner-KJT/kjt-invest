@@ -1,25 +1,25 @@
 {
-  "android": {
-    "version": "1.15",
-    "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-android.apk",
-    "sha256": "2f3ba50488a2b330113a39820069d5e47a8abdb2137c892b656beb2545e73a2d",
-    "notes": "Import from MMEX, safer bank imports (no doubles), payees and category tools, start fresh, clearer accounts, hide amounts, search."
+ "android": {
+  "version": "1.17",
+  "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-android.apk",
+  "sha256": "2f3ba50488a2b330113a39820069d5e47a8abdb2137c892b656beb2545e73a2d",
+  "notes": "The eye button hides every amount. Prices page: favourite currencies first, metal prices per gram, tola and more, gold and silver pictures. Option to block screenshots."
+ },
+ "linux": {
+  "version": "1.17",
+  "page": "https://github.com/BibleCorner-KJT/kjt-invest/tree/releases",
+  "notes": "The eye button hides every amount. Prices page: favourite currencies first, metal prices per gram, tola and more, gold and silver pictures. Option to block screenshots.",
+  "x86_64": {
+   "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.flatpak",
+   "sha256": "ec47c31a31cb00ff7aacbb1461c90bbd41489b5b68be64bb3583e2deae1d9c4a"
   },
-  "linux": {
-    "version": "1.15",
-    "page": "https://github.com/BibleCorner-KJT/kjt-invest/tree/releases",
-    "notes": "Import from MMEX, safer bank imports (no doubles), payees and category tools, start fresh, clearer accounts, hide amounts, search.",
-    "x86_64": {
-      "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.flatpak",
-      "sha256": "ec47c31a31cb00ff7aacbb1461c90bbd41489b5b68be64bb3583e2deae1d9c4a"
-    },
-    "aarch64": {
-      "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux-arm.flatpak",
-      "sha256": "3313bdfb3841145b9cd748bb7a19137d0f394d713f940200ed932e54d6dca182"
-    },
-    "zip": {
-      "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.zip",
-      "sha256": "ed1bb6808bf49dd1b1358b06eafca41ab6f114e74bfa05ba6ff4081f91bb1350"
-    }
+  "aarch64": {
+   "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux-arm.flatpak",
+   "sha256": "3313bdfb3841145b9cd748bb7a19137d0f394d713f940200ed932e54d6dca182"
+  },
+  "zip": {
+   "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.zip",
+   "sha256": "ed1bb6808bf49dd1b1358b06eafca41ab6f114e74bfa05ba6ff4081f91bb1350"
   }
+ }
 }
