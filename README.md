@@ -15,7 +15,9 @@ European Central Bank, past prices from DataHub and Frankfurter.
 - `android/` the Android app (Java, no libraries); `tools/build-android.sh` builds the APK
   (the signing key is private and is never in this repository).
 - `tools/install-zip.sh` the installer used in the Linux zip.
-- `.github/workflows/bundle.yml` builds the Linux installers (PC and ARM) into the branch `bundle`.
+- `.github/workflows/channel.yml` builds the Linux app (PC and ARM): signed update channel on GitHub Pages
+  (when the secret FLATPAK_GPG_KEY is set) and the one-file installers in the branch `bundle`.
+- Branch `releases`: `latest.json` (newest versions) and the signed Android app the Android version updates itself from.
 
 ## Licence
 GPL-2.0-or-later. By Knowing Jesus Today (knowingjesus.today).

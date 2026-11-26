@@ -1,7 +1,10 @@
 package today.knowingjesus.invest;
 
 import android.app.Activity;
+import android.app.PendingIntent;
 import android.content.Intent;
+import android.content.pm.PackageInstaller;
+import java.security.MessageDigest;
 import android.net.Uri;
 import android.os.Bundle;
 import android.util.Base64;
@@ -33,6 +36,7 @@ import java.net.URL;
 public class MainActivity extends Activity {
     private static final int REQ_EXPORT = 41;
     private static final int REQ_IMPORT = 42;
+    private static final String ACTION_INSTALLED = "today.knowingjesus.invest.INSTALL_RESULT";
 
     private WebView web;
     private File dbFile;
@@ -63,6 +67,21 @@ public class MainActivity extends Activity {
         });
         web.loadUrl("file:///android_asset/www/index.html");
         setContentView(web);
+    }
+
+    /* the result of an update: the phone may first need you to confirm it */
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        if (intent == null || !ACTION_INSTALLED.equals(intent.getAction())) return;
+        int status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, -999);
+        if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
+            Intent confirm = (Intent) intent.getParcelableExtra(Intent.EXTRA_INTENT);
+            if (confirm != null) startActivity(confirm);
+        } else if (status != PackageInstaller.STATUS_SUCCESS) {
+            String msg = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE);
+            web.evaluateJavascript("window.__updateStatus && window.__updateStatus(" + JSONObject.quote("Update not installed" + (msg != null ? ": " + msg : "")) + ")", null);
+        }
     }
 
     @Override
@@ -158,7 +177,7 @@ public class MainActivity extends Activity {
             HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
             c.setConnectTimeout(15000);
             c.setReadTimeout(20000);
-            c.setRequestProperty("User-Agent", a.optString("ua", "KJTInvest/1.5"));
+            c.setRequestProperty("User-Agent", a.optString("ua", "KJTInvest/1.6"));
             c.setRequestProperty("Accept", "application/json, application/xml, text/xml");
             int status = c.getResponseCode();
             InputStream in = status < 400 ? c.getInputStream() : c.getErrorStream();
@@ -188,6 +207,53 @@ public class MainActivity extends Activity {
                     else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
                 }
             });
+            o.put("ok", true);
+            reply(id, o);
+        } else if ("appInfo".equals(cmd)) {
+            o.put("platform", "android");
+            o.put("version", getPackageManager().getPackageInfo(getPackageName(), 0).versionName);
+            reply(id, o);
+        } else if ("openUrl".equals(cmd)) {
+            final String u = a.getString("url");
+            if (!u.startsWith("https://")) throw new Exception("only https");
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(u))); }
+            });
+            o.put("ok", true);
+            reply(id, o);
+        } else if ("installUpdate".equals(cmd)) {
+            /* the new app file comes only from the project's GitHub, is checked against its published fingerprint,
+               and Android itself refuses it unless it is signed with the same key as this app; the phone asks to confirm */
+            String url = a.getString("url"), sha = a.optString("sha256", "");
+            if (!url.startsWith("https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/") && !url.startsWith("https://github.com/BibleCorner-KJT/kjt-invest/"))
+                throw new Exception("not from the KJT Invest project");
+            HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+            c.setConnectTimeout(20000);
+            c.setReadTimeout(60000);
+            if (c.getResponseCode() != 200) throw new Exception("download failed (" + c.getResponseCode() + ")");
+            byte[] apk = readAll(c.getInputStream());
+            c.disconnect();
+            if (sha.length() > 0) {
+                byte[] d = MessageDigest.getInstance("SHA-256").digest(apk);
+                StringBuilder hx = new StringBuilder();
+                for (byte x : d) hx.append(String.format("%02x", x & 0xff));
+                if (!hx.toString().equalsIgnoreCase(sha)) throw new Exception("the downloaded file does not match; nothing was installed");
+            }
+            PackageInstaller pi = getPackageManager().getPackageInstaller();
+            PackageInstaller.SessionParams sp = new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
+            sp.setAppPackageName(getPackageName());
+            int sid = pi.createSession(sp);
+            PackageInstaller.Session sess = pi.openSession(sid);
+            OutputStream out = sess.openWrite("kjt-invest", 0, apk.length);
+            out.write(apk);
+            sess.fsync(out);
+            out.close();
+            Intent back = new Intent(this, MainActivity.class).setAction(ACTION_INSTALLED).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            int flags = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 31 ? 0x02000000 : 0);   // FLAG_MUTABLE: the installer adds its result
+            PendingIntent pend = PendingIntent.getActivity(this, sid, back, flags);
+            sess.commit(pend.getIntentSender());
+            sess.close();
             o.put("ok", true);
             reply(id, o);
         } else if ("statusBar".equals(cmd)) {

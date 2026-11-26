@@ -1,9 +1,9 @@
-/* KJT Invest 1.5 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
+/* KJT Invest 1.6 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
    All data stays in one SQLite file on the device. The only network calls are the
    price updates (metal prices from gold-api.com, exchange rates from the European Central Bank). */
 'use strict';
 
-const APP_VERSION = '1.5';
+const APP_VERSION = '1.6';
 const SCHEMA = 6;
 const OZT_G = 31.1034768;
 const METALS = [
@@ -64,7 +64,8 @@ async function browserNative(id, cmd, a) {
     else if (cmd === 'saveDb') { localStorage.setItem('it-db', a.b64); reply({ ok: true }); }
     else if (cmd === 'getPrefs') reply({ json: localStorage.getItem('it-prefs') || '{}' });
     else if (cmd === 'setPrefs') { localStorage.setItem('it-prefs', a.json); reply({ ok: true }); }
-    else if (cmd === 'secure' || cmd === 'bioDisable' || cmd === 'statusBar') reply({ ok: true });
+    else if (cmd === 'secure' || cmd === 'bioDisable' || cmd === 'statusBar' || cmd === 'openUrl') reply({ ok: true });
+    else if (cmd === 'appInfo') reply({ platform: 'browser', version: APP_VERSION });
     else if (cmd === 'bioAvailable') reply({ available: false });
     else if (cmd === 'httpGet') { const r = await fetch(a.url); reply({ status: r.status, body: await r.text() }); }
     else if (cmd === 'exportDb') {
@@ -594,6 +595,8 @@ function priceStrip() {
 }
 function missingWarn() {
   if (Object.keys(FX).length > 1) return '';
+  const H = home(), other = q('SELECT COUNT(*) n FROM metal_holdings')[0].n + ['properties', 'accounts', 'other_assets'].reduce((n, tb) => n + q(`SELECT COUNT(*) n FROM ${tb} WHERE currency IS NOT NULL AND currency <> ?`, [H])[0].n, 0);
+  if (!other) return '';
   return `<div class="warn">No exchange rates yet. Press <b>↻</b> (top right) when you are online, or enter rates under Settings (⚙) › Prices.</div>`;
 }
 function renderOverview() {
@@ -622,6 +625,7 @@ function renderOverview() {
   h += `<div class="card tap" data-go="assets"><div class="phead"><span class="pbadge">${assetIcon('car')}</span><h2 style="margin:0">Other assets</h2></div>
     <div class="row strong"><span class="k">Value (your estimate)</span><span class="v">${whole(t.other, H)}</span></div>
     ${t.otherCost ? `<div class="row"><span class="k">Paid</span><span class="v">${whole(t.otherCost, H)}</span></div>` : ''}</div>`;
+  h += `<h2 class="sect">Income & expenses</h2>` + ieCard();
   h += `<h2 class="sect">Current prices <span class="sub">${mcur()} per troy ounce</span></h2><div class="card">${priceStrip()}</div>`;
   view().innerHTML = h; bindHero(); bindChart();
 }
@@ -854,6 +858,9 @@ function heroPages(t) {
     `<div class="label">What you own</div>
       <div class="stack">${CATS.map(([k, , cl]) => parts[k] > 0 ? `<i class="${cl}" style="width:${(parts[k] / sum * 100).toFixed(2)}%"></i>` : '').join('')}</div>
       <div class="alloc">${CATS.map(([k, l, cl]) => `<div class="arow"><span class="sw ${cl}"></span><span class="al">${l}</span><span class="ap">${(parts[k] / sum * 100).toFixed(1)}%</span><span class="av">${whole(parts[k], H)}</span></div>`).join('')}</div>`,
+    (() => { const ie = ieRange(ieModel(), 'L12'); return `<div class="label">Income & expenses, last 12 months</div>
+      <div class="ie3" style="margin-top:10px"><div class="stat"><div class="k">Income</div><div class="v up">${whole(ie.income, H)}</div></div><div class="stat"><div class="k">Expenses</div><div class="v down">${whole(ie.costs, H)}</div></div><div class="stat"><div class="k">Net</div><div class="v ${signCls(ie.net)}">${whole(ie.net, H)}</div></div></div>
+      <div class="sub" style="margin-top:8px">${whole(ie.net / 12, H)} net a month on average</div>`; })(),
     `<div class="segs" style="justify-content:center">${prs}</div>${perf}`,
     `<div class="label">Gains</div><div class="alloc">${CATS.filter(c => c[0] !== 'cash').map(([k, l, cl]) => `<div class="arow"><span class="sw ${cl}"></span><span class="al">${l}<span class="sub"> paid ${whole(paid[k], H)}</span></span><span class="av ${signCls(gainOf[k])}">${whole(gainOf[k], H)}</span><span class="ap ${signCls(gainOf[k])}">${pct(paid[k] ? gainOf[k] / paid[k] : null)}</span></div>`).join('')}
       <div class="arow tot"><span class="al">All</span><span class="av ${signCls(totalGain)}">${whole(totalGain, H)}</span><span class="ap ${signCls(totalGain)}">${pct(totalPaid ? totalGain / totalPaid : null)}</span></div></div>
@@ -865,10 +872,15 @@ function heroHtml(t) {
   return `<div class="card hero heroc"><div class="hero-scroll" id="heroS">${pages.map(p => `<section class="hpage">${p}</section>`).join('')}</div>
     <div class="hdots">${pages.map((_, i) => `<button data-hpage="${i}" aria-label="Page ${i + 1}" class="${i === (state.hpage || 0) ? 'on' : ''}"></button>`).join('')}</div></div>`;
 }
+/* a swipe box is as tall as the page shown, not as tall as its tallest page */
+function fitSwipe(s, i) {
+  const pg = s.children[i]; if (!pg) return;
+  s.style.height = pg.scrollHeight + 'px';
+}
 function bindHero() {
   const s = document.getElementById('heroS'); if (!s) return;
-  s.scrollLeft = (state.hpage || 0) * s.clientWidth;
-  s.addEventListener('scroll', () => { const i = Math.round(s.scrollLeft / s.clientWidth); if (i !== state.hpage) { state.hpage = i;
+  s.scrollLeft = (state.hpage || 0) * s.clientWidth; fitSwipe(s, state.hpage || 0);
+  s.addEventListener('scroll', () => { const i = Math.round(s.scrollLeft / s.clientWidth); if (i !== state.hpage) { state.hpage = i; fitSwipe(s, i);
     s.parentNode.querySelectorAll('.hdots button').forEach((b, j) => b.classList.toggle('on', j === i)); } }, { passive: true });
 }
 
@@ -1047,8 +1059,8 @@ function cashflowCard(p, s, c, k) {
 }
 function bindCashflow() {
   const s = document.getElementById('cfS'); if (!s) return;
-  s.scrollLeft = (state.cfPage || 0) * s.clientWidth;
-  s.addEventListener('scroll', () => { const i = Math.round(s.scrollLeft / s.clientWidth); if (i !== state.cfPage) { state.cfPage = i;
+  s.scrollLeft = (state.cfPage || 0) * s.clientWidth; fitSwipe(s, state.cfPage || 0);
+  s.addEventListener('scroll', () => { const i = Math.round(s.scrollLeft / s.clientWidth); if (i !== state.cfPage) { state.cfPage = i; fitSwipe(s, i);
     document.querySelectorAll('.cftabs .seg').forEach((b, j) => b.classList.toggle('on', j === i)); } }, { passive: true });
 }
 function itemForm(propertyId, itemId, copyOf) {
@@ -1281,6 +1293,10 @@ function renderMore() {
   const nh = q('SELECT COUNT(*) n, MIN(date) d FROM price_history')[0];
   h += `<h2 class="sect">Price history</h2><div class="card"><p class="sub">${nh.n ? nh.n.toLocaleString('en-CA') + ' prices kept, from ' + esc(nh.d.slice(0, 4)) + '. Daily for the last years (Yahoo Finance), monthly before that (DataHub), and each day the app updates.' : 'No price history yet.'}${getSetting('daily_loaded') ? ' Daily prices updated ' + when(getSetting('daily_loaded')) + '.' : ''}</p>
     <div class="btns"><button class="btn light" data-act="history">${getSetting('history_loaded') ? 'Refresh past prices' : 'Load past prices'}</button></div></div>`;
+  h += `<h2 class="sect">Updates</h2><div class="card">
+    <div class="switch"><span>Check for new versions by itself</span><input type="checkbox" id="set-upd"${getSetting('auto_update', '1') === '1' ? ' checked' : ''}></div>
+    <p class="sub">This is version ${APP_VERSION}. Last checked ${when(getSetting('update_checked'))}.${updateInfo ? ' Version ' + esc(updateInfo.version) + ' is ready.' : ''} On Android the app downloads the update and the phone asks you to confirm it; on Linux, GNOME Software keeps it up to date.</p>
+    <div class="btns"><button class="btn light" data-act="check-update">Check for updates now</button>${updateInfo ? '<button class="btn" data-act="install-update">Update</button>' : ''}</div></div>`;
   h += `<h2 class="sect">Security</h2><div id="sec"></div>`;
   h += `<h2 class="sect">Your data</h2><div class="card">
     <p class="sub">Everything is kept in one SQLite database file on this device. Export it to back it up or to move it to another phone or computer; import it there.</p>
@@ -1291,6 +1307,7 @@ function renderMore() {
   const on = (id, f) => { const el = document.getElementById(id); if (el) el.onchange = f; };
   on('set-home', e => { setSetting('home_currency', e.target.value); save(); render(); });
   on('set-mcur', e => { setSetting('metal_currency', e.target.value); save(); render(); });
+  on('set-upd', e => { setSetting('auto_update', e.target.checked ? '1' : '0'); save(); });
   on('set-auto', e => { setSetting('auto_prices', e.target.checked ? '1' : '0'); save(); });
   on('set-theme', e => { PREFS.theme = e.target.value; applyLook(); savePrefs(); });
   on('set-size', e => { PREFS.size = e.target.value; applyLook(); savePrefs(); });
@@ -1522,8 +1539,9 @@ function goBack() {
   return false;
 }
 window.__onBack = () => goBack();
+window.addEventListener('resize', () => { for (const [id, k] of [['heroS', 'hpage'], ['cfS', 'cfPage']]) { const el = document.getElementById(id); if (el) fitSwipe(el, state[k] || 0); } });
 view().addEventListener('click', e => {
-  const el = e.target.closest('[data-act],[data-go],[data-metal],[data-prop],[data-item],[data-pval],[data-cfy],[data-cfp],[data-rent],[data-price],[data-fx],[data-chart],[data-range],[data-acct],[data-bal],[data-asset],[data-aval],[data-hpage],[data-prange],[data-unfav]'); if (!el) return;
+  const el = e.target.closest('[data-act],[data-go],[data-metal],[data-prop],[data-item],[data-pval],[data-cfy],[data-cfp],[data-rent],[data-price],[data-fx],[data-chart],[data-range],[data-acct],[data-bal],[data-asset],[data-aval],[data-hpage],[data-prange],[data-unfav],[data-ie]'); if (!el) return;
   const d = el.dataset;
   if (d.chart) { state.chart = d.chart; const st = view().scrollTop; render(); view().scrollTop = st; }
   else if (d.range) { state.range = d.range; const st = view().scrollTop; render(); view().scrollTop = st; }
@@ -1535,6 +1553,7 @@ view().addEventListener('click', e => {
   else if (d.cfy) { state.cfYear = +d.cfy; if (el.classList.contains('yrow')) state.cfPage = 0; const st = view().scrollTop; render(); view().scrollTop = st; }
   else if (d.cfp) { state.cfPage = +d.cfp; const sc = document.getElementById('cfS'); if (sc) sc.scrollTo({ left: +d.cfp * sc.clientWidth, behavior: 'smooth' }); document.querySelectorAll('.cftabs .seg').forEach((b, j) => b.classList.toggle('on', j === +d.cfp)); }
   else if (d.rent) rentForm(state.propertyId, +d.rent);
+  else if (d.ie) { state.ieRange = d.ie; const st = view().scrollTop; render(); view().scrollTop = st; }
   else if (d.unfav) { setFavs(favs().filter(c => c !== d.unfav)); render(); }
   else if (d.hpage) { const sc = document.getElementById('heroS'); if (sc) sc.scrollTo({ left: +d.hpage * sc.clientWidth, behavior: 'smooth' }); }
   else if (d.prange) { state.prange = d.prange; const st = view().scrollTop; render(); view().scrollTop = st; }
@@ -1552,6 +1571,8 @@ view().addEventListener('click', e => {
     case 'add-rent': rentForm(+d.id); break;
     case 'add-account': accountForm(); break;
     case 'add-asset': assetForm(); break;
+    case 'check-update': checkUpdate(true); break;
+    case 'install-update': installUpdate(); break;
     case 'edit-asset': assetForm(+d.id); break;
     case 'add-avalue': assetValueForm(+d.id); break;
     case 'pin-on': case 'pin-change': case 'pin-off': securityAction(d.act); break;
@@ -1757,6 +1778,111 @@ function bindSecurity() {
   const l = document.getElementById('set-lock'); if (l) l.onchange = () => { PREFS.lockAfter = +l.value; savePrefs(); };
 }
 
+/* ---------------- income and expenses, everything together ----------------
+   Income: rent and other income from the properties, and the interest the accounts earn (estimated from
+   their interest rate and balance). Expenses: every property cost (condo fees, taxes, insurance, repairs…).
+   Your share only, in your home currency. */
+function ieModel() {
+  const H = home(), m = {};
+  const slot = key => (m[key] = m[key] || { rent: 0, other: 0, interest: 0, costs: 0, byKind: {} });
+  for (const p of q('SELECT * FROM properties')) {
+    const st = propertyStats(p), k = st.share, c = p.currency || H;
+    for (const yr of st.rows) for (const f of yr.months) {
+      if (!f.owned || f.future) continue;
+      const key = `${f.y}-${String(f.m + 1).padStart(2, '0')}`, d = key + '-15', x = slot(key), cv = v => convOn(v * k, c, H, d) || 0;
+      x.rent += cv(f.rent); x.other += cv(f.income); x.costs += cv(f.costs);
+      for (const [kk, v] of Object.entries(f.byKind)) if ((PITEMS[kk] || PITEMS.other_cost)[1] === 'cost') x.byKind[kk] = (x.byKind[kk] || 0) + cv(v);
+    }
+  }
+  const now = today();
+  for (const a of q('SELECT * FROM accounts WHERE interest_rate > 0')) {
+    const bs = q('SELECT date, balance FROM account_balances WHERE account_id=? ORDER BY date, id', [a.id]).map(r => [r.date, r.balance]);
+    if (!bs.length) continue;
+    const k = 1 / Math.max(1, a.owners || 1), c = a.currency || H;
+    let y = +bs[0][0].slice(0, 4), mo = +bs[0][0].slice(5, 7);
+    for (;;) { const key = `${y}-${String(mo).padStart(2, '0')}`; if (key > now.slice(0, 7)) break;
+      const bal = lastOnOrBefore(bs, key + '-28'); if (bal > 0) slot(key).interest += convOn(bal * a.interest_rate / 100 / 12 * k, c, H, key + '-15') || 0;
+      mo++; if (mo > 12) { mo = 1; y++; } }
+  }
+  return m;
+}
+function ieRange(model, range) {
+  const now = today(), ym = now.slice(0, 7), yNow = +now.slice(0, 4);
+  let keys = [];
+  if (range === 'Y') keys = Array.from({ length: +now.slice(5, 7) }, (_, i) => `${yNow}-${String(i + 1).padStart(2, '0')}`);
+  else if (range === 'PY') keys = Array.from({ length: 12 }, (_, i) => `${yNow - 1}-${String(i + 1).padStart(2, '0')}`);
+  else { let y = yNow, mo = +now.slice(5, 7); for (let i = 0; i < 12; i++) { keys.unshift(`${y}-${String(mo).padStart(2, '0')}`); mo--; if (!mo) { mo = 12; y--; } } }
+  const t = { rent: 0, other: 0, interest: 0, costs: 0, byKind: {}, months: [] };
+  for (const key of keys) { const x = model[key] || { rent: 0, other: 0, interest: 0, costs: 0, byKind: {} };
+    t.rent += x.rent; t.other += x.other; t.interest += x.interest; t.costs += x.costs;
+    for (const [kk, v] of Object.entries(x.byKind)) t.byKind[kk] = (t.byKind[kk] || 0) + v;
+    t.months.push({ key, inc: x.rent + x.other + x.interest, out: x.costs, current: key === ym }); }
+  t.income = t.rent + t.other + t.interest; t.net = t.income - t.costs;
+  return t;
+}
+function ieCard() {
+  const H = home(), model = ieModel();
+  if (!Object.keys(model).length) return `<div class="card"><p class="sub">Add rent periods and costs to your properties, and interest rates to your savings accounts, to see your income and expenses here.</p></div>`;
+  state.ieRange = state.ieRange || 'L12';
+  const t = ieRange(model, state.ieRange), yNow = new Date().getFullYear();
+  const segs = [['L12', 'Last 12 months'], ['Y', String(yNow) + ' so far'], ['PY', String(yNow - 1)]].map(([kk, l]) => `<button class="seg${state.ieRange === kk ? ' on' : ''}" data-ie="${kk}">${l}</button>`).join('');
+  const max = Math.max(1, ...t.months.map(x => Math.max(x.inc, x.out)));
+  const bars = `<div class="iebars">${t.months.map(x => `<div class="ieb${x.current ? ' cur' : ''}"><div class="iebp"><i class="in" style="height:${(x.inc / max * 100).toFixed(1)}%"></i><i class="out" style="height:${(x.out / max * 100).toFixed(1)}%"></i></div><span>${MONTHS[+x.key.slice(5, 7) - 1][0]}</span></div>`).join('')}</div>
+    <div class="legend"><span><i class="lin"></i>Income</span><span><i class="lout"></i>Expenses</span></div>`;
+  const rows = (list, total) => list.filter(([, v]) => v > 0.5).map(([l, v]) => `<div class="arow ie"><span class="al">${l}</span><span class="av">${whole(v, H)}</span><span class="ap">${total ? Math.round(v / total * 100) + '%' : ''}</span></div>`).join('') || '<p class="sub">None in this period.</p>';
+  const inc = [['Rent', t.rent], ['Other income', t.other], ['Interest (estimated)', t.interest]];
+  const exp = Object.entries(t.byKind).sort((a, b) => b[1] - a[1]).map(([kk, v]) => [esc((PITEMS[kk] || PITEMS.other_cost)[0]), v]);
+  const n = t.months.length || 1;
+  return `<div class="card"><div class="segs">${segs}</div>
+    <div class="ie3"><div class="stat"><div class="k">Income</div><div class="v up">${whole(t.income, H)}</div></div>
+      <div class="stat"><div class="k">Expenses</div><div class="v down">${whole(t.costs, H)}</div></div>
+      <div class="stat"><div class="k">Net</div><div class="v ${signCls(t.net)}">${whole(t.net, H)}</div></div></div>
+    <p class="sub" style="margin:8px 0">${whole(t.income / n, H)} in and ${whole(t.costs / n, H)} out a month on average${t.income ? ` · you keep <b class="${signCls(t.net)}">${Math.round(t.net / t.income * 100)}%</b> of your income` : ''}.</p>
+    ${bars}
+    <h3 class="ieh">Income</h3><div class="alloc">${rows(inc, t.income)}</div>
+    <h3 class="ieh">Expenses</h3><div class="alloc">${rows(exp, t.costs)}</div>
+    <p class="sub" style="margin:10px 0 0">From your properties (your share) and the interest your accounts earn, estimated from their rate and balance.</p></div>`;
+}
+
+/* ---------------- updates ----------------
+   The app looks at one small public file (latest.json on the project's GitHub) to see whether a newer version exists.
+   Android downloads the new app file, checks it, and the phone asks you to confirm the update.
+   Linux updates come through GNOME Software (the app's own channel). Nothing about you is sent. */
+const UPDATE_URL = 'https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/latest.json';
+let updateInfo = null, appInfo = null;
+function newerThan(a, b) { const x = String(a).split('.').map(Number), y = String(b).split('.').map(Number);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); } return false; }
+async function checkUpdate(manual) {
+  appInfo = appInfo || await native('appInfo', {});
+  const plat = appInfo.platform || 'browser';
+  const r = await native('httpGet', { url: UPDATE_URL + '?t=' + Math.floor(Date.now() / 600000) });
+  let d = null; try { d = JSON.parse(r.body || ''); } catch (e) { d = null; }
+  setSetting('update_checked', new Date().toISOString()); save();
+  if (!d) { if (manual) toast('Could not check for updates (no connection?)'); return; }
+  const it = d[plat];
+  if (it && newerThan(it.version, APP_VERSION)) { updateInfo = Object.assign({ platform: plat }, it); showUpdateBar(); if (manual) toast('KJT Invest ' + it.version + ' is available'); }
+  else { updateInfo = null; showUpdateBar(); if (manual) toast('You have the newest version (' + APP_VERSION + ')'); }
+}
+function showUpdateBar() {
+  const b = document.getElementById('upd'); if (!b) return;
+  if (!updateInfo) { b.hidden = true; return; }
+  b.innerHTML = `<span><b>KJT Invest ${esc(updateInfo.version)}</b> is ready${updateInfo.notes ? ': ' + esc(updateInfo.notes) : ''}</span><button class="btn" id="upd-go">${updateInfo.platform === 'android' ? 'Update' : 'How to update'}</button>`;
+  b.hidden = false;
+  document.getElementById('upd-go').onclick = installUpdate;
+}
+async function installUpdate() {
+  if (!updateInfo) return;
+  if (updateInfo.platform === 'android') {
+    toast('Downloading the update…');
+    const r = await native('installUpdate', { url: updateInfo.url, sha256: updateInfo.sha256 || '' });
+    if (r.error) toast('Update not installed: ' + r.error); else toast('Confirm the update on the screen that opens');
+  } else if (updateInfo.platform === 'linux') {
+    if (appInfo && appInfo.channel) toast('Open Software (GNOME Software): KJT Invest updates from there, by itself or with Update');
+    else { await native('openUrl', { url: updateInfo.page }); toast('The download page opened in your browser'); }
+  }
+}
+window.__updateStatus = msg => toast(msg);
+
 /* ---------------- start ---------------- */
 (async function start() {
   try {
@@ -1786,6 +1912,7 @@ function bindSecurity() {
     prepareDb(); loadFx();
     await saveNow();   /* also stores any upgrade of an older database */
     render();
+    if (getSetting('auto_update', '1') === '1') { const uc = getSetting('update_checked'); if (!uc || Date.now() - new Date(uc) > 12 * 3600000) setTimeout(() => checkUpdate(false), 4000); }
     const last = getSetting('prices_updated');
     if (getSetting('auto_prices', '1') === '1' && (!last || Date.now() - new Date(last) > 15 * 60000)) updatePrices(true);
   } catch (e) {

@@ -18,7 +18,7 @@ import urllib.request
 import gi
 
 APP_ID = 'today.knowingjesus.Invest'
-VERSION = '1.5'
+VERSION = '1.6'
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(os.environ.get('XDG_DATA_HOME') or os.path.expanduser('~/.local/share'), 'kjt-invest')
 OLD_DIR = os.path.join(os.path.expanduser('~/.local/share'), 'investment-tracker')   # where 1.0-1.2 (Investment Tracker) kept the data
@@ -144,6 +144,13 @@ class Tracker:
             elif cmd == 'setPrefs':
                 with open(PREFS, 'w', encoding='utf-8') as f:
                     f.write(args.get('json', '{}'))
+                self.reply(msg_id, {'ok': True})
+            elif cmd == 'appInfo':
+                self.reply(msg_id, {'platform': 'linux', 'version': VERSION, 'channel': IN_FLATPAK})
+            elif cmd == 'openUrl':
+                url = args.get('url', '')
+                if url.startswith('https://'):
+                    Gio.AppInfo.launch_default_for_uri(url, None)
                 self.reply(msg_id, {'ok': True})
             elif cmd == 'statusBar':
                 self.reply(msg_id, {'ok': True})

@@ -208,12 +208,12 @@ svg.chart .dot2 { fill: var(--c2); stroke: var(--card); stroke-width: 2; }
 @media (max-width: 400px) { .ptypes5 { grid-template-columns: repeat(3, 1fr); } }
 .cat-m { background: var(--cat-m); } .cat-p { background: var(--cat-p); } .cat-c { background: var(--cat-c); } .cat-o { background: var(--cat-o); }
 .heroc { padding: 0; overflow: hidden; }
-.hero-scroll { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.hero-scroll { display: flex; align-items: flex-start; overflow-x: auto; overflow-y: hidden; transition: height .25s ease; scroll-snap-type: x mandatory; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
 .hero-scroll::-webkit-scrollbar { display: none; }
-.hpage { flex: 0 0 100%; scroll-snap-align: start; padding: 18px 16px 8px; min-height: 200px; text-align: center; }
+.hpage { flex: 0 0 100%; scroll-snap-align: start; padding: 16px 16px 6px; text-align: center; }
 .hpage .chart-head, .hpage .alloc, .hpage .legend { text-align: left; }
-.swipehint { margin-top: 10px; opacity: .8; }
-.hdots { display: flex; justify-content: center; gap: 8px; padding: 4px 0 12px; }
+.swipehint { margin-top: 8px; opacity: .8; }
+.hdots { display: flex; justify-content: center; gap: 8px; padding: 2px 0 10px; }
 .hdots button { width: 9px; height: 9px; padding: 0; border-radius: 50%; border: 0; background: var(--line); cursor: pointer; }
 .hdots button.on { background: var(--brand); width: 22px; border-radius: 5px; }
 .stack { display: flex; height: 16px; border-radius: 8px; overflow: hidden; margin: 12px 0 12px; gap: 2px; background: var(--soft); }
@@ -298,3 +298,23 @@ nav#tabs button { font-size: .66rem; }
 .srcgrid .sh { font-size: .72rem; color: var(--muted); text-align: right; font-weight: 600; }
 .srcgrid .sm { font-weight: 650; } .srcgrid .sm small { display: block; font-weight: 500; color: var(--muted); font-size: .7rem; }
 .srcgrid .sv { text-align: right; }
+
+/* 1.6 update bar */
+#upd { display: flex; align-items: center; gap: 10px; padding: 9px 12px; background: var(--soft); border-bottom: 1px solid var(--line); font-size: .9rem; }
+#upd[hidden] { display: none; }
+#upd span { flex: 1; }
+#upd .btn { min-height: 38px; padding: 8px 14px; }
+
+/* 1.6 income & expenses */
+.ie3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.ie3 .stat { text-align: left; }
+.iebars { display: grid; grid-template-columns: repeat(12, 1fr); gap: 4px; height: 110px; margin: 6px 0 4px; }
+.ieb { display: grid; grid-template-rows: 1fr auto; }
+.iebp { display: flex; align-items: flex-end; gap: 1px; border-bottom: 1px solid var(--line); }
+.iebp i { display: block; flex: 1; border-radius: 3px 3px 0 0; min-height: 1px; }
+.iebp i.in { background: var(--up); } .iebp i.out { background: var(--down); }
+.ieb.cur .iebp i { opacity: .55; }
+.ieb span { text-align: center; font-size: .66rem; color: var(--muted); }
+.legend i.lin { border-top: 8px solid var(--up); width: 10px; } .legend i.lout { border-top: 8px solid var(--down); width: 10px; }
+h3.ieh { font-size: .9rem; margin: 12px 0 2px; }
+.arow.ie { grid-template-columns: 1fr auto auto; }
