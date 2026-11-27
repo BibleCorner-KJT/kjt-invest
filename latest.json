@@ -1,14 +1,14 @@
 {
  "android": {
-  "version": "1.20",
+  "version": "1.21",
   "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-android.apk",
-  "sha256": "42fe752b52f261c51ed9070ba430194285ad65c3f4bb00d204e6d254dfc50b53",
-  "notes": "Much faster with many transactions; hiding amounts is instant. Record an error or correct every month at once. Tap reminders and categories in Overview. New icon."
+  "sha256": "b3b3dded2db5d2275228dcd8dc8e6e14be61ea00a031390164657fa536285fc7",
+  "notes": "Link past purchases to their payments. Find repeating payments. Merge similar payees and several categories at once. Clearer account headers."
  },
  "linux": {
-  "version": "1.20",
+  "version": "1.21",
   "page": "https://github.com/BibleCorner-KJT/kjt-invest/tree/releases",
-  "notes": "Much faster with many transactions; hiding amounts is instant. Record an error or correct every month at once. Tap reminders and categories in Overview. New icon.",
+  "notes": "Link past purchases to their payments. Find repeating payments. Merge similar payees and several categories at once. Clearer account headers.",
   "x86_64": {
    "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.flatpak",
    "sha256": "ec47c31a31cb00ff7aacbb1461c90bbd41489b5b68be64bb3583e2deae1d9c4a"
@@ -19,7 +19,7 @@
   },
   "zip": {
    "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.zip",
-   "sha256": "5c8ee0e1a3152d3e7a4f829dc62b2248867ccd5f39a5b51fcdd8baee7f389c04"
+   "sha256": "c7c56206300131084594f0459e85083a4c0225ddadba094b48bde105a28303ff"
   }
  }
 }
