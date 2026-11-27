@@ -25,6 +25,7 @@
   <branding><color type="primary" scheme_preference="light">#f3e2b8</color><color type="primary" scheme_preference="dark">#3e093f</color></branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.31" date="2026-11-27"><description><p>A new Stewardship page (Settings or Overview): Bible verses (King James Version) on diligence, fair pay, stewardship, the love of money, the words of Christ and the stages of life. A verse of the day on Overview and a quiet verse on some pages; Settings can turn them off.</p></description></release>
     <release version="1.30" date="2026-11-27"><description><p>A summary at the top of every Assets page: Accounts (money in and out, credit left, bank checks), Property (rent, costs, net, yield, each property), Metals (each metal, average cost against today, move since yesterday), Loans (repaid, overdue, due soon) and Other assets (by kind). The MMEX repair is removed: the import itself is fixed.</p></description></release>
     <release version="1.29" date="2026-11-27"><description><p>Nothing goes past the edge of the screen any more, even on narrow phones with large text: boxes move to the next line when they do not fit.</p></description></release>
     <release version="1.28" date="2026-11-27"><description><p>The bar that appears when selecting several transactions can be dragged anywhere (it remembers where); the list makes room for it.</p></description></release>

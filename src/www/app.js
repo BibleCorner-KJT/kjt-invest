@@ -1,9 +1,9 @@
-/* KJT Finance 1.30 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
+/* KJT Finance 1.31 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
    All data stays in one SQLite file on the device. The only network calls are the
    price updates (metal prices from gold-api.com, exchange rates from the European Central Bank). */
 'use strict';
 
-const APP_VERSION = '1.30';
+const APP_VERSION = '1.31';
 const SCHEMA = 11;
 const OZT_G = 31.1034768;
 const METALS = [
@@ -707,12 +707,14 @@ function render() {
   else if (state.tab === 'currency') renderMarkets();
   else if (state.tab === 'money') renderMoney();
   else if (state.tab === 'recon') renderRecon(state.reconId);
+  else if (state.tab === 'stewardship') renderStewardship();
   else renderMore();
   const inDetail = state.propertyId && state.tab === 'property' || state.accountId && state.tab === 'accounts' || state.assetId && state.tab === 'assets' || state.loanId && state.tab === 'loans';
   if (isAsset(state.tab) && !inDetail) {
     setTitle('Assets');
     view().insertAdjacentHTML('afterbegin', `<div class="subnav">${ASECS.map(([k, l]) => subBtn(k, l, k === state.tab, 'data-asec')).join('')}</div>`);
   }
+  { const pv = pageVerse(); if (pv) view().insertAdjacentHTML('beforeend', pv); }   /* 1.31 */
   view().dataset.page = state.tab; searchSelects(view());   /* 1.22: each section of Assets has its own colour */
   enhanceView();
   settingsNav();
@@ -723,7 +725,7 @@ function render() {
    Market prices (Prices page) and Settings are left alone: they are not your money. */
 const AMT_RE = /[-+\u2212]?\s?(?:[A-Z]{1,3})?[$\u20ac\u00a3\u00a5\u20b9]\s?\d[\d,.\u00a0\u202f]*\d|[-+\u2212]?\s?(?:[A-Z]{1,3})?[$\u20ac\u00a3\u00a5\u20b9]\s?\d|\d[\d,.\u00a0\u202f]*\s?[\u20ac\u00a3]|[-+\u2212]?\d[\d,]*(?:\.\d+)?\s?%|[-+\u2212]?\d{1,3}(?:,\d{3})+(?:\.\d+)?|\b\d+\.\d{2}\b/g;
 function markAmounts(root) {
-  if (['markets', 'currency', 'more'].includes(state.tab)) return;
+  if (['markets', 'currency', 'more', 'stewardship'].includes(state.tab)) return;
   root = root || view(); if (!root) return;
   const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT), nodes = [];
   while (w.nextNode()) { const n = w.currentNode, el = n.parentElement;
@@ -762,11 +764,11 @@ function renderOverview() {
   setTitle('KJT Finance');
   const t = totals(), H = home();
   const nAll = ['metal_holdings', 'properties', 'accounts', 'other_assets', 'loans'].reduce((n, tb) => n + q(`SELECT COUNT(*) n FROM ${tb}`)[0].n, 0);
-  let h = missingWarn() + `<h2 class="sect" data-ftot="${esc(whole(t.total, H))}">Summary</h2>` + summaryHtml(t);
+  let h = missingWarn() + dailyCard() + `<h2 class="sect" data-ftot="${esc(whole(t.total, H))}">Summary</h2>` + summaryHtml(t);
   if (!nAll) {
     h += `<div class="card"><h2>Welcome</h2><p class="sub">Add what you own. Everything stays on this device, in one file you can export at any time.</p>
       <div class="btns"><button class="btn" data-act="add-metal">Add precious metal</button><button class="btn" data-act="add-property">Add property</button><button class="btn" data-act="add-account">Add bank account</button><button class="btn" data-act="add-asset">Add other asset</button></div>
-      <div class="btns"><button class="btn light" data-act="mmex-import">Bring my data from MMEX</button><button class="btn light" data-act="merge-file">From my other device (file)</button></div></div>`;
+      <div class="btns"><button class="btn light" data-act="mmex-import">Bring my data from MMEX</button><button class="btn light" data-act="merge-file">From my other device (file)</button></div>${moodVerse('start')}</div>`;
   }
   const M = mcur(), mGain = t.metalsM - t.metalsCostM;
   h += remindersCard();
@@ -1733,6 +1735,10 @@ function renderMore() {
     <label class="f"><span>Text size</span><select id="set-size">${[['', 'Normal'], ['large', 'Large'], ['larger', 'Larger']].map(([v, l]) => `<option value="${v}"${(PREFS.size || '') === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label></div>
     <div class="switch"><span>Show the total of a folded section or card</span><input type="checkbox" id="set-ftot"${getSetting('fold_totals', '1') === '1' ? ' checked' : ''}></div>
     <p class="sub" style="margin:4px 0 0">Tap a heading (or the arrow on an Overview card) to fold it. Turn this off to hide amounts when folded, for privacy.</p></div>`;
+  h += `<h2 class="sect">Stewardship</h2><div class="card"><p class="sub" style="margin-top:0">Bible verses on work, honesty and the right use of money (King James Version).</p>
+    <div class="switch"><span>Show Bible verses around the app</span><input type="checkbox" id="set-verses"${versesOn() ? ' checked' : ''}></div>
+    <p class="sub" style="margin:4px 0 0">A verse of the day on Overview, and a verse at the foot of some pages. The Stewardship page is always here.</p>
+    <div class="btns"><button class="btn light" data-act="stewardship">Open the Stewardship page</button></div></div>`;
   h += `<h2 class="sect">Currencies</h2><div class="card">
     <label class="f"><span>Home currency (for totals)</span><select id="set-home">${curOptions(H)}</select></label>
     <label class="f"><span>Currency for precious metals</span><select id="set-mcur">${curOptions(mcur())}</select></label></div>`;
@@ -1782,6 +1788,7 @@ function renderMore() {
   on('set-auto', e => { setSetting('auto_prices', e.target.checked ? '1' : '0'); save(); });
   on('set-theme', e => { PREFS.theme = e.target.value; applyLook(); savePrefs(); });
   on('set-size', e => { PREFS.size = e.target.value; applyLook(); savePrefs(); });
+  on('set-verses', e => { setSetting('verses', e.target.checked ? '1' : '0'); save(); });
   on('set-ftot', e => { setSetting('fold_totals', e.target.checked ? '1' : '0'); save(); });
   on('set-msrc', e => { setSetting('metal_source', e.target.value); applyQuotes(getSetting('prices_updated') || new Date().toISOString()); save(); render(); });
   on('set-fsrc', e => { setSetting('fx_source', e.target.value); applyQuotes(getSetting('prices_updated') || new Date().toISOString()); save(); render(); });
@@ -2112,6 +2119,7 @@ view().addEventListener('click', e => {
     case 'pay-card': { const bank = q("SELECT id FROM accounts WHERE type<>'credit' ORDER BY type='chequing' DESC, name LIMIT 1")[0];
       if (!bank) { toast('First add the bank account you pay the card from.'); break; }
       const ow = acctBalance(+d.id); txForm(null, null, { kind: 'transfer', account_id: bank.id, to_account_id: +d.id, amount: ow && ow.balance < 0 ? +(-ow.balance).toFixed(2) : null, note: 'Card payment' }); break; }
+    case 'stewardship': state.tab = 'stewardship'; render(); view().scrollTop = 0; break;
     case 'recon': state.tab = 'recon'; state.reconId = d.id ? +d.id : null; render(); view().scrollTop = 0; break;
     case 'find-xfer': offerTransfers(false); break;
     case 'stmt-bal': stmtBalances(+d.id); break;
@@ -4001,6 +4009,7 @@ function renderRecon(id) {
       const st = !ps.length ? '<span class="sub">needs two balances to compare</span>' : off.length ? `<span class="down">${off.length} period${off.length > 1 ? 's' : ''} off · ${tot > 0 ? '+' : tot < 0 ? '−' : ''}${money(Math.abs(tot), c)} in all</span>` : '<span class="up">✓ all agree</span>';
       return `<div class="arowx" data-act="recon" data-id="${a.id}"><div class="al"><div class="an">${esc(a.name)}</div><div class="sub">${st}</div><div class="sub">${last ? 'last balance ' + fmtDate(last.check.date) : ''}${waits ? (last ? ' · ' : '') + waits + ' not in bank yet' : ''}</div></div><div class="ar"><span class="chev">›</span></div></div>`; }).join('') + '</div>';
     h += looseHtml(looseTransfers());
+    { const rs = as.map(a => reconPeriods(a)).filter(ps => ps.length); if (rs.length && rs.every(ps => !ps.some(p => p.diff))) h += moodVerse('agree'); }
     view().innerHTML = h; return;
   }
   const a = q('SELECT * FROM accounts WHERE id=?', [id])[0]; if (!a) { state.reconId = null; return renderRecon(null); }
@@ -4029,6 +4038,7 @@ function renderRecon(id) {
     h += `<h2 class="sect">Not in a bank file yet <span class="sub">${waits.length}</span></h2><div class="card"><p class="sub" style="margin-top:0">You entered these; the next bank file should confirm them. One still waiting after a month or two may be a mistake or a duplicate.</p><div class="txlist">${waits.slice(0, 100).map(t => txRow(t, A, true)).join('')}</div>${waits.length > 100 ? `<p class="sub">and ${waits.length - 100} older</p>` : ''}</div>`; }
   h += looseHtml(looseTransfers(id));
   h += `<div class="btns"><button class="btn light" data-act="find-xfer">Find transfers between accounts</button></div>`;
+  if (ps.length && !ps.some(p => p.diff)) h += moodVerse('agree');
   view().innerHTML = h;
 }
 /* one month: the bank, your transactions, what may be wrong, and a correction in one tap */
@@ -4831,7 +4841,7 @@ function monthCard() {
   return `<h2 class="sect" data-ftot="${esc((net >= 0 ? '+' : '') + whole(net, H))}">This month <span class="sub">${new Date(ym + '-15T12:00:00').toLocaleDateString('en-CA', { month: 'long' })}</span></h2><div class="card tap" data-act="why-month">
     <div class="mrow"><span class="k up">Income</span><span class="v up">${whole(inc, H)}</span><span class="mb"><i class="mbi" style="width:${(inc / mx * 100).toFixed(1)}%"></i></span></div>
     <div class="mrow"><span class="k down">Expenses</span><span class="v down">${whole(out, H)}</span><span class="mb"><i class="mbo" style="width:${(out / mx * 100).toFixed(1)}%"></i></span></div>
-    <div class="mrow tot"><span class="k">Difference</span><span class="v ${signCls(net)}">${(net >= 0 ? '+' : '') + whole(net, H)}</span><span></span></div><div class="sub" style="margin-top:6px">Tap to see what makes up these numbers ›</div></div>`;
+    <div class="mrow tot"><span class="k">Difference</span><span class="v ${signCls(net)}">${(net >= 0 ? '+' : '') + whole(net, H)}</span><span></span></div><div class="sub" style="margin-top:6px">Tap to see what makes up these numbers ›</div></div>${net < -0.005 ? moodVerse('short') : ''}`;
 }
 
 /* ---------------- updates ----------------
@@ -4954,3 +4964,136 @@ window.__updateStatus = msg => toast(msg);
     view().innerHTML = `<div class="card"><h2>Could not start</h2><p class="sub">${esc(e && e.message || e)}</p></div>`;
   }
 })();
+
+/* ---------------- 1.31: Stewardship ----------------
+   Bible verses (King James Version, public domain) on work, honesty and the right use of money:
+   a page to read and reflect, a verse of the day on Overview, and a quiet verse matched to some pages.
+   Settings › Stewardship turns the verses around the app off (the page stays). */
+const KJV = {
+  'Psalm 24:1': "The earth is the LORD's, and the fulness thereof; the world, and they that dwell therein.",
+  'Proverbs 10:4': 'He becometh poor that dealeth with a slack hand: but the hand of the diligent maketh rich.',
+  'Proverbs 21:5': 'The thoughts of the diligent tend only to plenteousness; but of every one that is hasty only to want.',
+  'Luke 14:28': 'For which of you, intending to build a tower, sitteth not down first, and counteth the cost, whether he have sufficient to finish it?',
+  'Proverbs 27:23': 'Be thou diligent to know the state of thy flocks, and look well to thy herds.',
+  'Proverbs 11:1': 'A false balance is abomination to the LORD: but a just weight is his delight.',
+  'Leviticus 19:13': 'Thou shalt not defraud thy neighbour, neither rob him: the wages of him that is hired shall not abide with thee all night until the morning.',
+  '1 Timothy 5:18': 'For the scripture saith, Thou shalt not muzzle the ox that treadeth out the corn. And, The labourer is worthy of his reward.',
+  'Colossians 3:23-24': 'And whatsoever ye do, do it heartily, as to the Lord, and not unto men; knowing that of the Lord ye shall receive the reward of the inheritance: for ye serve the Lord Christ.',
+  '1 Timothy 6:10': 'For the love of money is the root of all evil: which while some coveted after, they have erred from the faith, and pierced themselves through with many sorrows.',
+  'Hebrews 13:5': 'Let your conversation be without covetousness; and be content with such things as ye have: for he hath said, I will never leave thee, nor forsake thee.',
+  'Proverbs 13:11': 'Wealth gotten by vanity shall be diminished: but he that gathereth by labour shall increase.',
+  '2 Corinthians 9:6-8': 'But this I say, He which soweth sparingly shall reap also sparingly; and he which soweth bountifully shall reap also bountifully. Every man according as he purposeth in his heart, so let him give; not grudgingly, or of necessity: for God loveth a cheerful giver. And God is able to make all grace abound toward you; that ye, always having all sufficiency in all things, may abound to every good work.',
+  'Philippians 2:14': 'Do all things without murmurings and disputings.',
+  'Luke 16:10-11': 'He that is faithful in that which is least is faithful also in much: and he that is unjust in the least is unjust also in much. If therefore ye have not been faithful in the unrighteous mammon, who will commit to your trust the true riches?',
+  'Matthew 25:21': 'His lord said unto him, Well done, thou good and faithful servant: thou hast been faithful over a few things, I will make thee ruler over many things: enter thou into the joy of thy lord.',
+  'Matthew 6:19-21': 'Lay not up for yourselves treasures upon earth, where moth and rust doth corrupt, and where thieves break through and steal: but lay up for yourselves treasures in heaven, where neither moth nor rust doth corrupt, and where thieves do not break through nor steal: for where your treasure is, there will your heart be also.',
+  'Matthew 6:24': 'No man can serve two masters: for either he will hate the one, and love the other; or else he will hold to the one, and despise the other. Ye cannot serve God and mammon.',
+  'Matthew 6:33': 'But seek ye first the kingdom of God, and his righteousness; and all these things shall be added unto you.',
+  'Luke 12:15': "Take heed, and beware of covetousness: for a man's life consisteth not in the abundance of the things which he possesseth.",
+  'Luke 12:20-21': 'But God said unto him, Thou fool, this night thy soul shall be required of thee: then whose shall those things be, which thou hast provided? So is he that layeth up treasure for himself, and is not rich toward God.',
+  'Mark 12:43-44': 'Verily I say unto you, That this poor widow hath cast more in, than all they which have cast into the treasury: for all they did cast in of their abundance; but she of her want did cast in all that she had, even all her living.',
+  'Matthew 22:21': "Render therefore unto Caesar the things which are Caesar's; and unto God the things that are God's.",
+  'Matthew 16:26': "For what is a man profited, if he shall gain the whole world, and lose his own soul? or what shall a man give in exchange for his soul?",
+  'Acts 20:35': 'Remember the words of the Lord Jesus, how he said, It is more blessed to give than to receive.',
+  'Proverbs 1:5': 'A wise man will hear, and will increase learning; and a man of understanding shall attain unto wise counsels.',
+  'Proverbs 4:7': 'Wisdom is the principal thing; therefore get wisdom: and with all thy getting get understanding.',
+  'Proverbs 6:6-8': 'Go to the ant, thou sluggard; consider her ways, and be wise: which having no guide, overseer, or ruler, provideth her meat in the summer, and gathereth her food in the harvest.',
+  'Proverbs 21:20': 'There is treasure to be desired and oil in the dwelling of the wise; but a foolish man spendeth it up.',
+  'Genesis 41:35-36': 'And let them gather all the food of those good years that come, and lay up corn under the hand of Pharaoh, and let them keep food in the cities. And that food shall be for store to the land against the seven years of famine.',
+  'Philippians 4:11-12': 'I have learned, in whatsoever state I am, therewith to be content. I know both how to be abased, and I know how to abound: every where and in all things I am instructed both to be full and to be hungry, both to abound and to suffer need.',
+  'Ecclesiastes 11:2': 'Give a portion to seven, and also to eight; for thou knowest not what evil shall be upon the earth.',
+  'Proverbs 22:7': 'The rich ruleth over the poor, and the borrower is servant to the lender.',
+  'Romans 13:8': 'Owe no man any thing, but to love one another: for he that loveth another hath fulfilled the law.',
+  '1 Corinthians 10:31': 'Whether therefore ye eat, or drink, or whatsoever ye do, do all to the glory of God.',
+  'Colossians 3:17': 'And whatsoever ye do in word or deed, do all in the name of the Lord Jesus, giving thanks to God and the Father by him.',
+  'Proverbs 3:6': 'In all thy ways acknowledge him, and he shall direct thy paths.',
+  'Luke 6:35': 'But love ye your enemies, and do good, and lend, hoping for nothing again; and your reward shall be great, and ye shall be the children of the Highest.',
+  'Deuteronomy 8:18': 'But thou shalt remember the LORD thy God: for it is he that giveth thee power to get wealth.',
+  'Proverbs 16:3': 'Commit thy works unto the LORD, and thy thoughts shall be established.',
+  'Proverbs 3:9': 'Honour the LORD with thy substance, and with the firstfruits of all thine increase.',
+  'Proverbs 22:1': 'A good name is rather to be chosen than great riches, and loving favour rather than silver and gold.',
+  'Proverbs 16:8': 'Better is a little with righteousness than great revenues without right.',
+  'Proverbs 15:16': 'Better is little with the fear of the LORD than great treasure and trouble therewith.',
+  'Proverbs 23:4-5': 'Labour not to be rich: cease from thine own wisdom. Wilt thou set thine eyes upon that which is not? for riches certainly make themselves wings; they fly away as an eagle toward heaven.',
+  'Ecclesiastes 5:10': 'He that loveth silver shall not be satisfied with silver; nor he that loveth abundance with increase: this is also vanity.',
+  'Proverbs 28:20': 'A faithful man shall abound with blessings: but he that maketh haste to be rich shall not be innocent.',
+  '1 Timothy 6:6-8': 'But godliness with contentment is great gain. For we brought nothing into this world, and it is certain we can carry nothing out. And having food and raiment let us be therewith content.',
+  'Proverbs 14:23': 'In all labour there is profit: but the talk of the lips tendeth only to penury.',
+  '1 Corinthians 4:2': 'Moreover it is required in stewards, that a man be found faithful.',
+  '1 Peter 4:10': 'As every man hath received the gift, even so minister the same one to another, as good stewards of the manifold grace of God.',
+  'Proverbs 11:24-25': 'There is that scattereth, and yet increaseth; and there is that withholdeth more than is meet, but it tendeth to poverty. The liberal soul shall be made fat: and he that watereth shall be watered also himself.',
+  'Ephesians 4:28': 'Let him labour, working with his hands the thing which is good, that he may have to give to him that needeth.',
+  'Psalm 90:17': 'And let the beauty of the LORD our God be upon us: and establish thou the work of our hands upon us; yea, the work of our hands establish thou it.',
+  'Haggai 2:8': 'The silver is mine, and the gold is mine, saith the LORD of hosts.',
+  'Psalm 37:21': 'The wicked borroweth, and payeth not again: but the righteous sheweth mercy, and giveth.',
+  'Matthew 6:34': 'Take therefore no thought for the morrow: for the morrow shall take thought for the things of itself. Sufficient unto the day is the evil thereof.',
+};
+/* words of Christ, shown with a small mark */
+const CHRIST = new Set(['Luke 14:28', 'Luke 16:10-11', 'Matthew 25:21', 'Matthew 6:19-21', 'Matthew 6:24', 'Matthew 6:33', 'Luke 12:15', 'Luke 12:20-21', 'Mark 12:43-44', 'Matthew 22:21', 'Matthew 16:26', 'Acts 20:35', 'Luke 6:35', 'Matthew 6:34']);
+const DAILY = ['Psalm 24:1', 'Proverbs 10:4', 'Proverbs 21:5', 'Luke 14:28', 'Proverbs 27:23', 'Proverbs 11:1', 'Hebrews 13:5', 'Proverbs 13:11',
+  'Philippians 2:14', 'Matthew 6:33', 'Luke 12:15', 'Matthew 22:21', 'Matthew 16:26', 'Acts 20:35', 'Proverbs 4:7',
+  'Proverbs 21:20', 'Ecclesiastes 11:2', 'Romans 13:8', '1 Corinthians 10:31', 'Colossians 3:17', 'Proverbs 3:6', 'Deuteronomy 8:18', 'Proverbs 16:3',
+  'Proverbs 3:9', 'Proverbs 22:1', 'Proverbs 16:8', 'Proverbs 15:16', 'Ecclesiastes 5:10', 'Proverbs 28:20', 'Proverbs 14:23',
+  '1 Corinthians 4:2', '1 Peter 4:10', 'Psalm 90:17', 'Psalm 37:21', '1 Timothy 6:10'];
+const versesOn = () => getSetting('verses', '1') === '1';
+function verseHtml(ref, cls) {
+  const t = KJV[ref]; if (!t) return '';
+  return `<figure class="verse nomask${cls ? ' ' + cls : ''}"><blockquote>${esc(t)}</blockquote><figcaption>${CHRIST.has(ref) ? '<span class="xc" title="Words of Christ">☩</span> ' : ''}${esc(ref)}</figcaption></figure>`;
+}
+/* the same verse all day, a new one each day */
+function dailyRef(d) { const n = Math.floor(dnum(d || today())); return DAILY[((n % DAILY.length) + DAILY.length) % DAILY.length]; }
+function dailyCard() {
+  if (!versesOn()) return '';
+  return `<div class="card tap vday nomask" data-act="stewardship"><div class="vlabel">Verse of the day</div>${verseHtml(dailyRef())}<div class="sub vmore">Stewardship: reflect on God, work and money ›</div></div>`;
+}
+/* a quiet verse at the foot of some pages; two verses alternate by day where there are two */
+function pageVerse() {
+  if (!versesOn()) return '';
+  const inDetail = state.propertyId && state.tab === 'property' || state.accountId && state.tab === 'accounts' || state.assetId && state.tab === 'assets' || state.loanId && state.tab === 'loans';
+  let refs = null;
+  if (state.tab === 'metals') refs = ['Matthew 6:19-21', 'Haggai 2:8'];
+  else if (state.tab === 'property' && !inDetail) refs = ['Psalm 24:1', 'Psalm 90:17'];
+  else if (state.tab === 'loans') refs = state.loanId && q('SELECT written_off FROM loans WHERE id=?', [state.loanId]).some(l => l.written_off) ? ['Luke 6:35'] : ['Luke 6:35', 'Psalm 37:21'];
+  else if (state.tab === 'assets' && !inDetail) refs = ['Luke 12:15', '1 Timothy 6:6-8'];
+  else if (state.tab === 'accounts' && !inDetail) refs = q("SELECT COUNT(*) n FROM accounts WHERE type='credit'")[0].n ? ['Proverbs 22:7', 'Romans 13:8'] : ['Proverbs 27:23', 'Proverbs 21:20'];
+  else if (state.tab === 'accounts' && inDetail) { const a = q('SELECT type FROM accounts WHERE id=?', [state.accountId])[0]; if (a && a.type === 'credit') refs = ['Proverbs 22:7', 'Romans 13:8']; }
+  else if (state.tab === 'money') refs = ['Deuteronomy 8:18', 'Proverbs 14:23'];
+  if (!refs) return '';
+  return `<div class="pverse">${verseHtml(refs[Math.floor(dnum(today())) % refs.length])}</div>`;
+}
+/* a verse that answers what the screen shows */
+function moodVerse(kind) {
+  if (!versesOn()) return '';
+  const m = { short: ['Luke 14:28', 'Proverbs 21:5'], agree: ['Proverbs 27:23', 'Proverbs 11:1'], start: ['Proverbs 16:3'] }[kind]; if (!m) return '';
+  return `<div class="pverse">${verseHtml(m[Math.floor(dnum(today())) % m.length])}</div>`;
+}
+const SV = (...refs) => refs.map(r => verseHtml(r)).join('');
+function renderStewardship() {
+  setTitle('Stewardship', true);
+  const sec = (title, intro, body) => `<h2 class="sect">${title}</h2><div class="card stw">${intro ? `<p>${intro}</p>` : ''}${body}</div>`;
+  let h = `<div class="card stw stwhead"><p class="lead">We are stewards, not owners.</p>
+    <p>Everything we have is lent to us by God, to be used well and accounted for. This app is a tool for that work: knowing the state of what has been entrusted to us, keeping honest records, and planning wisely. Money itself is not the danger; <b>the love of money</b> is. Its right use and good management are a service to God, to our family and to our neighbour.</p>${SV('Psalm 24:1', '1 Corinthians 4:2')}</div>`;
+  h += sec('Diligence and honesty', 'Work steadily, count the cost before you build, know where things stand, and keep honest weights: every record true, to the cent.',
+    SV('Proverbs 10:4', 'Proverbs 21:5', 'Luke 14:28', 'Proverbs 27:23', 'Proverbs 11:1'));
+  h += sec('Fair compensation', 'Pay what is owed, on time, and receive fair pay for honest work. Do not hold back the wages of another.',
+    SV('Leviticus 19:13', '1 Timothy 5:18', 'Colossians 3:23-24'));
+  h += sec('Stewardship', 'Be content, gather patiently by labour rather than by quick schemes, and give freely and cheerfully.',
+    SV('1 Timothy 6:10', 'Hebrews 13:5', 'Proverbs 13:11', '2 Corinthians 9:6-8'));
+  h += sec('Doing it all as if for God, without grumbling', 'Whatever the task, the dull or the hard, do it with your whole heart, as service to the Lord, and without complaining.',
+    SV('Colossians 3:23-24', 'Philippians 2:14', 'Psalm 90:17'));
+  h += sec('The love of money, not money', '<b>Very important.</b> Scripture does not condemn money, or using and managing it well. It warns against <i>loving</i> it: trusting in it, serving it, letting it rule the heart. The faithful servant in the parable is praised for making good use of what he was given; the one who buried it out of fear is not.',
+    SV('1 Timothy 6:10', 'Luke 16:10-11', 'Matthew 25:21', 'Ecclesiastes 5:10', 'Proverbs 16:8'));
+  h += sec('The words of Christ', 'What our Lord taught about treasure, masters and the heart.',
+    SV('Matthew 6:19-21', 'Matthew 6:24', 'Matthew 6:33', 'Luke 12:15', 'Luke 12:20-21', 'Mark 12:43-44', 'Matthew 22:21', 'Matthew 16:26', 'Acts 20:35'));
+  const stage = (n, t, txt, refs) => `<div class="stage"><div class="stn">${n}</div><div class="stb"><h3>${t}</h3><p>${txt}</p>${SV(...refs)}</div></div>`;
+  h += sec('Stages in life', 'Some sound advice, for each season.',
+    stage(1, 'Learn and grow', 'Invest first in yourself: learn a trade or a skill well, seek good counsel, and gain wisdom before wealth.', ['Proverbs 1:5', 'Proverbs 4:7']) +
+    stage(2, 'Accumulate and save', 'Like the ant in summer: put something aside from every income, build a reserve for hard times, and spend less than you earn.', ['Proverbs 6:6-8', 'Proverbs 21:20']) +
+    stage(3, 'Tighten the belt', 'In lean years, cut back without despair, as Joseph stored grain in the good years for the years of famine. Learn contentment in plenty and in want.', ['Genesis 41:35-36', 'Philippians 4:11-12']) +
+    stage(4, 'Invest and grow', 'Put what you are given to work, like the faithful servants with their talents, and spread it out rather than risking everything on one thing.', ['Matthew 25:21', 'Ecclesiastes 11:2']) +
+    `<div class="stage"><div class="stn">·</div><div class="stb"><h3>About debt</h3><p>Borrow little and repay what you owe; debt makes us servants.</p>${SV('Proverbs 22:7', 'Romans 13:8')}</div></div>`);
+  h += sec('In remembrance of God in everything', 'All of it fairly, and in constant remembrance of God in everything you do.',
+    SV('1 Corinthians 10:31', 'Colossians 3:17', 'Proverbs 3:6'));
+  h += `<p class="sub stwfoot">Scripture quotations from the King James Version (public domain). <span class="xc">☩</span> marks the words of Christ.</p>`;
+  view().innerHTML = h;
+}

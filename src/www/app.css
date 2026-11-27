@@ -703,3 +703,27 @@ body.selecting main#view { padding-bottom: 150px; }
 /* 1.30 */
 .sumh { margin: 12px 0 2px; font-weight: 750; font-size: .9rem; text-align: left; }
 .alloc .arow.ie.tap { grid-template-columns: minmax(0, 1fr) auto auto; }
+/* 1.31: Stewardship and Bible verses */
+.verse { margin: 12px 0 0; padding: 2px 0 2px 14px; border-left: 3px solid var(--brand); }
+.verse blockquote { margin: 0; font-family: Georgia, "Noto Serif", "DejaVu Serif", serif; font-size: 1.02rem; line-height: 1.5; font-style: italic; color: var(--ink); overflow-wrap: anywhere; }
+.verse figcaption { margin-top: 4px; font-size: .84rem; font-weight: 650; color: var(--muted); }
+.verse .xc, .stwfoot .xc { color: #a3172b; font-style: normal; }
+.vday { padding-top: 12px; }
+.vday .vlabel { font-size: .74rem; text-transform: uppercase; letter-spacing: .07em; font-weight: 750; color: var(--muted); }
+.vday .verse { margin-top: 6px; }
+.vday .vmore { margin-top: 8px; }
+.pverse { margin: 18px 6px 8px; opacity: .92; }
+.pverse .verse { border-left-width: 2px; }
+.pverse .verse blockquote { font-size: .95rem; }
+.stw p { margin: 0 0 4px; line-height: 1.55; }
+.stw > .verse:first-of-type { margin-top: 10px; }
+.stwhead .lead { font-family: Georgia, "Noto Serif", "DejaVu Serif", serif; font-size: 1.3rem; font-weight: 700; margin-bottom: 8px; color: var(--ink); }
+.stage { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 10px; padding: 12px 0; border-top: 1px solid var(--line); }
+.stage:first-of-type { border-top: 0; }
+.stage .stn { width: 28px; height: 28px; border-radius: 50%; background: var(--brand); color: #fff; display: grid; place-items: center; font-weight: 750; font-size: .9rem; }
+.stage h3 { margin: 3px 0 4px; font-size: 1rem; }
+.stwfoot { margin: 10px 6px 20px; }
+@media print { .vday, .pverse { display: none; } }
+.vday .verse blockquote { font-size: .95rem; line-height: 1.45; }
+:root[data-mode="dark"] .verse .xc, :root[data-mode="dark"] .stwfoot .xc { color: #ff8a8a; }
+:root[data-mode="dark"] .stage .stn { color: var(--bg); }
