@@ -5069,7 +5069,7 @@ function moodVerse(kind) {
 }
 const SV = (...refs) => refs.map(r => verseHtml(r)).join('');
 function renderStewardship() {
-  setTitle('Steward', true);
+  setTitle('Steward');
   const sec = (title, intro, body) => `<h2 class="sect">${title}</h2><div class="card stw">${intro ? `<p>${intro}</p>` : ''}${body}</div>`;
   let h = `<div class="card stw stwhead"><p class="lead">We are stewards, not owners.</p>
     <p>Everything we have is lent to us by God, to be used well and accounted for. This app is a tool for that work: knowing the state of what has been entrusted to us, keeping honest records, and planning wisely. Money itself is not the danger; <b>the love of money</b> is. Its right use and good management are a service to God, to our family and to our neighbour.</p>${SV('Psalm 24:1', '1 Corinthians 4:2')}</div>`;
