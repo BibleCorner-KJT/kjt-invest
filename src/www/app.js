@@ -1,9 +1,9 @@
-/* KJT Finance 1.26 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
+/* KJT Finance 1.27 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
    All data stays in one SQLite file on the device. The only network calls are the
    price updates (metal prices from gold-api.com, exchange rates from the European Central Bank). */
 'use strict';
 
-const APP_VERSION = '1.26';
+const APP_VERSION = '1.27';
 const SCHEMA = 11;
 const OZT_G = 31.1034768;
 const METALS = [
@@ -211,6 +211,8 @@ function prepareDb() { BALC = {};
   /* 1.20: speed: lookups by the receiving account and by balance date use an index */
   run('CREATE INDEX IF NOT EXISTS tx_to ON transactions(to_account_id, date)'); run('CREATE INDEX IF NOT EXISTS bal_acct ON account_balances(account_id, date)');
   run('CREATE INDEX IF NOT EXISTS tx_cat ON transactions(category_id)');
+  /* 1.27: a transfer between two currencies keeps what actually arrived (e.g. 10,000 CAD -> 7,220 USD) */
+  if (!q('PRAGMA table_info(transactions)').some(r => r.name === 'to_amount')) run('ALTER TABLE transactions ADD COLUMN to_amount REAL');
   /* 1.19: a credit card's expiry month (YYYY-MM) */
   if (!q('PRAGMA table_info(accounts)').some(r => r.name === 'expires')) run('ALTER TABLE accounts ADD COLUMN expires TEXT');
   /* 1.19: an account can be hidden (still counted) or closed */
@@ -760,7 +762,10 @@ function renderOverview() {
   setTitle('KJT Finance');
   const t = totals(), H = home();
   const nAll = ['metal_holdings', 'properties', 'accounts', 'other_assets', 'loans'].reduce((n, tb) => n + q(`SELECT COUNT(*) n FROM ${tb}`)[0].n, 0);
-  let h = missingWarn() + `<h2 class="sect" data-ftot="${esc(whole(t.total, H))}">Summary</h2>` + summaryHtml(t);
+  /* 1.27: an "account" that only ever received transfers and has the name of a property or asset is an MMEX asset account */
+  const sus = q("SELECT a.* FROM accounts a WHERE a.type='other' AND COALESCE(a.status,'')<>'closed' AND EXISTS(SELECT 1 FROM transactions t WHERE t.to_account_id=a.id AND t.kind='transfer') AND NOT EXISTS(SELECT 1 FROM transactions t WHERE t.account_id=a.id) AND (EXISTS(SELECT 1 FROM properties p WHERE lower(p.name)=lower(a.name)) OR EXISTS(SELECT 1 FROM other_assets o WHERE lower(o.name)=lower(a.name)))");
+  const susWarn = sus.length ? `<div class="warn tap" data-act="mmex-repair"><b>Counted twice?</b> ${sus.map(a => esc(a.name)).join(', ')} ${sus.length === 1 ? 'is an account that' : 'are accounts that'} only received payments and also ${sus.length === 1 ? 'is a property or asset' : 'are properties or assets'}. Tap to repair from your MMEX file ›</div>` : '';
+  let h = missingWarn() + susWarn + `<h2 class="sect" data-ftot="${esc(whole(t.total, H))}">Summary</h2>` + summaryHtml(t);
   if (!nAll) {
     h += `<div class="card"><h2>Welcome</h2><p class="sub">Add what you own. Everything stays on this device, in one file you can export at any time.</p>
       <div class="btns"><button class="btn" data-act="add-metal">Add precious metal</button><button class="btn" data-act="add-property">Add property</button><button class="btn" data-act="add-account">Add bank account</button><button class="btn" data-act="add-asset">Add other asset</button></div>
@@ -1717,7 +1722,7 @@ function renderMore() {
     <p class="sub">Everything is kept in one SQLite database file on this device. Export it to back it up or to move it to another phone or computer; import it there.</p>
     <div class="btns"><button class="btn" data-act="export">Export database</button><button class="btn light" data-act="import">Import database</button></div>
     <h3 class="ieh">From MMEX (Money Manager Ex)</h3><p class="sub">Brings your accounts, categories, payees, every transaction (cash too), scheduled bills and assets from an MMEX database (.mmb). Import the same file again later and only what is new is added.</p>
-    <div class="btns"><button class="btn" data-act="mmex-import">Import MMEX file</button></div>
+    <div class="btns"><button class="btn" data-act="mmex-import">Import MMEX file</button><button class="btn light" data-act="mmex-repair">Repair from my MMEX file</button></div>
     <h3 class="ieh">From your bank</h3><p class="sub">In your online banking, download your account's history (OFX, QFX, QIF or CSV), then import it here. Your bank password is never needed and the file is read only on this device. Transactions already here are skipped.</p>
     <div class="btns"><button class="btn" data-act="bank-import">Import bank file</button></div>
     ${importsHtml()}
@@ -2097,6 +2102,7 @@ view().addEventListener('click', e => {
     case 'p-clear': state.psel = new Set(); render(); break;
     case 'cat-clean': removeUnusedCats(); break;
     case 'mmex-import': mmexImport(); break;
+    case 'mmex-repair': mmexRepair(); break;
     case 'undo-import': undoImport(+d.id); break;
     case 'start-fresh': startFresh(); break;
     case 'sync-setup': syncSetup(); break;
@@ -2458,7 +2464,7 @@ function catOptions(kind, sel) {
 function txEffect(t, accountId, cur) {   /* what one transaction does to one account's balance */
   if (t.kind === 'transfer') {
     if (t.account_id === accountId) return -t.amount;
-    if (t.to_account_id === accountId) { const AC = BALC.__acur || (BALC.__acur = Object.fromEntries(q('SELECT id, currency FROM accounts').map(r => [r.id, r.currency]))); const fc = AC[t.account_id] || home(); return fc === cur ? t.amount : conv(t.amount, fc, cur) || t.amount; }
+    if (t.to_account_id === accountId) { if (t.to_amount != null && t.to_amount > 0) return t.to_amount; const AC = BALC.__acur || (BALC.__acur = Object.fromEntries(q('SELECT id, currency FROM accounts').map(r => [r.id, r.currency]))); const fc = AC[t.account_id] || home(); return fc === cur ? t.amount : conv(t.amount, fc, cur) || t.amount; }
     return 0;
   }
   if (t.account_id !== accountId) return 0;
@@ -2467,7 +2473,7 @@ function txEffect(t, accountId, cur) {   /* what one transaction does to one acc
 /* 1.20: an account's balance on any day, from one read of its transactions (for charts over many dates) */
 function balanceFn(a) {
   const cur = a.currency || home(), cr = a.type === 'credit', ck = t => t.date + '|' + String(Math.round(t.created || 0) + 1e15).padStart(18, '0');
-  const txs = q('SELECT date, created, kind, amount, account_id, to_account_id FROM transactions WHERE account_id=? OR to_account_id=?', [a.id, a.id]).map(t => [ck(t), t]).sort((x, y) => x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0).map(x => x[1]);
+  const txs = q('SELECT date, created, kind, amount, to_amount, account_id, to_account_id FROM transactions WHERE account_id=? OR to_account_id=?', [a.id, a.id]).map(t => [ck(t), t]).sort((x, y) => x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0).map(x => x[1]);
   const P = [0]; for (const t of txs) P.push(P[P.length - 1] + txEffect(t, a.id, cur));
   const keys = txs.map(ck), dates = txs.map(t => t.date);
   const bs = q('SELECT date, balance, created FROM account_balances WHERE account_id=? ORDER BY date, id', [a.id]);
@@ -2664,7 +2670,7 @@ function txForm(id, copyOf, preset) {
     <div class="freqs">${Object.entries(KIND_NAME).map(([k, l]) => `<label class="freqo"><input type="radio" name="kind" value="${k}"${k === t.kind ? ' checked' : ''}><span>${l}</span></label>`).join('')}</div>
     <div class="f2">${field('amount', 'Amount', t.amount)}${field('date', 'Date', t.date, 'type="date"')}</div>
     <div class="f2"><label class="f"><span id="acct-l">Account</span><select name="account_id">${accts.map(a => `<option value="${a.id}"${a.id === t.account_id ? ' selected' : ''}>${esc(a.name)}</option>`).join('')}</select></label>
-    <label class="f" id="to-wrap"><span>To account</span><select name="to_account_id">${accts.map(a => `<option value="${a.id}"${a.id === t.to_account_id ? ' selected' : ''}>${esc(a.name)}</option>`).join('')}</select></label></div>
+    <label class="f" id="to-wrap"><span>To account</span><select name="to_account_id">${accts.map(a => `<option value="${a.id}"${a.id === t.to_account_id ? ' selected' : ''}>${esc(a.name)}</option>`).join('')}</select></label><label class="f" id="toamt-wrap"><span>Received (in the other account's currency)</span><input name="to_amount" inputmode="decimal" autocomplete="off" value="${t.to_amount != null ? fmtNum(t.to_amount) : ''}" placeholder="worked out from today's rate"></label></div>
     <div id="cat-wrap"><label class="f"><span>Category</span><select name="category_id"></select></label>
     ${field('payee', 'Paid to / received from (optional)', t.payee, 'autocomplete="off" list="payees"')}<datalist id="payees">${payees.map(p => `<option value="${esc(p)}">`).join('')}</datalist></div>
     ${field('note', 'Note (optional)', t.note, 'autocomplete="off"')}
@@ -2676,11 +2682,13 @@ function txForm(id, copyOf, preset) {
     ${id ? '<div class="btns"><button class="btn light" data-f="dup">Duplicate</button><button class="btn danger" data-f="delete">Delete</button></div>' : ''}`, box => {
     const sync = () => { const k = (box.querySelector('[name=kind]:checked') || {}).value || 'out';
       box.querySelector('#to-wrap').style.display = k === 'transfer' ? '' : 'none';
+      { const fa = box.querySelector('[name=account_id]'), ta = box.querySelector('[name=to_account_id]'), cu = id2 => ((accts.find(a => String(a.id) === String(id2)) || {}).currency || home());
+        const tw = box.querySelector('#toamt-wrap'); if (tw) tw.style.display = k === 'transfer' && fa && ta && cu(fa.value) !== cu(ta.value) ? '' : 'none'; }
       box.querySelector('#cat-wrap').style.display = k === 'transfer' ? 'none' : '';
       box.querySelector('#acct-l').textContent = k === 'transfer' ? 'From account' : 'Account';
       const cs = box.querySelector('[name=category_id]'), cur = +cs.value || t.category_id; cs.innerHTML = catOptions(k === 'in' ? 'in' : 'out', cur);
       const fr = box.querySelector('[name=freq]'); if (fr) box.querySelector('#auto-wrap').style.display = fr.value ? '' : 'none'; };
-    box.querySelectorAll('[name=kind]').forEach(r => r.onchange = sync); const fr = box.querySelector('[name=freq]'); if (fr) fr.onchange = sync; sync();
+    box.querySelectorAll('[name=kind]').forEach(r => r.onchange = sync); ['account_id', 'to_account_id'].forEach(n => { const e2 = box.querySelector(`[name=${n}]`); if (e2) e2.addEventListener('change', sync); }); const fr = box.querySelector('[name=freq]'); if (fr) fr.onchange = sync; sync();
     if (!id && !copyOf) { const am = box.querySelector('[name=amount]'); if (am && !am.value) setTimeout(() => am.focus(), 250); }
     const pe = box.querySelector('[name=payee]');   /* a payee you used before brings back its category */
     if (pe && !id) pe.onchange = () => { const cs = box.querySelector('[name=category_id]'); if (cs.value) return;
@@ -2697,13 +2705,16 @@ function txForm(id, copyOf, preset) {
       const vals = [+d.account_id, d.date, kind, amt, kind === 'transfer' ? null : (+d.category_id || null), kind === 'transfer' ? (t.payee || null) : (d.payee || '').trim(), (d.note || '').trim(), kind === 'transfer' ? +d.to_account_id : null, d.link || null];
       /* remember this payee for next time: its category, or (an ATM withdrawal made into a transfer) the account it goes to */
       if (vals[5]) { if (kind === 'transfer') { if (t.kind !== 'transfer' && t.payee) learnRule(t.payee, null, vals[7]); } else if (vals[4] && vals[4] !== t.category_id) learnRule(vals[5], vals[4], null); }
-      if (id) { run('UPDATE transactions SET account_id=?,date=?,kind=?,amount=?,category_id=?,payee=?,note=?,to_account_id=?,link=? WHERE id=?', vals.concat([id]));
+      /* 1.27: between two currencies, what arrived (when given) */
+      const cuOf = x => ((accts.find(a => a.id === x) || {}).currency || home()), ta0 = num(d.to_amount);
+      const toAmount = kind === 'transfer' && cuOf(vals[0]) !== cuOf(vals[7]) && ta0 > 0 ? ta0 : null;
+      if (id) { run('UPDATE transactions SET account_id=?,date=?,kind=?,amount=?,category_id=?,payee=?,note=?,to_account_id=?,link=? WHERE id=?', vals.concat([id])); run('UPDATE transactions SET to_amount=? WHERE id=?', [toAmount, id]);
         const bo = box.querySelector('[name=bank_ok]'); if (bo) run('UPDATE transactions SET bank_ok=? WHERE id=?', [bo.checked ? (t.bank_ok || 1) : null, id]); }
       else {
         let rid = null;
         if (d.freq) { run('INSERT INTO recurring(account_id,kind,amount,category_id,payee,note,to_account_id,link,freq,next_date,auto,active) VALUES(?,?,?,?,?,?,?,?,?,?,?,1)',
           [vals[0], kind, amt, vals[4], vals[5], vals[6], vals[7], vals[8], d.freq, nextDate(d.date, d.freq), +d.auto || 0]); rid = q('SELECT last_insert_rowid() id')[0].id; }
-        run('INSERT INTO transactions(account_id,date,kind,amount,category_id,payee,note,to_account_id,link,recurring_id,created) VALUES(?,?,?,?,?,?,?,?,?,?,?)', vals.concat([rid, Date.now()]));
+        run('INSERT INTO transactions(account_id,date,kind,amount,category_id,payee,note,to_account_id,link,recurring_id,created,to_amount) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)', vals.concat([rid, Date.now(), toAmount]));
         state.txMonth = d.date.slice(0, 7);
       }
       save(); closeSheet(); render();
@@ -3734,6 +3745,73 @@ function matchPurchases() {
       save(); closeSheet(); toast(n ? n + ' purchase' + (n > 1 ? 's' : '') + ' linked' : 'Nothing linked'); render(); };
   });
 }
+/* ---------------- 1.27: repair an MMEX import ----------------
+   Your balances from the bank stay exactly as they are. What changes is the history behind them:
+   1. MMEX "Asset" accounts (a house, gold…) were made into bank accounts and counted as money, while the same
+      things were also counted as property or assets: their payments become purchases, linked, and the account goes.
+   2. Transfers between currencies get the amount that actually arrived (MMEX keeps it).
+   3. What is still off in any account's history is recorded as a balance correction (not spending or income). */
+async function mmexRepair() {
+  const r = await native('importDb', { title: 'Choose the MMEX database (.mmb) you imported', filter: 'mmex' });
+  if (!r.b64) { if (r.error) toast('Could not open the file: ' + r.error); return; }
+  let m; try { m = new SQL.Database(b64ToBytes(r.b64)); qd(m, 'SELECT 1 FROM ACCOUNTLIST_V1 LIMIT 1'); } catch (e) { return toast('This is not an MMEX database (.mmb).'); }
+  const info = mmexRead(m), H = home(), plan = { assets: [], fx: [] };
+  for (const a of info.accts.filter(x => MMEX_ASSET(x.mtype))) {
+    const x = q('SELECT * FROM accounts WHERE lower(name)=lower(?)', [a.name])[0]; if (!x) continue;
+    const ins = q("SELECT * FROM transactions WHERE to_account_id=? AND kind='transfer'", [x.id]), outs = q("SELECT * FROM transactions WHERE account_id=? AND kind='transfer'", [x.id]);
+    const own = q("SELECT COUNT(*) n FROM transactions WHERE account_id=? AND kind<>'transfer'", [x.id])[0].n, b = acctBalance(x.id);
+    plan.assets.push({ name: a.name, x, ins, outs, own, bal: b ? b.balance : 0 });
+  }
+  const curOf = Object.fromEntries(q('SELECT id, currency FROM accounts').map(a => [a.id, a.currency || H]));
+  for (const t of qd(m, `SELECT TRANSID, TRANSAMOUNT, TOTRANSAMOUNT FROM CHECKINGACCOUNT_V1 WHERE TRANSCODE='Transfer' AND ${info.live} AND TOTRANSAMOUNT>0`)) {
+    const at = q("SELECT * FROM transactions WHERE import_id=? AND kind='transfer'", ['mmex:' + t.TRANSID])[0];
+    if (!at || (Math.abs(t.TOTRANSAMOUNT - t.TRANSAMOUNT) <= 0.004 && curOf[at.account_id] === curOf[at.to_account_id])) continue;   /* same currency, same amount: nothing to keep */
+    if (at && (at.to_amount == null || Math.abs(at.to_amount - t.TOTRANSAMOUNT) > 0.004)) plan.fx.push({ at, to: +t.TOTRANSAMOUNT });
+  }
+  m.close();
+  /* try it, measure, undo: the preview shows exactly what the repair does */
+  const snap = () => Object.fromEntries(q('SELECT * FROM accounts').map(a => { const b = acctBalance(a.id); return [a.id, { name: a.name, cur: a.currency || H, bal: b ? b.balance : null, off: reconPeriods(a).reduce((x, p) => x + Math.abs(p.diff), 0) }]; }));
+  const before = snap(), t0 = totals().total; let after, t1, nCorr = 0;
+  db.exec('BEGIN'); try { mmexRepairApply(plan); BALC = {}; nCorr = correctionsAll(); BALC = {}; after = snap(); t1 = totals().total; } finally { db.exec('ROLLBACK'); BALC = {}; clearCats(); }
+  if (!plan.assets.length && !plan.fx.length && !nCorr) return toast('Nothing to repair: your accounts already agree with MMEX and the bank ✓');
+  const A = Object.fromEntries(q('SELECT id, name, currency FROM accounts').map(a => [a.id, a]));
+  const rows = Object.entries(before).map(([id, b]) => { const a = after[id]; return { id, name: b.name, cur: b.cur, b0: b.bal, b1: a ? a.bal : null, gone: !a, off0: b.off, off1: a ? a.off : 0 }; })
+    .filter(r => r.gone || Math.abs((r.b0 || 0) - (r.b1 || 0)) > 0.004 || r.off0 > 0.004);
+  openSheet(`<h2>Repair from MMEX</h2>
+    <div class="ie3"><div class="stat"><div class="k">Net worth now</div><div class="v">${whole(t0, H)}</div></div><div class="stat"><div class="k">After the repair</div><div class="v">${whole(t1, H)}</div></div><div class="stat"><div class="k">Difference</div><div class="v ${signCls(t1 - t0)}">${whole(t1 - t0, H)}</div></div></div>
+    ${plan.assets.length ? `<h3 class="ieh">Counted twice: MMEX asset accounts</h3><p class="sub">Each was a bank account here and also a property or asset. Its payments become purchases (Savings & investments, linked to it); the account goes.</p>
+      <div class="alloc">${plan.assets.map(x => `<div class="arow ie"><span class="al">${esc(x.name)}<span class="sub"><br>${x.ins.length} payment${x.ins.length === 1 ? '' : 's'} become purchases${x.own ? ` · ${x.own} other entr${x.own === 1 ? 'y stays' : 'ies stay'}: account kept, hidden` : ''}</span></span><span class="av down">−${whole(Math.abs(x.bal), x.x.currency || H)}</span><span class="ap"></span></div>`).join('')}</div>` : ''}
+    ${plan.fx.length ? `<h3 class="ieh">Currency exchanges: the amount that arrived</h3><div class="alloc">${plan.fx.map(f => `<div class="arow ie"><span class="al">${fmtDate(f.at.date)} · ${esc((A[f.at.account_id] || {}).name || '')} → ${esc((A[f.at.to_account_id] || {}).name || '')}<span class="sub"><br>${money(f.at.amount, (A[f.at.account_id] || {}).currency || H)} sent</span></span><span class="av">${money(f.to, (A[f.at.to_account_id] || {}).currency || H)} arrived</span><span class="ap"></span></div>`).join('')}</div>` : ''}
+    <h3 class="ieh">Accounts</h3><div class="dpwrap"><table class="dptab"><thead><tr><th>Account</th><th class="n">Balance now</th><th class="n">After</th><th class="n">Old differences</th></tr></thead><tbody>
+      ${rows.map(r => `<tr><td>${esc(r.name)}</td><td class="n">${r.b0 == null ? '—' : money(r.b0, r.cur)}</td><td class="n">${r.gone ? '<i>removed</i>' : r.b1 == null ? '—' : money(r.b1, r.cur)}</td><td class="n">${r.off0 > 0.004 ? money(r.off0, r.cur) + (r.gone ? '' : ' → ✓') : '✓'}</td></tr>`).join('')}</tbody></table></div>
+    <p class="hint">Balances from your bank do not change. Cash accounts follow MMEX's amounts. ${nCorr ? nCorr + ' balance correction' + (nCorr > 1 ? 's' : '') + ' (not spending or income) make the history of every account add up to its bank balances; you see and can delete them under Reconcile.' : ''} Nothing is deleted except the asset accounts themselves.</p>
+    <label class="switch"><span>Also record old differences as balance corrections</span><input type="checkbox" name="corr" checked></label>
+    <div class="btns"><button class="btn light" data-f="backup">Export a backup first</button></div>
+    <div class="btns"><button class="btn" data-f="go">Repair</button><button class="btn light" data-f="cancel">Cancel</button></div>`, box => {
+    box.onclick = async e => { const f = e.target.dataset.f; if (!f) return; if (f === 'cancel') return closeSheet(); if (f === 'backup') return exportDb();
+      if (f !== 'go') return;
+      db.exec('BEGIN');
+      try { mmexRepairApply(plan); BALC = {}; const n = box.querySelector('[name=corr]').checked ? correctionsAll() : 0; db.exec('COMMIT'); BALC = {}; clearCats(); save(); closeSheet();
+        toast(`Repaired: ${plan.assets.length} asset account${plan.assets.length === 1 ? '' : 's'}, ${plan.fx.length} exchange${plan.fx.length === 1 ? '' : 's'}, ${n} correction${n === 1 ? '' : 's'}`); render(); }
+      catch (er) { db.exec('ROLLBACK'); BALC = {}; bad('Repair failed, nothing changed: ' + er.message); } };
+  });
+}
+function mmexRepairApply(plan) {
+  for (const x of plan.assets) {
+    for (const t of x.ins) run("UPDATE transactions SET kind='out', to_account_id=NULL, to_amount=NULL, payee=COALESCE(NULLIF(payee,''), ?) WHERE id=?", [x.name, t.id]);
+    for (const t of x.outs) run("UPDATE transactions SET kind='in', account_id=to_account_id, to_account_id=NULL, amount=COALESCE(to_amount, amount), to_amount=NULL, payee=COALESCE(NULLIF(payee,''), ?) WHERE id=?", [x.name, t.id]);
+    linkPurchase(x.ins.map(t => t.id).concat(x.outs.map(t => t.id)), x.name);
+    if (x.own) run("UPDATE accounts SET status='hidden', notes=TRIM(COALESCE(notes,'') || ' (MMEX asset account)') WHERE id=?", [x.x.id]);
+    else { run('DELETE FROM account_balances WHERE account_id=?', [x.x.id]); run('DELETE FROM recurring WHERE account_id=? OR to_account_id=?', [x.x.id, x.x.id]); run('DELETE FROM accounts WHERE id=?', [x.x.id]); }
+  }
+  for (const f of plan.fx) run('UPDATE transactions SET to_amount=? WHERE id=?', [f.to, f.at.id]);
+}
+function correctionsAll() {   /* every period that does not match the bank gets a correction; returns how many */
+  const H = home(); let n = 0;
+  for (const a of q('SELECT * FROM accounts')) for (const p of reconPeriods(a).filter(p => p.diff)) {
+    addCorrection(a.id, p.check.date, p.diff, `Repair: the ${a.type === 'cash' ? 'count' : 'bank'} showed ${money(Math.abs(p.bank), a.currency || H)} on ${fmtDate(p.check.date)}`, (p.check.created || 0) - 1); n++; BALC = {}; }
+  return n;
+}
 /* ---------------- 1.18: reconcile with the bank ----------------
    Each balance check (from a bank file, a statement or a cash count) is compared with the check before it plus the
    transactions in between. A difference means something is missing, doubled or wrong. Per month you see the difference,
@@ -3761,7 +3839,7 @@ function reconPeriods(a) { const k = '__rp' + a.id; return BALC[k] || (BALC[k] =
 function reconPeriods0(a) {
   const bs = q('SELECT * FROM account_balances WHERE account_id=? ORDER BY date, COALESCE(created,0), id', [a.id]), out = [], cur = a.currency || home();
   const ck = (d, c) => d + '|' + String(Math.round(c || 0) + 1e15).padStart(18, '0');
-  const all = q('SELECT id, date, created, kind, amount, account_id, to_account_id, category_id FROM transactions WHERE account_id=? OR to_account_id=?', [a.id, a.id]).map(t => [ck(t.date, t.created), t]).sort((x, y) => x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0);
+  const all = q('SELECT id, date, created, kind, amount, to_amount, account_id, to_account_id, category_id FROM transactions WHERE account_id=? OR to_account_id=?', [a.id, a.id]).map(t => [ck(t.date, t.created), t]).sort((x, y) => x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0);
   let j = 0;
   const sg = b => a.type === 'credit' ? -Math.abs(b) : b, cc = (cats().rows.find(c => !c.parent_id && c.name === 'Balance corrections') || {}).id;
   for (let i = 1; i < bs.length; i++) {
@@ -4403,6 +4481,7 @@ function syncCard() {
    every transaction (split ones become one line per split; voided and deleted ones are left out),
    transfers, payees (remembered with their category), scheduled bills (repeating) and assets.
    Each MMEX transaction remembers its MMEX number, so importing the same file again adds only what is new. */
+const MMEX_ASSET = t => /^(asset|assets)$/i.test(String(t || '').trim());   /* 1.27: MMEX asset accounts hold property, metals, cars: not money */
 const MMEX_TYPES = { cash: 'cash', checking: 'chequing', 'credit card': 'credit', term: 'gic', loan: 'other', investment: 'other', shares: 'other', asset: 'other' };
 const MMEX_FREQ = { 1: 'weekly', 2: 'biweekly', 3: 'monthly', 4: 'bimonthly', 5: 'quarterly', 6: 'halfyearly', 7: 'yearly' };
 function mmexCols(m, t) { try { return qd(m, `PRAGMA table_info(${t})`).map(c => c.name); } catch (e) { return []; } }
@@ -4425,13 +4504,13 @@ async function mmexImport() {
   const info = mmexRead(m), accts = q('SELECT * FROM accounts ORDER BY name');
   openSheet(`<h2>Import from MMEX</h2><p class="sub">${info.accts.length} accounts. Choose where each one goes; "New" makes the account here with its opening balance.</p>
     ${info.accts.map((a, i) => `<div class="mpart"><div class="mph"><b>${esc(a.name)}</b> <span class="sub">${esc(a.mtype)} · ${esc(a.cur)} · ${a.n} transaction${a.n === 1 ? '' : 's'}${a.from ? ' · ' + fmtDate(a.from) + ' – ' + fmtDate(a.to) : ''}${a.closed ? ' · closed' : ''}</span></div>
-      <select name="to${i}"><option value="new">New account: ${esc(a.name)}</option><option value="skip">Skip it</option>${accts.map(x => `<option value="${x.id}"${low(x.name) === low(a.name) ? ' selected' : ''}>Into ${esc(x.name)}</option>`).join('')}</select></div>`).join('')}
+      <select name="to${i}">${MMEX_ASSET(a.mtype) ? `<option value="asset">Not money: its payments become purchases of ${esc(a.name)}</option>` : ''}<option value="new">New account: ${esc(a.name)}</option><option value="skip">Skip it</option>${accts.map(x => `<option value="${x.id}"${low(x.name) === low(a.name) ? ' selected' : ''}>Into ${esc(x.name)}</option>`).join('')}</select></div>`).join('')}
     <label class="switch"><span>Payees: remember their categories</span><input type="checkbox" name="payees" checked></label>
     <label class="switch"><span>Scheduled bills: as repeating transactions</span><input type="checkbox" name="bills" checked></label>
     <label class="switch"><span>Assets</span><input type="checkbox" name="assets" checked></label>
     <p class="hint">Importing the same MMEX file again later adds only what is new.</p>
     <div class="btns"><button class="btn" data-f="go">Import</button><button class="btn light" data-f="cancel">Cancel</button></div>`, box => {
-    info.accts.forEach((a, i) => { const s = box.querySelector(`[name=to${i}]`); if (!accts.some(x => low(x.name) === low(a.name))) s.value = a.n || !a.closed ? 'new' : 'skip'; });
+    info.accts.forEach((a, i) => { const s = box.querySelector(`[name=to${i}]`); if (MMEX_ASSET(a.mtype)) s.value = 'asset'; else if (!accts.some(x => low(x.name) === low(a.name))) s.value = a.n || !a.closed ? 'new' : 'skip'; });
     box.onclick = e => { const f = e.target.dataset.f; if (!f) return;
       if (f === 'cancel') { m.close(); return closeSheet(); }
       const map = {}; info.accts.forEach((a, i) => { map[a.id] = box.querySelector(`[name=to${i}]`).value; });
@@ -4472,9 +4551,10 @@ function mmexDo(m, info, map, opt) {
     return (catCache[k] = id);
   };
   /* accounts */
-  const acc = {};
+  const acc = {}, assetAcct = {}, toLink = [];
   for (const a of info.accts) {
     const v = map[a.id]; if (v === 'skip') continue;
+    if (v === 'asset') { assetAcct[a.id] = a.name; continue; }
     if (v === 'new') {
       run('INSERT INTO accounts(name,type,institution,currency,interest_rate,owners,notes,share_pct,credit_limit) VALUES(?,?,?,?,?,1,?,100,?)',
         [a.name, a.type, a.heldAt, a.cur, a.type === 'credit' ? null : a.rate, (a.notes + (a.closed ? ' (closed in MMEX)' : '')).trim(), a.type === 'credit' ? a.limit : null]);
@@ -4490,7 +4570,7 @@ function mmexDo(m, info, map, opt) {
   /* splits */
   const splits = {}; if (mmexCols(m, 'SPLITTRANSACTIONS_V1').length) for (const s of qd(m, 'SELECT * FROM SPLITTRANSACTIONS_V1')) (splits[s.TRANSID] = splits[s.TRANSID] || []).push(s);
   const have = new Set(q("SELECT import_id FROM transactions WHERE import_id LIKE 'mmex:%'").map(r => r.import_id));
-  const ins = db.prepare('INSERT INTO transactions(account_id,date,kind,amount,category_id,payee,note,to_account_id,link,recurring_id,created,import_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)');
+  const ins = db.prepare('INSERT INTO transactions(account_id,date,kind,amount,category_id,payee,note,to_account_id,link,recurring_id,created,import_id,to_amount) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)');
   try {
     for (const t of qd(m, `SELECT * FROM CHECKINGACCOUNT_V1 WHERE ${info.live} ORDER BY TRANSDATE, TRANSID`)) {
       const from = acc[t.ACCOUNTID], to = t.TOACCOUNTID > 0 ? acc[t.TOACCOUNTID] : null, date = String(t.TRANSDATE || '').slice(0, 10);
@@ -4498,9 +4578,12 @@ function mmexDo(m, info, map, opt) {
       let kind = t.TRANSCODE === 'Deposit' ? 'in' : t.TRANSCODE === 'Transfer' ? 'transfer' : 'out', acct = from, toA = null, amt = Math.abs(+t.TRANSAMOUNT || 0);
       if (kind === 'transfer') {
         if (from && to) toA = to;
-        else if (from) kind = 'out';                                     /* the other account was skipped */
-        else if (to) { kind = 'in'; acct = to; amt = Math.abs(+t.TOTRANSAMOUNT || amt); }
+        else if (from) kind = 'out';                                     /* the other account was skipped, or is an asset: a purchase */
+        else if (to) { kind = 'in'; acct = to; amt = Math.abs(+t.TOTRANSAMOUNT || amt); }   /* sold, or money from a skipped account */
       }
+      const assetName = kind !== 'transfer' && t.TRANSCODE === 'Transfer' ? (assetAcct[t.TOACCOUNTID] || assetAcct[t.ACCOUNTID] || null) : null;
+      const fromCur = (info.accts.find(x => x.id === t.ACCOUNTID) || {}).cur, toCur = (info.accts.find(x => x.id === t.TOACCOUNTID) || {}).cur;
+      const toAmt = kind === 'transfer' && +t.TOTRANSAMOUNT > 0 && (Math.abs((+t.TOTRANSAMOUNT || 0) - (+t.TRANSAMOUNT || 0)) > 0.004 || fromCur !== toCur) ? Math.abs(+t.TOTRANSAMOUNT) : null;
       if (!acct) continue;
       const payee = kind === 'transfer' ? null : (payees[t.PAYEEID] || {}).PAYEENAME || null;
       const note = [t.NOTES, t.TRANSACTIONNUMBER ? '#' + t.TRANSACTIONNUMBER : ''].filter(Boolean).join(' ').slice(0, 200);
@@ -4508,10 +4591,11 @@ function mmexDo(m, info, map, opt) {
       if (parts) {
         for (const s of parts) { const iid = `mmex:${t.TRANSID}:${s.SPLITTRANSID}`; if (have.has(iid)) { st.again++; continue; }
           const v = +s.SPLITTRANSAMOUNT || 0, k = v < 0 ? (kind === 'in' ? 'out' : 'in') : kind;
-          ins.run([acct, date, k, Math.abs(v), ensureCat(s.CATEGID, s.SUBCATEGID), payee, [note, s.NOTES, '(split)'].filter(Boolean).join(' ').slice(0, 200), null, null, null, B, iid]); st.tx++; }
+          ins.run([acct, date, k, Math.abs(v), ensureCat(s.CATEGID, s.SUBCATEGID), payee, [note, s.NOTES, '(split)'].filter(Boolean).join(' ').slice(0, 200), null, null, null, B, iid, null]); st.tx++; }
       } else {
         const iid = 'mmex:' + t.TRANSID; if (have.has(iid)) { st.again++; continue; }
-        ins.run([acct, date, kind, amt, kind === 'transfer' ? null : ensureCat(t.CATEGID, t.SUBCATEGID), payee, note, toA, null, null, B, iid]); st.tx++;
+        ins.run([acct, date, kind, amt, kind === 'transfer' || assetName ? null : ensureCat(t.CATEGID, t.SUBCATEGID), assetName ? assetName : payee, note, toA, null, null, B, iid, toAmt]); st.tx++;
+        if (assetName) toLink.push([iid, assetName]);
       }
     }
   } finally { ins.free(); }
@@ -4543,7 +4627,20 @@ function mmexDo(m, info, map, opt) {
       st.assets++;
     }
   }
+  /* 1.27: payments into MMEX asset accounts: purchases, linked to the property or asset of the same name */
+  for (const [iid, name] of toLink) linkPurchase(q('SELECT id FROM transactions WHERE import_id=?', [iid]).map(r => r.id), name);
   return st;
+}
+/* a payment for something you own: Savings & investments (Property, Precious metals or Big purchases), linked to it */
+function linkPurchase(ids, name) {
+  if (!ids.length) return;
+  const pr = q('SELECT id FROM properties WHERE lower(name)=lower(?)', [name])[0], oa = pr ? null : q('SELECT id FROM other_assets WHERE lower(name)=lower(?)', [name])[0];
+  const metal = /\b(gold|silver|platinum|palladium|au|ag|bullion)\b/i.test(name);
+  const C = cats(), save = C.rows.find(c => !c.parent_id && c.kind === 'save' && /savings/i.test(c.name)) || C.rows.find(c => !c.parent_id && c.kind === 'save');
+  let sub = save ? C.rows.find(c => c.parent_id === save.id && c.name === (pr ? 'Property' : metal ? 'Precious metals' : 'Big purchases')) : null;
+  if (save && !sub) { run('INSERT INTO categories(name,parent_id,kind,sort) VALUES(?,?,?,?)', [pr ? 'Property' : metal ? 'Precious metals' : 'Big purchases', save.id, 'save', 950]); clearCats(); sub = { id: q('SELECT last_insert_rowid() id')[0].id }; }
+  const link = pr ? 'property:' + pr.id : oa ? 'asset:' + oa.id : null;
+  for (const id of ids) run('UPDATE transactions SET category_id=?, link=COALESCE(?, link) WHERE id=?', [sub ? sub.id : null, link, id]);
 }
 
 /* ---- imports you can undo ---- */
