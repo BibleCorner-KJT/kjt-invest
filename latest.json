@@ -1,14 +1,14 @@
 {
  "android": {
-  "version": "1.19",
+  "version": "1.20",
   "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-android.apk",
-  "sha256": "9432ba260c0e7617d5687de4bf60ec137b9788c2e284400a35f6aeb07b6a6ad5",
-  "notes": "Imports link transfers between your accounts. Hide or close accounts. Credit card expiry notices. Statement balances to find the month that is off. Ctrl+H, Esc, Settings menu."
+  "sha256": "42fe752b52f261c51ed9070ba430194285ad65c3f4bb00d204e6d254dfc50b53",
+  "notes": "Much faster with many transactions; hiding amounts is instant. Record an error or correct every month at once. Tap reminders and categories in Overview. New icon."
  },
  "linux": {
-  "version": "1.19",
+  "version": "1.20",
   "page": "https://github.com/BibleCorner-KJT/kjt-invest/tree/releases",
-  "notes": "Imports link transfers between your accounts. Hide or close accounts. Credit card expiry notices. Statement balances to find the month that is off. Ctrl+H, Esc, Settings menu.",
+  "notes": "Much faster with many transactions; hiding amounts is instant. Record an error or correct every month at once. Tap reminders and categories in Overview. New icon.",
   "x86_64": {
    "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.flatpak",
    "sha256": "ec47c31a31cb00ff7aacbb1461c90bbd41489b5b68be64bb3583e2deae1d9c4a"
@@ -19,7 +19,7 @@
   },
   "zip": {
    "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.zip",
-   "sha256": "0d3c8e27241e76b297194229d693e45bfbbf2a3fe2294f913f42ca0462cd724d"
+   "sha256": "5c8ee0e1a3152d3e7a4f829dc62b2248867ccd5f39a5b51fcdd8baee7f389c04"
   }
  }
 }
