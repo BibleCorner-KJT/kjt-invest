@@ -1,14 +1,14 @@
 {
  "android": {
-  "version": "1.26",
+  "version": "1.27",
   "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-android.apk",
-  "sha256": "5356a0aedb152e5957443aba10ea44b80ac4b29c242466766801d96774e432e3",
-  "notes": "New Overview summary: net worth, breakdown (each property and metal), cash flow for 1-12 months. Property totals. Correct every account at once. Reorder favourite currencies."
+  "sha256": "3e9be509774b8ee83e4dfe8832e4cf671b1a0a9a2be389d47c340eb043197f42",
+  "notes": "Fixed the MMEX import (asset accounts counted twice, currency transfers). New: Repair from my MMEX file, with a full preview; bank balances stay as they are."
  },
  "linux": {
-  "version": "1.26",
+  "version": "1.27",
   "page": "https://github.com/BibleCorner-KJT/kjt-invest/tree/releases",
-  "notes": "New Overview summary: net worth, breakdown (each property and metal), cash flow for 1-12 months. Property totals. Correct every account at once. Reorder favourite currencies.",
+  "notes": "Fixed the MMEX import (asset accounts counted twice, currency transfers). New: Repair from my MMEX file, with a full preview; bank balances stay as they are.",
   "x86_64": {
    "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.flatpak",
    "sha256": "ec47c31a31cb00ff7aacbb1461c90bbd41489b5b68be64bb3583e2deae1d9c4a"
@@ -19,7 +19,7 @@
   },
   "zip": {
    "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.zip",
-   "sha256": "9087511010112dd92e8fe39fd9943729ca031de191c34ede74adfc07eb6a32b7"
+   "sha256": "5102bf664ed6b4607eba6feb6e525ee3254a2e47319732d7deb1576e82606f52"
   }
  }
 }
