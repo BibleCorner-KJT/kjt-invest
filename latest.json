@@ -1,14 +1,14 @@
 {
  "android": {
-  "version": "1.27",
+  "version": "1.28",
   "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-android.apk",
-  "sha256": "3e9be509774b8ee83e4dfe8832e4cf671b1a0a9a2be389d47c340eb043197f42",
-  "notes": "Fixed the MMEX import (asset accounts counted twice, currency transfers). New: Repair from my MMEX file, with a full preview; bank balances stay as they are."
+  "sha256": "32b2208723844beef456d8d668f55197faf187fdc7e63343cd73f9449acfa347",
+  "notes": "Fixed the MMEX import and added Repair from my MMEX file (bank balances stay as they are). The selection bar can be moved."
  },
  "linux": {
-  "version": "1.27",
+  "version": "1.28",
   "page": "https://github.com/BibleCorner-KJT/kjt-invest/tree/releases",
-  "notes": "Fixed the MMEX import (asset accounts counted twice, currency transfers). New: Repair from my MMEX file, with a full preview; bank balances stay as they are.",
+  "notes": "Fixed the MMEX import and added Repair from my MMEX file (bank balances stay as they are). The selection bar can be moved.",
   "x86_64": {
    "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.flatpak",
    "sha256": "ec47c31a31cb00ff7aacbb1461c90bbd41489b5b68be64bb3583e2deae1d9c4a"
@@ -19,7 +19,7 @@
   },
   "zip": {
    "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.zip",
-   "sha256": "5102bf664ed6b4607eba6feb6e525ee3254a2e47319732d7deb1576e82606f52"
+   "sha256": "a7f4c6cb75a98338c00562838bfa1b9d1b47c820d9efa8a20e4ec168f252bb88"
   }
  }
 }
