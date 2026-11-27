@@ -1,9 +1,9 @@
-/* KJT Finance 1.23 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
+/* KJT Finance 1.24 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
    All data stays in one SQLite file on the device. The only network calls are the
    price updates (metal prices from gold-api.com, exchange rates from the European Central Bank). */
 'use strict';
 
-const APP_VERSION = '1.23';
+const APP_VERSION = '1.24';
 const SCHEMA = 11;
 const OZT_G = 31.1034768;
 const METALS = [
@@ -649,8 +649,13 @@ function lastOnOrBefore(arr, date) {     /* [date, value] of the last entry on o
 }
 function fxOn(cur, date) {
   if (cur === 'EUR') return 1;
-  const a = fxSeries(cur); const v = a.length ? (lastOnOrBefore(a, date) || a[0][1]) : null;   /* before 1999: the earliest rate */
-  return v || FX[cur] || null;
+  const a = fxSeries(cur);
+  if (!a.length) return FX[cur] || null;
+  let lo = 0, hi = a.length - 1, i = -1; while (lo <= hi) { const m = (lo + hi) >> 1; if (a[m][0] <= date) { i = m; lo = m + 1; } else hi = m - 1; }
+  /* 1.24: the stored rate must be from within 10 days of that date; otherwise (gaps, a currency added lately) today's rate */
+  if (i >= 0 && dnum(date) - dnum(a[i][0]) <= 10) return a[i][1];
+  if (FX[cur] && (i < 0 ? dnum(a[0][0]) - dnum(date) > 10 : true) && dnum(today()) - dnum(date) <= 400) return FX[cur];
+  return i >= 0 ? a[i][1] : a[0][1];
 }
 function convOn(amount, from, to, date) {
   if (amount == null || from === to) return amount;
@@ -948,6 +953,52 @@ function worthModel0() {
     items.push({ kind: 'o', from: an[0][0], at: d => convOn(interp(an, d) * k, c, H, d), paid: d => convOn((a.purchase_price != null ? a.purchase_price : an[0][1]) * k, c, H, an[0][0]) }); }
   return items;
 }
+/* 1.24: the change between two days, explained: money in and out, bank balance updates (when a balance from the bank
+   replaces the running total), currency changes, prices, purchases. Every part comes from the same numbers. */
+function changeAudit(d1) {
+  const H = home(), d0 = today(), rows = [], acct = [];
+  let flow = 0, jump = 0, fx = 0, a1 = 0, a0 = 0;
+  for (const a of q('SELECT * FROM accounts')) {
+    const c = a.currency || H, k = shareOf(a), bf = balanceFn(a), b1 = bf(d1), b0 = bf(d0); if (b1 == null && b0 == null) continue;
+    const txs = q('SELECT * FROM transactions WHERE (account_id=? OR to_account_id=?) AND date>? AND date<=?', [a.id, a.id, d1, d0]);
+    let f = 0; for (const t of txs) f += txEffect(t, a.id, c);
+    const j = ((b0 || 0) - (b1 || 0)) - f;
+    const v1 = c === H ? (b1 || 0) * k : convOn((b1 || 0) * k, c, H, d1) || 0, v0 = c === H ? (b0 || 0) * k : conv((b0 || 0) * k, c, H) || 0;
+    const fH = c === H ? f * k : conv(f * k, c, H) || 0, jH = c === H ? j * k : conv(j * k, c, H) || 0, xH = v0 - v1 - fH - jH;
+    flow += fH; jump += jH; fx += xH; a1 += v1; a0 += v0;
+    const checks = q('SELECT date, balance FROM account_balances WHERE account_id=? AND date>? AND date<=? ORDER BY date', [a.id, d1, d0]);
+    acct.push({ a, v1, v0, fH, jH, xH, n: txs.length, checks });
+  }
+  const items = worthModel(), by = k => items.filter(it => it.kind === k);
+  const part = k => { let v1 = 0, v0 = 0, bought = 0; for (const it of by(k)) { const x0 = it.at(d0) ?? (it.fallback ? it.fallback() : null) ?? 0;
+      if (it.from > d1) { bought += x0; v0 += x0; continue; } let x1 = it.at(d1); if (x1 == null && it.fallback) x1 = it.fallback(); v1 += x1 || 0; v0 += x0; } return { v1, v0, bought }; };
+  const m = part('m'), p = part('p'), l = part('l'), o = part('o');
+  rows.push(['Money in and out of your accounts', flow, 'cash flow: what you received and paid (transfers between your accounts cancel out)']);
+  rows.push(['Bank balance updates', jump, 'a balance from the bank (or a cash count) replaced the running total: the difference was already there before; see Reconcile']);
+  rows.push(['Exchange rates (accounts)', fx, 'the same money in another currency, worth more or less in ' + H]);
+  rows.push(['Metals: new purchases', m.bought, 'bought in this time']);
+  rows.push(['Metals: price change', m.v0 - m.v1 - m.bought, 'what you held before, at today\'s price']);
+  rows.push(['Property: value', p.v0 - p.v1 - p.bought, 'your estimates, drawn as a straight line between dates']);
+  rows.push(['Property: new', p.bought, '']);
+  rows.push(['Other assets', o.v0 - o.v1, 'new ones and new values']);
+  rows.push(['Loans you made', l.v0 - l.v1, 'lent or repaid']);
+  const total = rows.reduce((x, r) => x + r[1], 0);
+  return { d1, d0, rows: rows.filter(r => Math.abs(r[1]) >= 0.5), total, acct: acct.filter(x => Math.abs(x.fH) + Math.abs(x.jH) + Math.abs(x.xH) >= 0.5).sort((x, y) => Math.abs(y.jH) - Math.abs(x.jH)) };
+}
+function changeSheet() {
+  const H = home(), A = changeAudit(dstr(dnum(today()) - 30)), sg = v => (v >= 0 ? '+' : '−') + whole(Math.abs(v), H);
+  openSheet(`<h2>How the change since ${fmtDate(A.d1)} is worked out</h2>
+    <div class="alloc">${A.rows.map(([l, v, why]) => `<div class="arow ie"><span class="al">${esc(l)}${why ? `<span class="sub"><br>${esc(why)}</span>` : ''}</span><span class="av ${signCls(v)}">${sg(v)}</span><span class="ap"></span></div>`).join('')}
+      <div class="arow ie tot"><span class="al"><b>Total</b></span><span class="av ${signCls(A.total)}"><b>${sg(A.total)}</b></span><span class="ap"></span></div></div>
+    ${A.acct.length ? `<h3 class="ieh">Account by account</h3><div class="txlist">${A.acct.map(x => `<div class="txrow" data-acct="${x.a.id}"><div class="txl"><div class="txt">${esc(x.a.name)} <small class="sub">${esc(x.a.currency || H)}</small></div>
+      <div class="sub">${x.n} transaction${x.n === 1 ? '' : 's'} ${sg(x.fH)}${Math.abs(x.jH) >= 0.5 ? ` · <b class="${signCls(x.jH)}">bank balance update ${sg(x.jH)}</b>${x.checks.length ? ' (' + x.checks.map(c => fmtDate(c.date)).slice(-3).join(', ') + ')' : ''}` : ''}${Math.abs(x.xH) >= 0.5 ? ` · exchange rate ${sg(x.xH)}` : ''}</div></div>
+      <div class="txa">${whole(x.v1, H)} → ${whole(x.v0, H)}</div></div>`).join('')}</div>` : ''}
+    <p class="hint">A large bank balance update means your transactions before that date did not add up to what the bank showed. Open the account's Reconcile page to find the month.</p>
+    <div class="btns"><button class="btn light" data-f="recon">Open Reconcile</button><button class="btn light" data-f="cancel">Close</button></div>`, box => {
+    box.onclick = e => { const r = e.target.closest('[data-acct]'); if (r) { closeSheet(); navRoot(); state.tab = 'recon'; state.reconId = +r.dataset.acct; render(); return; }
+      const f = e.target.dataset.f; if (f === 'cancel') closeSheet(); if (f === 'recon') { closeSheet(); state.tab = 'recon'; state.reconId = null; render(); } };
+  });
+}
 /* 1.22: what everything was worth on one day, by kind, valued the same way as today (a missing old price uses today's) */
 function worthAt(d, items) {
   const by = { c: 0, m: 0, p: 0, l: 0, o: 0 };
@@ -1027,13 +1078,15 @@ function heroPages(t) {
     perf = `<div class="chart-head"><div class="sub">Value of everything (${H})</div><div class="r ${signCls(l - f)}">${pct(f ? l / f - 1 : null)}</div></div>` + lineChart('worth', pts, true, H, false, ['Value', 'Paid in']); }
   const prs = ['1Y', '5Y', 'All'].map(k => `<button class="seg${state.prange === k ? ' on' : ''}" data-prange="${k}">${k}</button>`).join('');
   /* 1.22: the change over exactly 30 days, both days valued the same way, and where it came from */
-  const items = worthModel(), d30 = dstr(dnum(today()) - 30), w0 = worthAt(today(), items), w1 = worthAt(d30, items);
-  const KN = { c: 'accounts', m: 'metals', p: 'property', l: 'loans', o: 'other' }, parts30 = Object.keys(KN).map(k => [k, w0[k] - w1[k]]).filter(([, v]) => Math.abs(v) >= 1);
-  const ch30 = items.some(it => it.from <= d30) ? Object.values(w0).reduce((a, b) => a + b, 0) - Object.values(w1).reduce((a, b) => a + b, 0) : null;
+  const items = worthModel(), d30 = dstr(dnum(today()) - 30), AU = items.some(it => it.from <= d30) ? changeAudit(d30) : null;
+  /* the headline is the real change; a bank balance update (an old difference coming to light) is shown on its own line */
+  const jump30 = AU ? (AU.rows.find(r => r[0] === 'Bank balance updates') || [0, 0])[1] : 0;
+  const ch30 = AU ? AU.total - jump30 : null, parts30 = AU ? AU.rows.filter(r => r[0] !== 'Bank balance updates' && Math.abs(r[1]) >= 1).slice(0, 4) : [];
   return [
     `<div class="label">Total value (${H})</div><div class="big">${whole(t.total, H)}</div>
       ${ch30 != null ? `<div class="sub"><span class="${signCls(ch30)}">${ch30 >= 0 ? '+' : ''}${whole(ch30, H)}</span> since ${fmtDate(d30)}</div>
-        ${parts30.length > 1 || (parts30.length === 1 && parts30[0][0] !== 'c') ? `<div class="sub small">${parts30.map(([k, v]) => `${KN[k]} <span class="${signCls(v)}">${v >= 0 ? '+' : ''}${whole(v, H)}</span>`).join(' · ')}</div>` : ''}` : ''}
+        ${Math.abs(jump30) >= 1 ? `<div class="sub small tap" data-act="why-change">Bank balance updates <span class="${signCls(jump30)}">${jump30 >= 0 ? '+' : '−'}${whole(Math.abs(jump30), H)}</span> not included: your earlier entries did not match the bank (see Reconcile) <span class="chev">›</span></div>` : ''}
+        ${parts30.length ? `<div class="sub small tap" data-act="why-change">${parts30.map(([l, v]) => `${esc(l.replace('Money in and out of your accounts', 'money in/out').replace('Bank balance updates', 'bank balance updates').replace('Exchange rates (accounts)', 'exchange rates').toLowerCase())} <span class="${signCls(v)}">${v >= 0 ? '+' : '−'}${whole(Math.abs(v), H)}</span>`).join(' · ')} <span class="chev">›</span></div>` : ''}` : ''}
       ${totalPaid ? `<div class="sub">Gain on what you bought: <span class="${signCls(totalGain)}">${whole(totalGain, H)} (${pct(totalGain / totalPaid)})</span></div>` : ''}
       ${t.missing ? '<div class="sub">Some items are not counted yet: an exchange rate or price is missing.</div>' : ''}
       <div class="sub swipehint">Swipe for more ›</div>`,
@@ -1963,6 +2016,10 @@ view().addEventListener('click', e => {
     case 'recon': state.tab = 'recon'; state.reconId = d.id ? +d.id : null; render(); view().scrollTop = 0; break;
     case 'find-xfer': offerTransfers(false); break;
     case 'stmt-bal': stmtBalances(+d.id); break;
+    case 'why-change': changeSheet(); break;
+    case 'bd-view': { state.bdView = d.v; const st = view().scrollTop; render(); view().scrollTop = st; break; }
+    case 'bd-measure': { state.bdMeasure = d.v; const st = view().scrollTop; render(); view().scrollTop = st; break; }
+    case 'why-month': monthSheet(); break;
     case 'match-buys': matchPurchases(); break;
     case 'find-repeat': findRepeatSheet(); break;
     case 'p-similar': similarPayeesSheet(); break;
@@ -2769,6 +2826,7 @@ function reportsHtml() {
       <div class="ie3"><div class="stat"><div class="k">Money in</div><div class="v up">${whole(cur.moneyIn, H)}</div></div><div class="stat"><div class="k">Money out</div><div class="v down">${whole(cur.moneyOut, H)}</div></div><div class="stat"><div class="k">Net</div><div class="v ${signCls(cur.moneyIn - cur.moneyOut)}">${whole(cur.moneyIn - cur.moneyOut, H)}</div></div></div>
       ${Object.keys(cur.flowIn).length || Object.keys(cur.flowOut).length ? `<div class="alloc">${Object.entries(cur.flowIn).sort((x, y) => y[1] - x[1]).map(([k, v]) => `<div class="arow ie"><span class="al">In: ${esc(k)}</span><span class="av up">${whole(v, H)}</span><span class="ap"></span></div>`).join('')}${Object.entries(cur.flowOut).sort((x, y) => y[1] - x[1]).map(([k, v]) => `<div class="arow ie"><span class="al">Out: ${esc(k)}</span><span class="av down">${whole(v, H)}</span><span class="ap"></span></div>`).join('')}</div><p class="sub" style="margin:6px 0 0">These lines are money in and out, but not income or spending: savings, loans repaid or lent, and moves to accounts not in the app.</p>` : ''}</div>
     ${notes.length ? `<ul class="notes">${notes.map(n => `<li>${n}</li>`).join('')}</ul>` : '<p class="sub">Add transactions to see your reports.</p>'}</div>`;
+  h += breakdownHtml(a, b);
   if (sorted.length) h += `<h2 class="sect">Where the money goes</h2><div class="card"><div class="catbars">${sorted.map(([k, v]) => { const pv = prev.out[k] || 0, ch = pv ? v / pv - 1 : null;
     return `<div class="cb"><div class="cbt"><span>${esc(k)}</span><span><b>${whole(v, H)}</b> <small class="sub">${Math.round(v / (cur.total || 1) * 100)}%${ch != null ? ` · <span class="${ch > 0 ? 'down' : 'up'}">${ch > 0 ? '+' : ''}${Math.round(ch * 100)}%</span>` : ''}</small></span></div><div class="cbb"><i style="width:${(v / max * 100).toFixed(1)}%"></i></div></div>`; }).join('')}</div>
     <p class="sub" style="margin:8px 0 0">The % after each one compares with the period before.</p></div>`;
@@ -3403,6 +3461,83 @@ function importReview(parsed, accountId) {
   });
 }
 
+/* ---------------- 1.24: the breakdown report ----------------
+   Deposits and payments side by side, grouped by category, subcategory, payee, account or month, or every transaction,
+   as a table (totals at the bottom), as bars, or as a pie. All accounts: moves between your own accounts are left out
+   (they cancel out). One account: everything in and out of it, like a bank statement, in its own currency. */
+const BD_BY = [['cat', 'Category'], ['sub', 'Subcategory'], ['payee', 'Payee'], ['acct', 'Account'], ['month', 'Month'], ['tx', 'Every transaction']];
+const BD_VIEW = [['table', 'Table'], ['bars', 'Bars'], ['pie', 'Pie']];
+function breakdownData(a, b) {
+  const H = home(), C = cats(), A = Object.fromEntries(q('SELECT * FROM accounts').map(x => [x.id, x]));
+  const one = state.bdAcct ? +state.bdAcct : null, cur = one ? ((A[one] || {}).currency || H) : H, what = state.bdWhat || 'all', by = state.bdBy || 'cat';
+  const txs = one ? q("SELECT * FROM transactions WHERE (account_id=? OR to_account_id=?) AND date>=? AND date<=? ORDER BY date DESC, id DESC", [one, one, a, b])
+    : q("SELECT * FROM transactions WHERE kind IN ('in','out') AND date>=? AND date<=? ORDER BY date DESC, id DESC", [a, b]);
+  const groups = new Map(), rows = []; let dep = 0, pay = 0;
+  for (const t of txs) {
+    let v;   /* + deposit, − payment */
+    if (one) v = txEffect(t, one, cur);
+    else { const c = (A[t.account_id] || {}).currency || H; v = (c === H ? t.amount : conv(t.amount, c, H) || 0) * (t.kind === 'in' ? 1 : -1); }
+    if (!v) continue;
+    const top = C.top(t.category_id);
+    if (what === 'ie' && (t.kind === 'transfer' || (top && top.kind === 'save'))) continue;
+    if (v > 0) dep += v; else pay -= v;
+    if (by === 'tx') { rows.push({ k: t.payee || (t.kind === 'transfer' ? 'Transfer' : C.label(t.category_id)), date: t.date, sub: t.kind === 'transfer' ? (t.account_id === one ? 'to ' + ((A[t.to_account_id] || {}).name || '') : 'from ' + ((A[t.account_id] || {}).name || '')) : C.label(t.category_id), dep: v > 0 ? v : 0, pay: v < 0 ? -v : 0, id: t.id }); continue; }
+    const key = by === 'cat' ? (t.kind === 'transfer' ? 'Transfers between your accounts' : top ? top.name : 'No category')
+      : by === 'sub' ? (t.kind === 'transfer' ? 'Transfers between your accounts' : t.category_id ? C.label(t.category_id) : 'No category')
+      : by === 'payee' ? (t.payee ? nicePayee(t.payee) : '(no payee)')
+      : by === 'acct' ? ((A[t.account_id] || {}).name || '?')
+      : t.date.slice(0, 7);
+    const g = groups.get(key) || { k: key, dep: 0, pay: 0, n: 0 }; if (v > 0) g.dep += v; else g.pay -= v; g.n++; groups.set(key, g);
+  }
+  const list = by === 'tx' ? rows : [...groups.values()].sort(by === 'month' ? (x, y) => (x.k < y.k ? 1 : -1) : (x, y) => (y.pay - x.pay) || (y.dep - x.dep));
+  return { list, dep, pay, cur, one, by };
+}
+function breakdownHtml(a, b) {
+  state.bdBy = state.bdBy || 'cat'; state.bdView = state.bdView || 'table'; state.bdMeasure = state.bdMeasure || 'pay';
+  const D = breakdownData(a, b), c = D.cur, accts = q('SELECT id, name FROM accounts ORDER BY name');
+  const sel = (key, opts, val) => `<select data-bd="${key}">${opts.map(([k, l]) => `<option value="${k}"${String(val) === String(k) ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
+  let h = `<h2 class="sect">Breakdown <span class="sub">deposits and payments</span></h2><div class="card">
+    <div class="f2"><label class="f"><span>Group by</span>${sel('bdBy', BD_BY, state.bdBy)}</label><label class="f"><span>Account</span>${sel('bdAcct', [['', 'All accounts']].concat(accts.map(x => [x.id, x.name])), state.bdAcct || '')}</label></div>
+    <div class="f2"><label class="f"><span>Include</span>${sel('bdWhat', [['all', 'Everything'], ['ie', 'Income and spending only']], state.bdWhat || 'all')}</label>
+      <div class="f"><span>Show as</span><div class="segs" style="margin-top:4px">${BD_VIEW.map(([k, l]) => `<button class="seg${state.bdView === k ? ' on' : ''}" data-act="bd-view" data-v="${k}">${l}</button>`).join('')}</div></div></div>`;
+  if (!D.list.length) return h + '<p class="sub">Nothing in this period.</p></div>';
+  if (state.bdView === 'table' || D.by === 'tx') {
+    const cap = 400, shown = D.list.slice(0, cap), tx = D.by === 'tx';
+    h += `<div class="dpwrap"><table class="dptab"><thead><tr>${tx ? '<th>Date</th>' : ''}<th>${tx ? 'Description' : esc((BD_BY.find(x => x[0] === D.by) || [])[1] || '')}</th><th class="n">Deposits</th><th class="n">Payments</th></tr></thead><tbody>
+      ${shown.map(r => `<tr${tx ? ` data-tx="${r.id}" class="tap"` : ''}>${tx ? `<td class="dd">${fmtDate(r.date)}</td>` : ''}<td>${esc(D.by === 'month' ? new Date(r.k + '-15T12:00:00').toLocaleDateString('en-CA', { month: 'long', year: 'numeric' }) : r.k)}${tx && r.sub ? `<br><small class="sub">${esc(r.sub)}</small>` : !tx ? ` <small class="sub">${r.n}</small>` : ''}</td>
+        <td class="n up">${r.dep ? money(r.dep, c) : ''}</td><td class="n down">${r.pay ? money(r.pay, c) : ''}</td></tr>`).join('')}</tbody>
+      <tfoot><tr><td${tx ? ' colspan="2"' : ''}><b>Total</b></td><td class="n up"><b>${money(D.dep, c)}</b></td><td class="n down"><b>${money(D.pay, c)}</b></td></tr>
+      <tr><td${tx ? ' colspan="2"' : ''}>Deposits − payments</td><td class="n ${signCls(D.dep - D.pay)}" colspan="2"><b>${(D.dep - D.pay >= 0 ? '+' : '−') + money(Math.abs(D.dep - D.pay), c)}</b></td></tr></tfoot></table></div>
+      ${D.list.length > cap ? `<p class="sub">The first ${cap} of ${D.list.length} are listed; the totals count all of them.</p>` : ''}`;
+    if (tx && state.bdView !== 'table') h += '<p class="sub">Bars and pie group the transactions: choose a grouping other than "Every transaction".</p>';
+  } else if (state.bdView === 'bars') {
+    const top = D.list.slice(0, 12), rest = D.list.slice(12), other = rest.reduce((x, r) => ({ k: 'Everything else (' + rest.length + ')', dep: x.dep + r.dep, pay: x.pay + r.pay }), { dep: 0, pay: 0 });
+    const show = rest.length ? top.concat([other]) : top, max = Math.max(1, ...show.map(r => Math.max(r.dep, r.pay)));
+    h += `<div class="legend"><span><i class="lin"></i>Deposits</span><span><i class="lout"></i>Payments</span></div><div class="bdbars">${show.map(r => `<div class="bdb" title="${esc(r.k)}: deposits ${money(r.dep, c)}, payments ${money(r.pay, c)}">
+      <div class="bdl">${esc(D.by === 'month' ? new Date(r.k + '-15T12:00:00').toLocaleDateString('en-CA', { month: 'short', year: 'numeric' }) : r.k)}</div>
+      ${r.dep ? `<div class="bdt"><i class="in" style="width:${(r.dep / max * 100).toFixed(1)}%"></i><span>${whole(r.dep, c)}</span></div>` : ''}
+      ${r.pay ? `<div class="bdt"><i class="out" style="width:${(r.pay / max * 100).toFixed(1)}%"></i><span>${whole(r.pay, c)}</span></div>` : ''}</div>`).join('')}</div>
+      <div class="bdtot"><span>Total deposits <b class="up">${money(D.dep, c)}</b></span><span>Total payments <b class="down">${money(D.pay, c)}</b></span></div>`;
+  } else {
+    const m = state.bdMeasure, vals = D.list.map(r => ({ k: r.k, v: m === 'dep' ? r.dep : r.pay })).filter(r => r.v > 0).sort((x, y) => y.v - x.v);
+    const top = vals.slice(0, 7), rest = vals.slice(7), tot = vals.reduce((x, r) => x + r.v, 0);
+    if (rest.length) top.push({ k: 'Everything else (' + rest.length + ')', v: rest.reduce((x, r) => x + r.v, 0), other: true });
+    h += `<div class="segs" style="margin:8px 0">${[['pay', 'Payments'], ['dep', 'Deposits']].map(([k, l]) => `<button class="seg${m === k ? ' on' : ''}" data-act="bd-measure" data-v="${k}">${l}</button>`).join('')}</div>`;
+    if (!tot) h += `<p class="sub">No ${m === 'dep' ? 'deposits' : 'payments'} in this period.</p>`;
+    else {
+      let ang = -Math.PI / 2; const R = 80, r0 = 50, cx = 100, cy = 100, arc = (a0, a1) => { const big = a1 - a0 > Math.PI ? 1 : 0, p = (r, a) => `${(cx + r * Math.cos(a)).toFixed(2)} ${(cy + r * Math.sin(a)).toFixed(2)}`;
+        return `M${p(R, a0)} A${R} ${R} 0 ${big} 1 ${p(R, a1)} L${p(r0, a1)} A${r0} ${r0} 0 ${big} 0 ${p(r0, a0)}Z`; };
+      const slices = top.map((r, i) => { const a0 = ang, a1 = ang + Math.max(0.0001, r.v / tot * 2 * Math.PI - (top.length > 1 ? 0.02 : 0)); ang += r.v / tot * 2 * Math.PI;
+        return `<path d="${top.length === 1 ? `M${cx} ${cy - R}A${R} ${R} 0 1 1 ${cx - 0.01} ${cy - R}L${cx - 0.01} ${cy - r0}A${r0} ${r0} 0 1 0 ${cx} ${cy - r0}Z` : arc(a0, a1)}" class="${r.other ? 'pso' : 'ps' + (i + 1)}"><title>${esc(r.k)}: ${money(r.v, c)} (${(r.v / tot * 100).toFixed(1)}%)</title></path>`; }).join('');
+      h += `<div class="bdpie"><svg viewBox="0 0 200 200" class="pie">${slices}<text x="100" y="96" class="pt1">${m === 'dep' ? 'Deposits' : 'Payments'}</text><text x="100" y="114" class="pt2">${whole(tot, c)}</text></svg>
+        <div class="pleg">${top.map((r, i) => `<div class="plr"><i class="${r.other ? 'pso' : 'ps' + (i + 1)}"></i><span class="pl">${esc(D.by === 'month' ? new Date(r.k + '-15T12:00:00').toLocaleDateString('en-CA', { month: 'short', year: 'numeric' }) : r.k)}</span><span class="pv">${whole(r.v, c)}</span><span class="pp">${(r.v / tot * 100).toFixed(1)}%</span></div>`).join('')}
+        <div class="plr tot"><i></i><span class="pl"><b>Total</b></span><span class="pv"><b>${whole(tot, c)}</b></span><span class="pp">100%</span></div></div></div>`;
+    }
+  }
+  h += `<p class="sub" style="margin:8px 0 0">${D.one ? 'Everything in and out of this account, in ' + esc(c) + ', transfers included, like a bank statement.' : 'All accounts, in ' + esc(c) + '. Moves between your own accounts are left out (they cancel out).'}${(state.bdWhat || 'all') === 'ie' ? ' Savings, loans and transfers are left out.' : ''}</p></div>`;
+  return h;
+}
+document.addEventListener('change', e => { const el = e.target.closest && e.target.closest('select[data-bd]'); if (!el) return; state[el.dataset.bd] = el.value; const st = view().scrollTop; render(); view().scrollTop = st; });
 /* ---------------- 1.21 ---------------- */
 function mergeCat(id, into) {   /* everything in one category (and its subcategories) moves into another */
   const C = cats(), target = C.byId[into], subs = C.rows.filter(x => x.parent_id === id); if (!target || id === into) return;
@@ -4492,13 +4627,49 @@ async function removeUnusedCats() {
 }
 
 /* ---- this month, at a glance (like MMEX) ---- */
+/* 1.24: what "This month" is made of, line by line, next to the Cash flow figures */
+function monthSheet() {
+  const H = home(), ym = today().slice(0, 7), x = ieModel()[ym] || { rent: 0, other: 0, interest: 0, hin: 0, costs: 0, byKind: {} };
+  const A = Object.fromEntries(q('SELECT * FROM accounts').map(a => [a.id, a])), C = cats();
+  let allIn = 0, allOut = 0, saveIn = 0, saveOut = 0, propIn = 0, propOut = 0;
+  for (const t of q("SELECT * FROM transactions WHERE kind IN ('in','out') AND date>=? AND date<=?", [ym + '-01', today()])) {
+    const v = conv(t.amount, (A[t.account_id] || {}).currency || H, H) || 0, top = C.top(t.category_id);
+    if (t.kind === 'in') allIn += v; else allOut += v;
+    if (t.link && t.link.startsWith('property:')) { if (t.kind === 'in') propIn += v; else propOut += v; }
+    else if (top && top.kind === 'save') { if (t.kind === 'in') saveIn += v; else saveOut += v; }
+  }
+  const catOut = Object.entries(x.byKind).filter(([k]) => k.startsWith('cat:')).reduce((a, [, v]) => a + v, 0);
+  const propCosts = Object.entries(x.byKind).filter(([k]) => !k.startsWith('cat:'));
+  const row = (l, v, cls, sub) => `<div class="arow ie"><span class="al">${l}${sub ? `<span class="sub"><br>${sub}</span>` : ''}</span><span class="av ${cls || ''}">${whole(v, H)}</span><span class="ap"></span></div>`;
+  const inc = x.rent + x.other + x.interest + (x.hin || 0);
+  openSheet(`<h2>${new Date(ym + '-15T12:00:00').toLocaleDateString('en-CA', { month: 'long', year: 'numeric' })}: what makes up the numbers</h2>
+    <h3 class="ieh">Cash flow (every transaction, as under Cash flow)</h3><div class="alloc">
+      ${row('Money in', allIn, 'up')}${row('Money out', allOut, 'down')}
+      ${saveIn ? row('of the money in: savings, loans repaid, transfers in', saveIn, '', 'your own money coming back: not income') : ''}
+      ${saveOut ? row('of the money out: savings, loans lent, transfers out', saveOut, '', 'money put aside or moved: not spending') : ''}
+      ${propIn ? row('of the money in: linked to a property', propIn, '', 'counted with the property below') : ''}
+      ${propOut ? row('of the money out: linked to a property', propOut, '', 'counted with the property below') : ''}</div>
+    <h3 class="ieh">Income (this month)</h3><div class="alloc">
+      ${row('Your income transactions', x.hin || 0, 'up', 'money in, without savings, loans and property-linked ones; your share of joint accounts')}
+      ${x.rent ? row('Rent', x.rent, 'up', 'from the rent set on your properties (your share)') : ''}${x.other ? row('Other property income', x.other, 'up', 'set on the property, plus property-linked money in') : ''}
+      ${x.interest ? row('Interest (estimated)', x.interest, 'up', 'from the interest rate set on savings accounts') : ''}
+      ${row('<b>Income</b>', inc, 'up')}</div>
+    <h3 class="ieh">Expenses (this month)</h3><div class="alloc">
+      ${row('Your spending transactions', catOut, 'down', 'money out, without savings, loans and property-linked ones; your share of joint accounts')}
+      ${propCosts.map(([k, v]) => row(esc(pmeta(k)[0]) + ' (property)', v, 'down', k.startsWith('linked') ? 'payments linked to a property' : 'set on the property page: check the amount and how often (a month, a year)')).join('')}
+      ${row('<b>Expenses</b>', x.costs, 'down')}</div>
+    <p class="hint">Property figures come from what is set on each property (rent, taxes, fees…), counted for the month. If one looks too high, open the property and check its amount and "how often".</p>
+    <div class="btns"><button class="btn light" data-f="cf">Open Cash flow</button><button class="btn light" data-f="cancel">Close</button></div>`, box => {
+    box.onclick = e => { const f = e.target.dataset.f; if (f === 'cancel') closeSheet(); if (f === 'cf') { closeSheet(); navRoot(); state.tab = 'money'; state.msec = 'tx'; render(); } };
+  });
+}
 function monthCard() {
   const ym = today().slice(0, 7), x = ieModel()[ym] || { rent: 0, other: 0, interest: 0, hin: 0, costs: 0 }, H = home();
   const inc = x.rent + x.other + x.interest + (x.hin || 0), out = x.costs, mx = Math.max(inc, out, 1), net = inc - out;
-  return `<h2 class="sect" data-ftot="${esc((net >= 0 ? '+' : '') + whole(net, H))}">This month <span class="sub">${new Date(ym + '-15T12:00:00').toLocaleDateString('en-CA', { month: 'long' })}</span></h2><div class="card tap" data-go="money">
+  return `<h2 class="sect" data-ftot="${esc((net >= 0 ? '+' : '') + whole(net, H))}">This month <span class="sub">${new Date(ym + '-15T12:00:00').toLocaleDateString('en-CA', { month: 'long' })}</span></h2><div class="card tap" data-act="why-month">
     <div class="mrow"><span class="k up">Income</span><span class="v up">${whole(inc, H)}</span><span class="mb"><i class="mbi" style="width:${(inc / mx * 100).toFixed(1)}%"></i></span></div>
     <div class="mrow"><span class="k down">Expenses</span><span class="v down">${whole(out, H)}</span><span class="mb"><i class="mbo" style="width:${(out / mx * 100).toFixed(1)}%"></i></span></div>
-    <div class="mrow tot"><span class="k">Difference</span><span class="v ${signCls(net)}">${(net >= 0 ? '+' : '') + whole(net, H)}</span><span></span></div></div>`;
+    <div class="mrow tot"><span class="k">Difference</span><span class="v ${signCls(net)}">${(net >= 0 ? '+' : '') + whole(net, H)}</span><span></span></div><div class="sub" style="margin-top:6px">Tap to see what makes up these numbers ›</div></div>`;
 }
 
 /* ---------------- updates ----------------
