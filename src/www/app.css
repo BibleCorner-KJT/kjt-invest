@@ -683,3 +683,19 @@ input.selsearch, .sheet-box input.selsearch, label.f input.selsearch { width: 10
 #selbar.moving { box-shadow: 0 10px 30px rgba(0,0,0,.35); opacity: .96; }
 #selbar.moving .grip { cursor: grabbing; }
 body.selecting main#view { padding-bottom: 150px; }
+
+/* 1.29: nothing wider than the screen, even with large text: boxes in a row wrap to the next line when they do not fit */
+.ie3 { grid-template-columns: repeat(auto-fit, minmax(min(100%, 7.2em), 1fr)); }
+.grid2 { grid-template-columns: repeat(auto-fit, minmax(min(100%, 9em), 1fr)); }
+.stat { min-width: 0; }
+.stat .k, .stat .v { overflow-wrap: anywhere; }
+.segs { flex-wrap: wrap; }
+.f2 > * { min-width: 0; }
+.card, .hero { min-width: 0; max-width: 100%; }
+.arow, .arow.tot { grid-template-columns: 14px minmax(0, 1fr) auto auto; }
+.alloc .arow.tap { grid-template-columns: 14px minmax(0, 1fr) auto auto 10px; }
+.arow.ie { grid-template-columns: minmax(0, 1fr) auto auto; }
+.arow .al { min-width: 0; overflow-wrap: anywhere; }
+.arow .av { white-space: nowrap; }
+.arow .ap { min-width: 0; }
+@media (max-width: 26em) { .arow { gap: 4px 6px; } .arow .ap { font-size: .8em; } }
