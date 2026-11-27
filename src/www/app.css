@@ -585,3 +585,18 @@ ol.steps { margin: 8px 0; padding-left: 20px; display: grid; gap: 6px; font-size
   main#view.hasnav > .setnav button:hover { background: var(--soft); }
   main#view.hasnav > .setnav button.on { background: var(--head); color: var(--head-ink); }
 }
+
+/* 1.21: each kind of account has its own colour and a clear header */
+.acard { --tc: var(--muted); padding-top: 0; overflow: hidden; border-top: 4px solid var(--tc); }
+.acard[data-t="chequing"] { --tc: var(--cat-o); } .acard[data-t="savings"] { --tc: var(--cat-c); } .acard[data-t="cash"] { --tc: var(--cat-m); }
+.acard[data-t="gic"] { --tc: var(--cat-p); } .acard[data-t="credit"] { --tc: var(--cat-l); } .acard[data-t="other"], .acard[data-t="_off"] { --tc: var(--muted); }
+.acard h2.gh { margin: 0 -15px 6px; padding: 12px 15px; background: color-mix(in srgb, var(--tc) 13%, var(--card)); border-bottom: 1px solid color-mix(in srgb, var(--tc) 28%, var(--card)); font-size: 1.06rem; }
+.acard .ghl { display: inline-flex; align-items: center; gap: 10px; min-width: 0; }
+.acard .gbadge { width: 34px; height: 34px; border-radius: 10px; background: var(--tc); display: inline-grid; place-items: center; flex: none; box-shadow: 0 1px 2px rgba(0,0,0,.15); }
+.acard .gbadge .gico { stroke: #fff; margin: 0; width: 20px; height: 20px; vertical-align: 0; }
+.acard .gname { font-weight: 800; letter-spacing: .01em; color: var(--ink); }
+.acard .gcount { font-size: .74rem; font-weight: 800; color: var(--tc); background: var(--card); border: 1px solid color-mix(in srgb, var(--tc) 40%, var(--card)); border-radius: 999px; padding: 1px 8px; }
+.acard h2.gh .gt { font-weight: 800; font-size: 1.08rem; }
+:root[data-mode="dark"] .acard .gbadge .gico { stroke: #111; }
+.simg { border: 1px solid var(--line); border-radius: 12px; padding: 10px; margin: 10px 0; }
+.simname { width: 100%; margin-top: 6px; }

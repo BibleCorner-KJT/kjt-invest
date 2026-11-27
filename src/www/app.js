@@ -1,9 +1,9 @@
-/* KJT Finance 1.20 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
+/* KJT Finance 1.21 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
    All data stays in one SQLite file on the device. The only network calls are the
    price updates (metal prices from gold-api.com, exchange rates from the European Central Bank). */
 'use strict';
 
-const APP_VERSION = '1.20';
+const APP_VERSION = '1.21';
 const SCHEMA = 11;
 const OZT_G = 31.1034768;
 const METALS = [
@@ -144,7 +144,7 @@ function q(sql, params) {
   return out;
 }
 let BALC = {};   /* 1.20: balances worked out once until something changes */
-function run(sql, params) { if (/transactions|account_balances|accounts|fx\b/i.test(sql)) BALC = {}; db.run(sql, params || []); }
+function run(sql, params) { if (!/^\s*(INSERT OR REPLACE INTO|INSERT INTO|UPDATE|DELETE FROM)\s+settings\b/i.test(sql)) BALC = {}; db.run(sql, params || []); }
 function bulk(sql, rows) {   /* many rows with one prepared statement, in one transaction */
   BALC = {}; const st = db.prepare(sql); db.exec('BEGIN');
   try { for (const r of rows) { st.run(r); } db.exec('COMMIT'); } catch (e) { db.exec('ROLLBACK'); throw e; } finally { st.free(); }
@@ -374,7 +374,7 @@ function propertyStats(p) {
   /* what you paid or received through your accounts for this property. The property's figures are for the whole
      property and get multiplied by your share, so your own payments are divided by it first. */
   const lk = {};
-  for (const t of q("SELECT t.*, a.currency acur FROM transactions t LEFT JOIN accounts a ON a.id=t.account_id WHERE t.link=? AND t.kind<>'transfer'", ['property:' + p.id])) {
+  for (const t of q("SELECT t.*, a.currency acur FROM transactions t LEFT JOIN accounts a ON a.id=t.account_id WHERE t.link=? AND t.kind<>'transfer' AND (t.category_id IS NULL OR t.category_id NOT IN (SELECT id FROM categories WHERE kind='save'))", ['property:' + p.id])) {
     const v = (conv(t.amount, t.acur || home(), p.currency || home()) || 0) / (share || 1), key = t.date.slice(0, 7);
     (lk[key] = lk[key] || { in: 0, out: 0 })[t.kind === 'in' ? 'in' : 'out'] += v; y0 = Math.min(y0, +t.date.slice(0, 4));
   }
@@ -840,7 +840,7 @@ function renderAssets() {
     ${paid ? `<div class="sub">Paid ${whole(paid, H)} · <span class="${signCls(total - paid)}">${pct(total / paid - 1)}</span></div>` : ''}</div>`;
   h += `<h2 class="sect">Your assets</h2>`;
   h += as.length ? `<div class="card"><div class="txns" style="margin-top:0">${body}</div></div>` : `<div class="card empty">No other assets yet: cars, boats, trailers, jewellery, art, collections, equipment…</div>`;
-  h += `<button class="btn wide" data-act="add-asset">+ Add asset</button>`;
+  h += `<button class="btn wide" data-act="add-asset">+ Add asset</button><button class="btn wide light" data-act="match-buys">Find these purchases in your accounts</button>`;
   view().innerHTML = h;
 }
 function renderAsset(id) {
@@ -1136,7 +1136,7 @@ function renderMetals() {
       <div class="sub">${oz.toFixed(3)} troy oz pure · paid ${whole(cost, H)} · <span class="${signCls(val - cost)}">${pct(cost ? (val - cost) / cost : null)}</span></div></div></div>
       <div class="txns">${items}</div></div>`;
   }
-  h += `<button class="btn wide" data-act="add-metal">+ Add precious metal</button>`;
+  h += `<button class="btn wide" data-act="add-metal">+ Add precious metal</button><button class="btn wide light" data-act="match-buys">Find these purchases in your accounts</button>`;
   h += linkedTxHtml('metal:%', 'Transactions linked to your metals');
   view().innerHTML = h;
 }
@@ -1156,7 +1156,7 @@ function renderProperties() {
         <div class="stat"><div class="k">${s.annual != null ? 'Per year, overall' : 'Overall return'}</div><div class="v ${signCls(s.overall)}">${pct(s.annual != null ? s.annual : s.overall)}</div></div>
       </div></div>`;
   }
-  h += `<button class="btn wide" data-act="add-property">+ Add property</button>`;
+  h += `<button class="btn wide" data-act="add-property">+ Add property</button><button class="btn wide light" data-act="match-buys">Find these purchases in your accounts</button>`;
   view().innerHTML = h;
 }
 function renderProperty(id) {
@@ -1315,7 +1315,7 @@ function renderAccounts() {
         ${cr && a.credit_limit ? `<div class="sub">limit ${money(a.credit_limit, c, { dec: 0 })}${b ? ` · <b class="${a.credit_limit + b.balance < 0 ? 'down' : 'up'}">${money(a.credit_limit + b.balance, c, { dec: 0 })} left</b>` : ''}</div>` : ''}</div>
         <div class="ar"><div class="av${mine < 0 ? ' down' : ''}">${mine == null ? '—' : money(mine, c)}</div>${c !== H && hv != null ? `<div class="sub">${money(hv, H)}</div>` : ''}${used != null ? `<div class="sub${used > .7 ? ' down' : ''}">${Math.round(used * 100)}% used</div>` : ''}</div>
         ${used != null ? limitBar(used) : ''}</div>`; }).join('');
-    body += `<div class="card acard"><h2 class="gh"><span>${acctIcon(type)}${ACCT_GROUP[type] || label}${list.length > 1 ? ` <small class="sub">${list.length}</small>` : ''}</span><span class="gt ${gsum < -0.005 ? 'down' : ''}">${whole(gsum, H)}</span></h2><div class="alist">${rowsH}</div></div>`;
+    body += `<div class="card acard" data-t="${type}"><h2 class="gh"><span class="ghl"><span class="gbadge">${acctIcon(type)}</span><span class="gname">${ACCT_GROUP[type] || label}</span>${list.length > 1 ? `<span class="gcount">${list.length}</span>` : ''}</span><span class="gt ${gsum < -0.005 ? 'down' : ''}">${whole(gsum, H)}</span></h2><div class="alist">${rowsH}</div></div>`;
   }
   h += `<h2 class="sect">Total</h2><div class="card hero"><div class="label">Cash & bank (${H})</div><div class="big">${whole(total, H)}</div>
     ${owed > 0.005 ? `<div class="sub">${whole(total + owed, H)} in accounts and cash, less ${whole(owed, H)} owed on credit cards</div>` : ''}
@@ -1923,6 +1923,11 @@ view().addEventListener('click', e => {
     case 'recon': state.tab = 'recon'; state.reconId = d.id ? +d.id : null; render(); view().scrollTop = 0; break;
     case 'find-xfer': offerTransfers(false); break;
     case 'stmt-bal': stmtBalances(+d.id); break;
+    case 'match-buys': matchPurchases(); break;
+    case 'find-repeat': findRepeatSheet(); break;
+    case 'p-similar': similarPayeesSheet(); break;
+    case 'p-tickall': { const srch = low(state.psearch); state.psel = new Set(payeeList().filter(r => !srch || low(r.payee).includes(srch)).map(r => r.payee)); render(); break; }
+    case 'cat-merge-many': catMergeMany(); break;
     case 'err-add': errorForm(+d.id); break;
     case 'err-all': correctAll(+d.id); break;
     case 'xfer-apply': applyLoose(+d.id); break;
@@ -2568,7 +2573,7 @@ function recurringHtml() {
     return `<div class="txn ${r.kind === 'in' ? 'inc' : 'cost'}${r.active ? '' : ' off'}" data-rec="${r.id}"><div class="txn-top"><span class="txn-date">${r.active ? 'next ' + fmtDate(r.next_date) : 'ended'}</span><span class="txn-desc">${esc(r.kind === 'transfer' ? 'Transfer' : (r.payee || cats().label(r.category_id)))}</span></div>
       <div class="txn-body"><div class="sub">${esc(FREQS[r.freq])} · ${esc(a.name || '')} · ${r.auto ? 'added by itself' : 'reminder'}</div><div class="r"><div class="strongv">${r.kind === 'in' ? '+' : r.kind === 'out' ? '−' : ''}${money(r.amount, a.currency || H)}</div></div></div></div>`; }).join('') + `</div>`
     : `<p class="sub">Nothing repeats yet. When you add a transaction, choose "Repeat" (every week, 2 weeks, month or year) and whether the app adds it by itself or reminds you.</p>`) +
-    `<div class="btns"><button class="btn" data-act="add-tx">+ Add transaction</button></div></div>`;
+    `<div class="btns"><button class="btn" data-act="add-tx">+ Add transaction</button><button class="btn light" data-act="find-repeat">Find repeating payments</button></div></div>`;
   return h;
 }
 function recForm(id) {
@@ -2600,7 +2605,7 @@ function categoriesHtml() {
       <button class="catadd" data-addsub="${t.id}">+ subcategory</button></div>`).join('')}</div>
       <div class="btns"><button class="btn light" data-addcat="${kind}">+ ${title.replace(/s$/, '')} category</button></div></div>`; };
   return block('out', 'Expenses') + block('in', 'Income') + block('save', 'Savings & investments') +
-    `<div class="btns" style="padding:0 2px"><button class="btn light" data-act="cat-clean">Remove categories nothing uses</button></div>` + rulesHtml() +
+    `<div class="btns" style="padding:0 2px"><button class="btn light" data-act="cat-merge-many">Merge several categories…</button><button class="btn light" data-act="cat-clean">Remove categories nothing uses</button></div>` + rulesHtml() +
     `<p class="sub" style="padding:0 6px">Tap a name to rename, merge or move it. Subcategories go one level deep only, to keep things simple. Savings & investments (like buying metals) are not counted as spending.</p>`;
 }
 function rulesHtml() {
@@ -3339,6 +3344,146 @@ function importReview(parsed, accountId) {
   });
 }
 
+/* ---------------- 1.21 ---------------- */
+function mergeCat(id, into) {   /* everything in one category (and its subcategories) moves into another */
+  const C = cats(), target = C.byId[into], subs = C.rows.filter(x => x.parent_id === id); if (!target || id === into) return;
+  db.exec('BEGIN');
+  try {
+    for (const tb of ['transactions', 'recurring', 'payee_rules']) run(`UPDATE ${tb} SET category_id=? WHERE category_id=?`, [into, id]);
+    for (const sb of subs) {
+      if (!target.parent_id && sb.id !== into) { const twin = C.rows.find(x => x.parent_id === into && low(x.name) === low(sb.name));
+        if (twin) { for (const tb of ['transactions', 'recurring', 'payee_rules']) run(`UPDATE ${tb} SET category_id=? WHERE category_id=?`, [twin.id, sb.id]); run('DELETE FROM categories WHERE id=?', [sb.id]); }
+        else run('UPDATE categories SET parent_id=?, kind=? WHERE id=?', [into, target.kind, sb.id]); }
+      else if (sb.id !== into) { for (const tb of ['transactions', 'recurring', 'payee_rules']) run(`UPDATE ${tb} SET category_id=? WHERE category_id=?`, [into, sb.id]); run('DELETE FROM categories WHERE id=?', [sb.id]); }
+    }
+    run('DELETE FROM categories WHERE id=?', [id]); db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
+  clearCats();
+}
+function catMergeMany() {
+  const C = cats(), rows = C.rows.slice().sort((a, b) => C.label(a.id).localeCompare(C.label(b.id)));
+  openSheet(`<h2>Merge several categories</h2><p class="sub">Tick the categories to merge, then choose the one they all go into. Their transactions, repeats and remembered payees move with them.</p>
+    <div class="maybes" style="max-height:44vh;overflow:auto">${rows.map(c => `<label class="maybe"><input type="checkbox" data-mc="${c.id}"><span>${esc(C.label(c.id))} <small class="sub">${catUse(c.id).n}</small></span></label>`).join('')}</div>
+    <label class="f"><span>Into</span><select name="into"><option value="">Choose…</option>${rows.map(c => `<option value="${c.id}">${esc(C.label(c.id))}</option>`).join('')}</select></label>
+    <div class="btns"><button class="btn" data-f="go">Merge</button><button class="btn light" data-f="cancel">Cancel</button></div>`, box => {
+    box.onclick = e => { const f = e.target.dataset.f; if (!f) return; if (f === 'cancel') return closeSheet();
+      const into = +formData(box).into, ids = Array.from(box.querySelectorAll('[data-mc]:checked')).map(x => +x.dataset.mc).filter(x => x !== into);
+      if (!into) return bad('Choose the category to merge into.'); if (!ids.length) return bad('Tick at least one category to merge.');
+      if (ids.some(x => cats().rows.some(r => r.id === into && r.parent_id === x))) return bad('A category cannot be merged into one of its own subcategories.');
+      for (const x of ids) if (cats().byId[x]) mergeCat(x, into);
+      save(); closeSheet(); toast(ids.length + ' merged into ' + cats().label(into)); render(); };
+  });
+}
+/* payees that are the same shop written differently: "METRO #123", "Metro 456", "METRO INC" */
+/* a clean name: store numbers off the end, and Title Case when the bank wrote it in capitals */
+function nicePayee(p) { let n = String(p || '').replace(/\s*[#*]\s*\d+.*$/, '').replace(/\s+\d{2,}\s*$/, '').replace(/\s+(inc|ltd|ltee|llc)\.?$/i, '').replace(/[\s\-–·:,]+$/, '').trim() || String(p || '').trim();
+  if (n === n.toUpperCase()) n = n.toLowerCase().replace(/(^|[\s\-\/&(])([a-z])/g, (m, a, b) => a + b.toUpperCase()); return n; }
+const simKey = s => normPayee(s).replace(/\b(inc|ltd|ltee|llc|corp|co|ca|com|www|the|store|stores|magasin)\b/g, ' ').replace(/\s+/g, ' ').trim();
+function similarPayeesSheet() {
+  const list = payeeList(), groups = new Map();
+  for (const r of list) { const k = simKey(r.payee); if (k.length < 3) continue; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(r); }
+  const gs = [...groups.values()].filter(g => g.length > 1).sort((a, b) => b.length - a.length);
+  if (!gs.length) return toast('No payees look alike');
+  const nice = g => nicePayee(g.slice().sort((a, b) => b.n - a.n)[0].payee);
+  openSheet(`<h2>Similar payees</h2><p class="sub">${gs.length} group${gs.length > 1 ? 's' : ''} that look like the same payee. Ticked groups are merged under the name in the box (you can change it).</p>
+    <div class="simgs">${gs.map((g, i) => `<div class="simg"><label class="maybe"><input type="checkbox" data-sg="${i}" checked><span><b>${g.length} names</b> · ${g.reduce((n, r) => n + r.n, 0)} transactions<br><small>${g.slice(0, 6).map(r => esc(r.payee)).join(' · ')}${g.length > 6 ? ' …' : ''}</small></span></label>
+      <input class="simname" data-sn="${i}" value="${esc(nice(g))}" autocomplete="off"></div>`).join('')}</div>
+    <div class="btns"><button class="btn" data-f="go">Merge the ticked groups</button><button class="btn light" data-f="cancel">Cancel</button></div>`, box => {
+    box.onclick = e => { const f = e.target.dataset.f; if (!f) return; if (f === 'cancel') return closeSheet();
+      let n = 0; db.exec('BEGIN');
+      try { box.querySelectorAll('[data-sg]:checked').forEach(c => { const i = +c.dataset.sg, nn = (box.querySelector(`[data-sn="${i}"]`).value || '').trim(); if (!nn) return;
+          for (const r of gs[i]) { run('UPDATE transactions SET payee=? WHERE payee=?', [nn, r.payee]); run('UPDATE recurring SET payee=? WHERE payee=?', [nn, r.payee]); } n++; }); db.exec('COMMIT'); }
+      catch (er) { db.exec('ROLLBACK'); return bad('Could not merge: ' + er.message); }
+      state.psel = new Set(); save(); closeSheet(); toast(n + ' group' + (n === 1 ? '' : 's') + ' merged'); render(); };
+  });
+}
+/* repeating payments: the same payee at a steady rhythm (and usually the same amount) */
+const RHYTHM = [['weekly', 7, 1.5], ['biweekly', 14, 2.5], ['monthly', 30.4, 5], ['bimonthly', 61, 8], ['quarterly', 91.3, 12], ['halfyearly', 182.6, 18], ['yearly', 365.25, 25]];
+function findRepeating() {
+  const since = dstr(dnum(today()) - 800), now = dnum(today());
+  const rows = q("SELECT id, date, kind, amount, payee, account_id, category_id FROM transactions WHERE kind IN ('in','out') AND date>=? AND payee IS NOT NULL AND payee<>'' ORDER BY date", [since]);
+  const have = new Set(q('SELECT payee, kind FROM recurring WHERE active=1').map(r => simKey(r.payee) + '|' + r.kind)), groups = new Map();
+  for (const t of rows) { const k = simKey(t.payee) + '|' + t.kind + '|' + t.account_id; if (simKey(t.payee).length < 3) continue; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(t); }
+  const med = a => { const b = a.slice().sort((x, y) => x - y); return b.length ? b[Math.floor(b.length / 2)] : 0; }, out = [];
+  for (const [k, ts] of groups) {
+    if (have.has(k.split('|').slice(0, 2).join('|'))) continue;
+    const ds = [...new Set(ts.map(t => t.date))].map(dnum).sort((a, b) => a - b); if (ds.length < 3) continue;
+    const gaps = ds.slice(1).map((d, i) => d - ds[i]), g = med(gaps), rh = RHYTHM.find(([, days, tol]) => Math.abs(g - days) <= tol); if (!rh) continue;
+    const steady = gaps.filter(x => Math.abs(x - rh[1]) <= rh[2] * 1.6).length / gaps.length; if (steady < 0.7) continue;
+    if (rh[0] === 'yearly' ? ds.length < 2 : ds.length < 3) continue;
+    const last = ds[ds.length - 1]; if (now - last > rh[1] * 1.6) continue;   /* stopped */
+    const amts = ts.map(t => t.amount), m = med(amts), fixed = amts.every(a => Math.abs(a - m) <= Math.max(1, m * 0.03));
+    const lastT = ts[ts.length - 1], cnt = {}; for (const t of ts) if (t.category_id) cnt[t.category_id] = (cnt[t.category_id] || 0) + 1; const cat = +(Object.entries(cnt).sort((a, b) => b[1] - a[1])[0] || [null])[0] || null;
+    let next = dstr(last); for (let guard = 0; guard < 60 && next <= today(); guard++) next = nextDate(next, rh[0]);
+    out.push({ payee: ts.length > 1 && simKey(ts[0].payee) === simKey(lastT.payee) && ts.some(t => t.payee !== lastT.payee) ? nicePayee(lastT.payee) : lastT.payee, kind: lastT.kind, account_id: lastT.account_id, freq: rh[0], amount: fixed ? m : lastT.amount, fixed, n: ds.length, day: +dstr(last).slice(8, 10), next, cat, steady });
+  }
+  return out.sort((a, b) => b.n - a.n);
+}
+function findRepeatSheet() {
+  const list = findRepeating(), A = Object.fromEntries(q('SELECT id, name, currency FROM accounts').map(a => [a.id, a]));
+  if (!list.length) return toast('No new repeating payments found');
+  const when = r => r.freq === 'monthly' || r.freq === 'bimonthly' || r.freq === 'quarterly' ? `around the ${r.day}${[, 'st', 'nd', 'rd'][r.day % 10 > 3 || Math.floor(r.day / 10) === 1 ? 0 : r.day % 10] || 'th'}` : '';
+  openSheet(`<h2>Repeating payments found</h2><p class="sub">The same payee at a steady rhythm in your transactions. Ticked ones are added under Recurring, as reminders, with the next date and usual amount.</p>
+    <div class="maybes">${list.map((r, i) => { const c = (A[r.account_id] || {}).currency || home();
+      return `<label class="maybe"><input type="checkbox" data-rp2="${i}" checked><span><b>${esc(r.payee)}</b> · ${r.kind === 'in' ? '+' : '−'}${money(r.amount, c)}${r.fixed ? '' : ' (varies)'}<br>
+      <small>${esc(FREQS[r.freq] || r.freq)} ${when(r)} · ${esc((A[r.account_id] || {}).name || '')} · seen ${r.n} times · next ${fmtDate(r.next)}</small></span></label>`; }).join('')}</div>
+    <label class="switch"><span>Add them by themselves on the day (instead of reminding me)</span><input type="checkbox" name="auto"></label>
+    <div class="btns"><button class="btn" data-f="go">Add the ticked ones</button><button class="btn light" data-f="cancel">Cancel</button></div>`, box => {
+    box.onclick = e => { const f = e.target.dataset.f; if (!f) return; if (f === 'cancel') return closeSheet();
+      const auto = box.querySelector('[name=auto]').checked ? 1 : 0; let n = 0;
+      box.querySelectorAll('[data-rp2]:checked').forEach(c => { const r = list[+c.dataset.rp2];
+        run('INSERT INTO recurring(account_id,kind,amount,category_id,payee,note,freq,next_date,auto,active) VALUES(?,?,?,?,?,?,?,?,?,1)', [r.account_id, r.kind, +r.amount.toFixed(2), r.cat || null, r.payee, r.fixed ? null : 'Amount varies', r.freq, r.next, auto]);
+        if (r.cat) learnRule(r.payee, r.cat, null); n++; });
+      save(); closeSheet(); toast(n + ' repeating payment' + (n === 1 ? '' : 's') + ' added'); render(); };
+  });
+}
+/* things you bought in the past (metals, property, other assets) and the payment in your accounts */
+function purchaseTargets() {
+  const H = home(), out = [], linked = new Set(q("SELECT DISTINCT link FROM transactions WHERE link IS NOT NULL").map(r => r.link));
+  const hs = q('SELECT * FROM metal_holdings WHERE purchase_date IS NOT NULL').filter(h => !linked.has('metal:' + h.id));
+  const byDay = {}; for (const h of hs) { const k = h.purchase_date + '|' + (h.currency || H); (byDay[k] = byDay[k] || []).push(h); }
+  for (const g of Object.values(byDay)) {
+    const one = (list, label) => { const st = list.map(holdingStats), withFees = st.reduce((x, y) => x + (y.cost || 0), 0), bare = list.reduce((x, h) => x + (h.cost || 0), 0);
+      if (withFees > 0) out.push({ link: 'metal:' + list[0].id, label, date: list[0].purchase_date, amounts: [...new Set([withFees, bare].filter(v => v > 0).map(v => +v.toFixed(2)))], cur: list[0].currency || H, cat: 'Precious metals' }); };
+    if (g.length > 1) one(g, `${g.length} metal purchases on the same day`);
+    for (const h of g) one([h], h.description || METAL[h.metal].name);
+  }
+  for (const p of q('SELECT * FROM properties WHERE purchase_date IS NOT NULL AND purchase_price>0')) if (!linked.has('property:' + p.id))
+    out.push({ link: 'property:' + p.id, label: p.name, date: p.purchase_date, amounts: [...new Set([p.purchase_price, p.purchase_price + (p.purchase_costs || 0)])], cur: p.currency || H, cat: 'Property' });
+  for (const a of q('SELECT * FROM other_assets WHERE purchase_date IS NOT NULL AND purchase_price>0')) if (!linked.has('asset:' + a.id))
+    out.push({ link: 'asset:' + a.id, label: a.name, date: a.purchase_date, amounts: [a.purchase_price], cur: a.currency || H, cat: 'Big purchases' });
+  return out;
+}
+function purchaseCandidates(tg) {
+  const rows = q("SELECT t.*, COALESCE(a.currency, ?) acur, a.name aname FROM transactions t JOIN accounts a ON a.id=t.account_id WHERE t.kind='out' AND t.link IS NULL AND t.date>=? AND t.date<=?",
+    [home(), dstr(dnum(tg.date) - 7), dstr(dnum(tg.date) + 7)]);
+  const c = [];
+  for (const t of rows) { const v = t.acur === tg.cur ? t.amount : conv(t.amount, t.acur, tg.cur); if (v == null) continue;
+    const best = Math.min(...tg.amounts.map(a => Math.abs(v - a) / Math.max(a, 1))); if (best > (t.acur === tg.cur ? 0.01 : 0.03)) continue;
+    c.push(Object.assign(t, { off: best, days: Math.abs(dnum(t.date) - dnum(tg.date)) })); }
+  return c.sort((x, y) => (x.off - y.off) || (x.days - y.days)).slice(0, 4);
+}
+function matchPurchases() {
+  const tgs = purchaseTargets(); if (!tgs.length) return toast('Every purchase with a date and price is already linked to a payment');
+  const used = new Set(), found = [];
+  for (const tg of tgs) { const cs = purchaseCandidates(tg).filter(t => !used.has(t.id)); if (!cs.length) continue; found.push([tg, cs]); if (cs[0].off < 0.005 && cs[0].days <= 3) used.add(cs[0].id); }
+  const missing = tgs.length - found.length;
+  if (!found.length) return toast(`No payments found for ${tgs.length} purchase${tgs.length > 1 ? 's' : ''} (paid in cash, or before your records start?)`);
+  openSheet(`<h2>Purchases found in your accounts</h2><p class="sub">Same amount within 1%, within a week of the purchase date. A linked payment shows on the item's page and counts as savings and investments, not spending.</p>
+    ${found.map(([tg, cs], i) => `<div class="simg"><b>${esc(tg.label)}</b> <small class="sub">${fmtDate(tg.date)} · ${tg.amounts.map(a => money(a, tg.cur)).join(' or ')}</small>
+      <div class="maybes">${cs.map((t, k) => `<label class="maybe"><input type="radio" name="pm${i}" value="${t.id}"${k === 0 && t.off < 0.005 && t.days <= 3 ? ' checked' : ''}><span>${fmtDate(t.date)} · ${money(t.amount, t.acur)} · ${esc(t.aname)}<br><small>${esc(t.payee || '')} ${t.category_id ? '· ' + esc(cats().label(t.category_id)) : ''}</small></span></label>`).join('')}
+      <label class="maybe"><input type="radio" name="pm${i}" value=""${cs[0].off < 0.005 && cs[0].days <= 3 ? '' : ' checked'}><span>None of these</span></label></div></div>`).join('')}
+    ${missing ? `<p class="hint">${missing} other purchase${missing > 1 ? 's have' : ' has'} no matching payment (paid in cash, from an account not in the app, or before your records start).</p>` : ''}
+    <div class="btns"><button class="btn" data-f="go">Link the chosen payments</button><button class="btn light" data-f="cancel">Cancel</button></div>`, box => {
+    box.onclick = e => { const f = e.target.dataset.f; if (!f) return; if (f === 'cancel') return closeSheet();
+      const C = cats(), saveTop = C.rows.find(c => !c.parent_id && c.kind === 'save'); let n = 0; const taken = new Set();
+      for (let i = 0; i < found.length; i++) { const v = (box.querySelector(`[name=pm${i}]:checked`) || {}).value; if (!v || taken.has(v)) continue; taken.add(v);
+        const tg = found[i][0], t = found[i][1].find(x => String(x.id) === v), sub = C.rows.find(c => c.kind === 'save' && c.name === tg.cat) || saveTop;
+        const keepCat = t.category_id && C.top(t.category_id) && C.top(t.category_id).kind === 'save';
+        run('UPDATE transactions SET link=?, category_id=? WHERE id=?', [tg.link, keepCat ? t.category_id : (sub ? sub.id : t.category_id), t.id]); n++; }
+      save(); closeSheet(); toast(n ? n + ' purchase' + (n > 1 ? 's' : '') + ' linked' : 'Nothing linked'); render(); };
+  });
+}
 /* ---------------- 1.18: reconcile with the bank ----------------
    Each balance check (from a bank file, a statement or a cash count) is compared with the check before it plus the
    transactions in between. A difference means something is missing, doubled or wrong. Per month you see the difference,
@@ -4188,6 +4333,7 @@ function payeesHtml() {
   let h = `<h2 class="sect">Payees <span class="sub">who you pay and who pays you</span></h2><div class="card">
     <div class="f2"><label class="f"><span>Sort</span><select id="p-sort">${[['name', 'Name A–Z'], ['n', 'Most used'], ['amt', 'Largest total'], ['last', 'Most recent']].map(([k, l]) => `<option value="${k}"${k === srt ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
     <label class="f"><span>Search</span><input id="p-search" value="${esc(state.psearch || '')}" autocomplete="off" placeholder="name…"></label></div>
+    <div class="btns"><button class="btn light" data-act="p-similar">Find similar payees</button>${rows.length && rows.length <= 300 && srch ? `<button class="btn light" data-act="p-tickall">Tick all ${rows.length} shown</button>` : ''}</div>
     ${sel.size ? `<div class="btns"><button class="btn" data-act="p-merge">Merge ${sel.size} into one…</button><button class="btn light" data-act="p-cat">Category for ${sel.size}…</button></div><div class="btns"><button class="btn light" data-act="p-clear">Untick all</button></div>`
       : '<p class="sub" style="margin:6px 0 0">Tick payees to merge them (e.g. "METRO #123" and "Metro") or give them a category together. Tap a name to rename it.</p>'}</div>`;
   if (!rows.length) return h + `<div class="card empty">No payees${srch ? ' match' : ' yet'}.</div>`;
@@ -4260,12 +4406,12 @@ function catManage(id) {
     box.onclick = e => { const f = e.target.dataset.f; if (!f) return;
       if (f === 'cancel') return closeSheet();
       if (f === 'delete') { closeSheet(); return catForm(id); }
-      if (f === 'rename') { const n = (formData(box).name || '').trim(); if (!n) return bad('Enter a name.'); run('UPDATE categories SET name=? WHERE id=?', [n, id]); clearCats(); save(); closeSheet(); render(); return; }
+      if (f === 'rename') { const n = (formData(box).name || '').trim(); if (!n) return bad('Enter a name.');
+        const same = C.rows.find(x => x.id !== id && (x.parent_id || null) === (c.parent_id || null) && low(x.name) === low(n));
+        if (same) { ask(`"${same.name}" already exists. Merge "${c.name}" into it? All its transactions, repeats and remembered payees move there.`, 'Merge').then(y => { if (!y) return; mergeCat(id, same.id); save(); closeSheet(); toast('Merged into ' + cats().label(same.id)); render(); }); return; }
+        run('UPDATE categories SET name=? WHERE id=?', [n, id]); clearCats(); save(); closeSheet(); toast('Renamed: every transaction in it now shows "' + n + '"'); render(); return; }
       if (f === 'merge') { const into = +formData(box).into; if (!into || into === id) return bad('Choose the category to merge into.');
-        const target = C.byId[into]; db.exec('BEGIN');
-        for (const tb of ['transactions', 'recurring', 'payee_rules']) run(`UPDATE ${tb} SET category_id=? WHERE category_id=?`, [into, id]);
-        for (const s of subs) { if (!target.parent_id) run('UPDATE categories SET parent_id=?, kind=? WHERE id=?', [into, target.kind, s.id]); else { for (const tb of ['transactions', 'recurring', 'payee_rules']) run(`UPDATE ${tb} SET category_id=? WHERE category_id=?`, [into, s.id]); run('DELETE FROM categories WHERE id=?', [s.id]); } }
-        run('DELETE FROM categories WHERE id=?', [id]); db.exec('COMMIT'); clearCats(); save(); closeSheet(); toast('Merged into ' + C.label(into)); render(); return; }
+        mergeCat(id, into); save(); closeSheet(); toast('Merged into ' + cats().label(into)); render(); return; }
       if (f === 'move') { const v = formData(box).under; if (!v) return bad('Choose where to move it.');
         if (v === 'top') run('UPDATE categories SET parent_id=NULL WHERE id=?', [id]);
         else { const p = C.byId[+v]; run('UPDATE categories SET parent_id=?, kind=? WHERE id=?', [p.id, p.kind, id]); }
