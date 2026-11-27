@@ -1,25 +1,25 @@
 {
  "android": {
-  "version": "1.30",
+  "version": "1.31",
   "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-android.apk",
-  "sha256": "4febec4705f706cfb0d716f7f01245cde4588e0dd3df7217abe39c8acbe97be2",
-  "notes": "A summary at the top of every Assets page: accounts, property, metals, loans and other assets."
+  "sha256": "b6946f9f34a75e4e4d4bfa83aa23ebaab4003275c04ef724b616f04b8140eae0",
+  "notes": "A new Stewards page (the cross on the bottom bar): Bible verses on work and money, a verse of the day, and verses on some pages."
  },
  "linux": {
-  "version": "1.30",
+  "version": "1.31",
   "page": "https://github.com/BibleCorner-KJT/kjt-invest/tree/releases",
-  "notes": "A summary at the top of every Assets page: accounts, property, metals, loans and other assets.",
+  "notes": "A new Stewards page (the cross on the bottom bar): Bible verses on work and money, a verse of the day, and verses on some pages.",
   "x86_64": {
    "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.flatpak",
-   "sha256": "ec47c31a31cb00ff7aacbb1461c90bbd41489b5b68be64bb3583e2deae1d9c4a"
+   "sha256": "eb4e5b4bf82eb9960138419f9fa06b7f944d7a206b5b25999bf9441245fdede2"
   },
   "aarch64": {
    "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux-arm.flatpak",
-   "sha256": "3313bdfb3841145b9cd748bb7a19137d0f394d713f940200ed932e54d6dca182"
+   "sha256": "1002607e7d3425c7a75e0f536582adf6c2cee608feceb1c686cbf98ce0be688f"
   },
   "zip": {
    "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.zip",
-   "sha256": "d3eecf3ac024ab901850b68f50c51b71f8b238cb0dd7defb56faaac76aa9aba9"
+   "sha256": "b0f71dbaac789d4d870902912476999cd5d381496b7b3377e67c438b3cbaff22"
   }
  }
 }
