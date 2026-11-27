@@ -1735,10 +1735,10 @@ function renderMore() {
     <label class="f"><span>Text size</span><select id="set-size">${[['', 'Normal'], ['large', 'Large'], ['larger', 'Larger']].map(([v, l]) => `<option value="${v}"${(PREFS.size || '') === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label></div>
     <div class="switch"><span>Show the total of a folded section or card</span><input type="checkbox" id="set-ftot"${getSetting('fold_totals', '1') === '1' ? ' checked' : ''}></div>
     <p class="sub" style="margin:4px 0 0">Tap a heading (or the arrow on an Overview card) to fold it. Turn this off to hide amounts when folded, for privacy.</p></div>`;
-  h += `<h2 class="sect">Stewardship</h2><div class="card"><p class="sub" style="margin-top:0">Bible verses on work, honesty and the right use of money (King James Version).</p>
+  h += `<h2 class="sect">Steward</h2><div class="card"><p class="sub" style="margin-top:0">Bible verses on work, honesty and the right use of money (King James Version).</p>
     <div class="switch"><span>Show Bible verses around the app</span><input type="checkbox" id="set-verses"${versesOn() ? ' checked' : ''}></div>
-    <p class="sub" style="margin:4px 0 0">A verse of the day on Overview, and a verse at the foot of some pages. The Stewardship page is always here.</p>
-    <div class="btns"><button class="btn light" data-act="stewardship">Open the Stewardship page</button></div></div>`;
+    <p class="sub" style="margin:4px 0 0">A verse of the day on Overview, and a verse at the foot of some pages. The Steward page is always here.</p>
+    <div class="btns"><button class="btn light" data-act="stewardship">Open the Steward page</button></div></div>`;
   h += `<h2 class="sect">Currencies</h2><div class="card">
     <label class="f"><span>Home currency (for totals)</span><select id="set-home">${curOptions(H)}</select></label>
     <label class="f"><span>Currency for precious metals</span><select id="set-mcur">${curOptions(mcur())}</select></label></div>`;
@@ -4965,10 +4965,10 @@ window.__updateStatus = msg => toast(msg);
   }
 })();
 
-/* ---------------- 1.31: Stewardship ----------------
+/* ---------------- 1.31: Steward ----------------
    Bible verses (King James Version, public domain) on work, honesty and the right use of money:
    a page to read and reflect, a verse of the day on Overview, and a quiet verse matched to some pages.
-   Settings › Stewardship turns the verses around the app off (the page stays). */
+   Settings › Steward turns the verses around the app off (the page stays). */
 const KJV = {
   'Psalm 24:1': "The earth is the LORD's, and the fulness thereof; the world, and they that dwell therein.",
   'Proverbs 10:4': 'He becometh poor that dealeth with a slack hand: but the hand of the diligent maketh rich.',
@@ -5044,7 +5044,7 @@ function verseHtml(ref, cls) {
 function dailyRef(d) { const n = Math.floor(dnum(d || today())); return DAILY[((n % DAILY.length) + DAILY.length) % DAILY.length]; }
 function dailyCard() {
   if (!versesOn()) return '';
-  return `<div class="card tap vday nomask" data-act="stewardship"><div class="vlabel">Verse of the day</div>${verseHtml(dailyRef())}<div class="sub vmore">Stewardship: reflect on God, work and money ›</div></div>`;
+  return `<div class="card tap vday nomask" data-act="stewardship"><div class="vlabel">Verse of the day</div>${verseHtml(dailyRef())}<div class="sub vmore">Steward: reflect on God, work and money ›</div></div>`;
 }
 /* a quiet verse at the foot of some pages; two verses alternate by day where there are two */
 function pageVerse() {
@@ -5069,7 +5069,7 @@ function moodVerse(kind) {
 }
 const SV = (...refs) => refs.map(r => verseHtml(r)).join('');
 function renderStewardship() {
-  setTitle('Stewardship', true);
+  setTitle('Steward', true);
   const sec = (title, intro, body) => `<h2 class="sect">${title}</h2><div class="card stw">${intro ? `<p>${intro}</p>` : ''}${body}</div>`;
   let h = `<div class="card stw stwhead"><p class="lead">We are stewards, not owners.</p>
     <p>Everything we have is lent to us by God, to be used well and accounted for. This app is a tool for that work: knowing the state of what has been entrusted to us, keeping honest records, and planning wisely. Money itself is not the danger; <b>the love of money</b> is. Its right use and good management are a service to God, to our family and to our neighbour.</p>${SV('Psalm 24:1', '1 Corinthians 4:2')}</div>`;
