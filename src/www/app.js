@@ -1,9 +1,9 @@
-/* KJT Finance 1.22 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
+/* KJT Finance 1.23 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
    All data stays in one SQLite file on the device. The only network calls are the
    price updates (metal prices from gold-api.com, exchange rates from the European Central Bank). */
 'use strict';
 
-const APP_VERSION = '1.22';
+const APP_VERSION = '1.23';
 const SCHEMA = 11;
 const OZT_G = 31.1034768;
 const METALS = [
@@ -706,7 +706,7 @@ function render() {
     setTitle('Assets');
     view().insertAdjacentHTML('afterbegin', `<div class="subnav">${ASECS.map(([k, l]) => subBtn(k, l, k === state.tab, 'data-asec')).join('')}</div>`);
   }
-  view().dataset.page = state.tab;   /* 1.22: each section of Assets has its own colour */
+  view().dataset.page = state.tab; searchSelects(view());   /* 1.22: each section of Assets has its own colour */
   enhanceView();
   settingsNav();
   markAmounts();
@@ -1641,7 +1641,31 @@ function renderMore() {
 /* ---------------- forms ---------------- */
 function openSheet(html, onReady) {
   const sh = document.getElementById('sheet'), bx = sh.querySelector('.sheet-box'); bx.oninput = bx.onclick = bx.onchange = null; bx.innerHTML = html; sh.hidden = false;
-  sh.querySelector('.sheet-box').scrollTop = 0; if (onReady) onReady(sh.querySelector('.sheet-box'));
+  sh.querySelector('.sheet-box').scrollTop = 0; if (onReady) onReady(sh.querySelector('.sheet-box')); searchSelects(sh.querySelector('.sheet-box'));
+}
+/* 1.23: every long list (categories, payees, accounts…) gets a search box: type a few letters, the list keeps only what matches */
+const fold = x => String(x || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+function searchSelects(root) {
+  for (const sel of root.querySelectorAll('select:not([multiple]):not(.nosearch)')) {
+    if (sel.dataset.srch || sel.options.length < 9) continue; sel.dataset.srch = '1';
+    const all = Array.from(sel.children).map(n => n.cloneNode(true)), box = document.createElement('input');
+    box.type = 'search'; box.className = 'selsearch'; box.placeholder = 'Search ' + sel.options.length + '…'; box.autocomplete = 'off'; box.setAttribute('aria-label', 'Search the list');
+    sel.parentNode.insertBefore(box, sel);
+    const keep = o => o.cloneNode(true);
+    box.addEventListener('input', e => { e.stopPropagation();
+      const w = fold(box.value).trim().split(/\s+/).filter(Boolean), before = sel.value, hit = t => w.every(x => fold(t).includes(x));
+      sel.innerHTML = '';
+      for (const n of all) {
+        if (n.tagName === 'OPTGROUP') { const gl = n.label, os = Array.from(n.children).filter(o => !w.length || hit(gl + ' ' + o.textContent)); if (!os.length) continue;
+          const g = n.cloneNode(false); os.forEach(o => g.appendChild(keep(o))); sel.appendChild(g); }
+        else if (!w.length || hit(n.textContent) || (n.value === before && !w.length)) sel.appendChild(keep(n));
+      }
+      if (!sel.options.length) { const o = document.createElement('option'); o.disabled = true; o.textContent = 'Nothing matches "' + box.value + '"'; sel.appendChild(o); return; }
+      const still = Array.from(sel.options).some(o => o.value === before && !o.disabled);
+      if (still) sel.value = before; else { const f = Array.from(sel.options).find(o => !o.disabled && o.value !== ''); if (f) { sel.value = f.value; sel.dispatchEvent(new Event('change', { bubbles: true })); } }
+    });
+    box.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); sel.focus(); } });
+  }
 }
 function closeSheet() { document.getElementById('sheet').hidden = true; }
 document.querySelector('#sheet .sheet-bg').onclick = closeSheet;
@@ -2697,7 +2721,23 @@ function spendBy(a, b) {   /* household spending by top category (in home curren
     if (t.kind === 'in') { inc[name] = (inc[name] || 0) + v; totalIn += v; }
     else { out[name] = (out[name] || 0) + v; total += v; count++; if (t.payee) payees[t.payee] = (payees[t.payee] || 0) + v; big.push([v, t]); }
   }
-  return { out, inc, total, totalIn, count, payees, big: big.sort((x, y) => y[0] - x[0]) };
+  /* 1.23: money in / money out: every deposit and withdrawal except transfers between your own accounts and balance corrections */
+  const flowIn = {}, flowOut = {}, corr = (C.rows.find(c => !c.parent_id && c.name === 'Balance corrections') || {}).id;
+  for (const t of q("SELECT kind, amount, account_id, category_id, link FROM transactions WHERE kind IN ('in','out') AND date>=? AND date<=?", [a, b])) {
+    if (t.link && t.link.startsWith('property:')) continue;   /* in the property's figures below */
+    const top = C.top(t.category_id); if (!top || top.kind !== 'save' || (corr && top.id === corr)) continue;   /* income and spending are added below */
+    const v = conv(t.amount, (A[t.account_id] || {}).currency || H, H) || 0, nm = C.label(t.category_id);
+    if (t.kind === 'in') flowIn[nm] = (flowIn[nm] || 0) + v; else flowOut[nm] = (flowOut[nm] || 0) + v;
+  }
+  /* 1.23: rent, other property income and property costs (your share), and estimated interest: the same figures as Overview */
+  const m = ieModel(), y0 = a.slice(0, 7), y1 = b.slice(0, 7), addIn = (k, v) => { if (v > 0.005) { inc[k] = (inc[k] || 0) + v; totalIn += v; } };
+  for (const [ym, x] of Object.entries(m)) { if (ym < y0 || ym > y1) continue;
+    addIn('Rent', x.rent); addIn('Other property income', x.other); addIn('Interest (estimated)', x.interest);
+    for (const [kk, v] of Object.entries(x.byKind)) { if (v <= 0.005) continue;
+      const name = kk === 'cat:Loans written off' ? 'Loans written off' : kk.startsWith('cat:') ? null : pmeta(kk)[0] + ' (property)';
+      if (name) { out[name] = (out[name] || 0) + v; total += v; count++; } } }
+  const sum = o => Object.values(o).reduce((x, y) => x + y, 0), moneyIn = totalIn + sum(flowIn), moneyOut = total + sum(flowOut);
+  return { out, inc, total, totalIn, count, payees, big: big.sort((x, y) => y[0] - x[0]), flowIn, flowOut, moneyIn, moneyOut };
 }
 function reportsHtml() {
   const H = home(); state.rp = state.rp || 'm';
@@ -2725,6 +2765,9 @@ function reportsHtml() {
   const max = sorted.length ? sorted[0][1] : 1;
   let h = `<h2 class="sect">Reports</h2><div class="card"><div class="segs">${segs}</div>
     <div class="ie3"><div class="stat"><div class="k">Income</div><div class="v up">${whole(cur.totalIn, H)}</div></div><div class="stat"><div class="k">Spending</div><div class="v down">${whole(cur.total, H)}</div></div><div class="stat"><div class="k">Left over</div><div class="v ${signCls(cur.totalIn - cur.total)}">${whole(cur.totalIn - cur.total, H)}</div></div></div>
+    <div class="flowbox"><div class="flowh">Money in and out <small class="sub">every deposit and payment, except moves between your own accounts</small></div>
+      <div class="ie3"><div class="stat"><div class="k">Money in</div><div class="v up">${whole(cur.moneyIn, H)}</div></div><div class="stat"><div class="k">Money out</div><div class="v down">${whole(cur.moneyOut, H)}</div></div><div class="stat"><div class="k">Net</div><div class="v ${signCls(cur.moneyIn - cur.moneyOut)}">${whole(cur.moneyIn - cur.moneyOut, H)}</div></div></div>
+      ${Object.keys(cur.flowIn).length || Object.keys(cur.flowOut).length ? `<div class="alloc">${Object.entries(cur.flowIn).sort((x, y) => y[1] - x[1]).map(([k, v]) => `<div class="arow ie"><span class="al">In: ${esc(k)}</span><span class="av up">${whole(v, H)}</span><span class="ap"></span></div>`).join('')}${Object.entries(cur.flowOut).sort((x, y) => y[1] - x[1]).map(([k, v]) => `<div class="arow ie"><span class="al">Out: ${esc(k)}</span><span class="av down">${whole(v, H)}</span><span class="ap"></span></div>`).join('')}</div><p class="sub" style="margin:6px 0 0">These lines are money in and out, but not income or spending: savings, loans repaid or lent, and moves to accounts not in the app.</p>` : ''}</div>
     ${notes.length ? `<ul class="notes">${notes.map(n => `<li>${n}</li>`).join('')}</ul>` : '<p class="sub">Add transactions to see your reports.</p>'}</div>`;
   if (sorted.length) h += `<h2 class="sect">Where the money goes</h2><div class="card"><div class="catbars">${sorted.map(([k, v]) => { const pv = prev.out[k] || 0, ch = pv ? v / pv - 1 : null;
     return `<div class="cb"><div class="cbt"><span>${esc(k)}</span><span><b>${whole(v, H)}</b> <small class="sub">${Math.round(v / (cur.total || 1) * 100)}%${ch != null ? ` · <span class="${ch > 0 ? 'down' : 'up'}">${ch > 0 ? '+' : ''}${Math.round(ch * 100)}%</span>` : ''}</small></span></div><div class="cbb"><i style="width:${(v / max * 100).toFixed(1)}%"></i></div></div>`; }).join('')}</div>
@@ -2734,7 +2777,7 @@ function reportsHtml() {
   const pay = Object.entries(cur.payees).sort((x, y) => y[1] - x[1]).slice(0, 6);
   if (pay.length) h += `<h2 class="sect">Paid to most</h2><div class="card"><div class="alloc">${pay.map(([k, v]) => `<div class="arow ie"><span class="al">${esc(k)}</span><span class="av">${whole(v, H)}</span><span class="ap"></span></div>`).join('')}</div></div>`;
   h += `<button class="btn wide light" data-act="print-report">Print the full report or save it as a PDF</button>`;
-  h += `<p class="sub" style="padding:0 6px">Reports count your own transactions. Rent and costs of your properties are in Overview › Income & expenses, together with these.</p>`;
+  h += `<p class="sub" style="padding:0 6px">Your transactions, plus your properties' rent, income and costs (your share) and estimated interest: the same figures as Overview. Savings and transfers between your accounts are left out.</p>`;
   return h;
 }
 /* ---- CSV for spreadsheets ---- */

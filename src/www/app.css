@@ -622,3 +622,10 @@ ol.steps { margin: 8px 0; padding-left: 20px; display: grid; gap: 6px; font-size
 .ocard[data-go="accounts"] { --oc: var(--cat-c); } .ocard[data-go="property"] { --oc: var(--cat-p); } .ocard[data-go="metals"] { --oc: var(--cat-m); }
 .ocard[data-go="loans"] { --oc: var(--cat-l); } .ocard[data-go="assets"] { --oc: var(--cat-o); }
 .ocard .pbadge, .ocard .oico { color: var(--oc); }
+
+/* 1.23: search box above long lists */
+input.selsearch, .sheet-box input.selsearch, label.f input.selsearch { width: 100%; margin: 2px 0 6px; padding: 8px 12px 8px 34px !important; border-radius: 10px; border: 1px solid var(--line); background: var(--soft) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='M20 20l-3.5-3.5'/%3E%3C/svg%3E") no-repeat 10px center / 16px !important; color: var(--ink); font: inherit; font-size: .92rem; }
+.selsearch:focus { outline: 2px solid var(--brand); outline-offset: 0; background-color: var(--card); }
+
+.flowbox { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--line); }
+.flowh { font-weight: 750; margin-bottom: 4px; }
