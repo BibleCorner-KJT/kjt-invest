@@ -699,3 +699,7 @@ body.selecting main#view { padding-bottom: 150px; }
 .arow .av { white-space: nowrap; }
 .arow .ap { min-width: 0; }
 @media (max-width: 26em) { .arow { gap: 4px 6px; } .arow .ap { font-size: .8em; } }
+
+/* 1.30 */
+.sumh { margin: 12px 0 2px; font-weight: 750; font-size: .9rem; text-align: left; }
+.alloc .arow.ie.tap { grid-template-columns: minmax(0, 1fr) auto auto; }

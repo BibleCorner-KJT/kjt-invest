@@ -1,9 +1,9 @@
-/* KJT Finance 1.29 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
+/* KJT Finance 1.30 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
    All data stays in one SQLite file on the device. The only network calls are the
    price updates (metal prices from gold-api.com, exchange rates from the European Central Bank). */
 'use strict';
 
-const APP_VERSION = '1.29';
+const APP_VERSION = '1.30';
 const SCHEMA = 11;
 const OZT_G = 31.1034768;
 const METALS = [
@@ -762,10 +762,7 @@ function renderOverview() {
   setTitle('KJT Finance');
   const t = totals(), H = home();
   const nAll = ['metal_holdings', 'properties', 'accounts', 'other_assets', 'loans'].reduce((n, tb) => n + q(`SELECT COUNT(*) n FROM ${tb}`)[0].n, 0);
-  /* 1.27: an "account" that only ever received transfers and has the name of a property or asset is an MMEX asset account */
-  const sus = q("SELECT a.* FROM accounts a WHERE a.type='other' AND COALESCE(a.status,'')<>'closed' AND EXISTS(SELECT 1 FROM transactions t WHERE t.to_account_id=a.id AND t.kind='transfer') AND NOT EXISTS(SELECT 1 FROM transactions t WHERE t.account_id=a.id) AND (EXISTS(SELECT 1 FROM properties p WHERE lower(p.name)=lower(a.name)) OR EXISTS(SELECT 1 FROM other_assets o WHERE lower(o.name)=lower(a.name)))");
-  const susWarn = sus.length ? `<div class="warn tap" data-act="mmex-repair"><b>Counted twice?</b> ${sus.map(a => esc(a.name)).join(', ')} ${sus.length === 1 ? 'is an account that' : 'are accounts that'} only received payments and also ${sus.length === 1 ? 'is a property or asset' : 'are properties or assets'}. Tap to repair from your MMEX file ›</div>` : '';
-  let h = missingWarn() + susWarn + `<h2 class="sect" data-ftot="${esc(whole(t.total, H))}">Summary</h2>` + summaryHtml(t);
+  let h = missingWarn() + `<h2 class="sect" data-ftot="${esc(whole(t.total, H))}">Summary</h2>` + summaryHtml(t);
   if (!nAll) {
     h += `<div class="card"><h2>Welcome</h2><p class="sub">Add what you own. Everything stays on this device, in one file you can export at any time.</p>
       <div class="btns"><button class="btn" data-act="add-metal">Add precious metal</button><button class="btn" data-act="add-property">Add property</button><button class="btn" data-act="add-account">Add bank account</button><button class="btn" data-act="add-asset">Add other asset</button></div>
@@ -851,8 +848,12 @@ function renderAssets() {
       <div class="txn-body"><div class="sub">${(ASSET_TYPES[a.type] || ASSET_TYPES.other)[0]}${cost != null ? ' · paid ' + money(cost, c, { dec: 0 }) : ''}${shareOf(a) < 1 ? ' · your share ' + shareLbl(a) : ''}</div>
       <div class="r"><div class="strongv">${val == null ? '—' : money(val, c, { dec: 0 })}</div><div class="sub ${signCls(ch)}">${pct(ch)}</div></div></div></div>`;
   }
-  let h = `<h2 class="sect">Total</h2><div class="card hero"><div class="label">Other assets (${H})</div><div class="big">${whole(total, H)}</div>
-    ${paid ? `<div class="sub">Paid ${whole(paid, H)} · <span class="${signCls(total - paid)}">${pct(total / paid - 1)}</span></div>` : ''}</div>`;
+  /* 1.30: summary, by kind */
+  const byT = {}; for (const a of as) { const v = assetValue(a.id), c = a.currency || H, k = shareOf(a), hv = conv(v ? v.value * k : null, c, H); if (hv == null) continue; const t = byT[a.type || 'other'] = byT[a.type || 'other'] || { v: 0, c: 0, n: 0 }; t.v += hv; t.c += conv(a.purchase_price != null ? a.purchase_price * k : null, c, H) || 0; t.n++; }
+  let h = as.length ? secSummary({ label: `Other assets (${H})`, big: whole(total, H), sub: [`${as.length} asset${as.length === 1 ? '' : 's'}`],
+    stats: [['Paid', whole(paid, H)], ['Up or down', sgnW(total - paid, H), signCls(total - paid)], ['Change', paid ? pct(total / paid - 1) : '—', signCls(total - paid)]],
+    rows: Object.entries(byT).sort((a, b) => b[1].v - a[1].v).map(([t, x]) => [`${(ASSET_TYPES[t] || ASSET_TYPES.other)[0]} <small class="sub">${x.n}</small>`, whole(x.v, H), '', x.c ? `paid ${whole(x.c, H)} · <span class="${signCls(x.v - x.c)}">${pct(x.v / x.c - 1)}</span>` : '']),
+    foot: ['Values you have not updated count at what you paid. Open an asset to add today\'s value.'] }) : '';
   h += `<h2 class="sect">Your assets</h2>`;
   h += as.length ? `<div class="card"><div class="txns" style="margin-top:0">${body}</div></div>` : `<div class="card empty">No other assets yet: cars, boats, trailers, jewellery, art, collections, equipment…</div>`;
   h += `<button class="btn wide" data-act="add-asset">+ Add asset</button><button class="btn wide light" data-act="match-buys">Find these purchases in your accounts</button>`;
@@ -1146,6 +1147,16 @@ function summaryHtml(t) {
         <div class="legend"><span><i class="lin"></i>Money in</span><span><i class="lout"></i>Money out</span></div>` : ''}
       <p class="sub" style="margin:6px 0 0">Every deposit and payment in your accounts, plus rent and costs set on your properties; moves between your own accounts left out. The same as Cash flow › Reports. <span class="tap" data-go="money" style="text-decoration:underline">Open Cash flow ›</span></p></div></div>`;
 }
+/* ---------------- 1.30: a summary at the top of every Assets page ----------------
+   o = { label, big, sub[], stats:[[k, v, cls]], rows:[[name, value, cls, note, attr]], rowsTitle, foot[] } */
+function secSummary(o) {
+  return `<h2 class="sect">Summary</h2><div class="card hero sumc">
+    <div class="label">${o.label}</div><div class="big">${o.big}</div>${(o.sub || []).filter(Boolean).map(x => `<div class="sub">${x}</div>`).join('')}
+    ${o.stats && o.stats.length ? `<div class="ie3" style="margin-top:10px">${o.stats.map(([k, v, c]) => `<div class="stat"><div class="k">${k}</div><div class="v ${c || ''}">${v}</div></div>`).join('')}</div>` : ''}
+    ${o.rows && o.rows.length ? `${o.rowsTitle ? `<div class="sumh">${o.rowsTitle}</div>` : ''}<div class="alloc">${o.rows.map(([n, v, c, note, attr]) => `<div class="arow ie${attr ? ' tap' : ''}"${attr ? ' ' + attr : ''}><span class="al">${n}${note ? `<span class="sub"><br>${note}</span>` : ''}</span><span class="av ${c || ''}">${v}</span><span class="ap"></span></div>`).join('')}</div>` : ''}
+    ${(o.foot || []).filter(Boolean).map(x => `<div class="sub" style="margin-top:6px">${x}</div>`).join('')}</div>`;
+}
+const sgnW = (v, c) => (v >= 0 ? '+' : '−') + whole(Math.abs(v), c);
 function heroHtml(t) {
   const pages = heroPages(t);
   return `<div class="card hero heroc"><div class="hero-scroll" id="heroS">${pages.map(p => `<section class="hpage">${p}</section>`).join('')}</div>
@@ -1230,9 +1241,14 @@ function renderMetals() {
   setTitle('Precious metals');
   const H = mcur(), hs = q("SELECT * FROM metal_holdings ORDER BY metal, COALESCE(purchase_date,'') DESC, description");
   let tv = 0, tc = 0; for (const x of hs) { const st = holdingStats(x); if (st.valueM != null) { tv += st.valueM; tc += st.costM || 0; } }
-  let h = missingWarn() + `<h2 class="sect">Total</h2><div class="card hero"><div class="label">Precious metals (${H})</div><div class="big">${whole(tv, H)}</div>
-      ${tc ? `<div class="sub">Paid ${whole(tc, H)} (fees included) · <span class="${signCls(tv - tc)}">${pct(tv / tc - 1)}</span></div>` : ''}
-      <div class="sub" style="margin-top:6px"><a href="#" data-go="markets">Prices, sources and the price chart are under Prices ›</a></div></div>`
+  /* 1.30: summary: per metal, ounces, value, what you paid, the price per ounce against your average cost, and today's move */
+  const per = {}, yd = dstr(dnum(today()) - 1);
+  for (const x of hs) { const st = holdingStats(x), m = per[x.metal] = per[x.metal] || { oz: 0, v: 0, c: 0, n: 0 }; m.oz += st.oz; m.n++; if (st.valueM != null) { m.v += st.valueM; m.c += st.costM || 0; } }
+  let day = 0; const mrows = METALS.filter(m => per[m.sym]).map(m => { const x = per[m.sym], spot = spotIn(m.sym, H), p0 = priceOn(m.sym, yd, H); if (spot != null && p0) day += (spot - p0) * x.oz;
+    return [`${m.name} <small class="sub">${x.n} holding${x.n > 1 ? 's' : ''}</small>`, whole(x.v, H), '', `${x.oz.toFixed(x.oz < 10 ? 3 : 1)} oz · paid ${whole(x.c, H)}${x.c ? ` · <span class="${signCls(x.v - x.c)}">${pct(x.v / x.c - 1)}</span>` : ''}${x.oz && spot != null ? ` · your average ${money(x.c / x.oz, H, { dec: 0 })}/oz, now ${money(spot, H, { dec: 0 })}` : ''}`]; });
+  let h = missingWarn() + (hs.length ? secSummary({ label: `Precious metals (${H})`, big: whole(tv, H), sub: [`${hs.length} holding${hs.length === 1 ? '' : 's'}`, day ? `<span class="${signCls(day)}">${sgnW(day, H)}</span> since yesterday's prices` : ''],
+      stats: [['Paid (fees included)', whole(tc, H)], ['Up or down', sgnW(tv - tc, H), signCls(tv - tc)], ['Change', tc ? pct(tv / tc - 1) : '—', signCls(tv - tc)]], rows: mrows,
+      foot: ['<a href="#" data-go="markets">Prices, sources and the price chart are under Prices ›</a>'] }) : `<h2 class="sect">Summary</h2><div class="card empty">No metals yet.</div>`)
     + `<h2 class="sect">Your holdings</h2>`;
   if (!hs.length) h += `<div class="card empty">No metals yet.</div>`;
   for (const m of METALS) {
@@ -1261,13 +1277,18 @@ function renderProperties() {
     for (const p of ps) { const s = propertyStats(p), k = s.share, c = p.currency || H, cv = v => conv(v * k, c, H);
       const v = cv(s.value), i = cv(s.invested); if (v == null || i == null) { miss = true; continue; } val += v; inv += i; perM += cv(s.perMonth || 0) || 0; inc += cv(s.sumNet || 0) || 0; }
     const ch = inv ? val / inv - 1 : null;
-    h += `<h2 class="sect" data-ftot="${esc(whole(val, H))}">Total</h2><div class="card hero"><div class="label">Real estate (${H}${ps.some(p => shareOf(p) < 1) ? ', your share' : ''})</div><div class="big">${whole(val, H)}</div>
-      <div class="sub">current value of ${ps.length} propert${ps.length === 1 ? 'y' : 'ies'}</div>
-      <div class="ie3" style="margin-top:10px"><div class="stat"><div class="k">Initial investment</div><div class="v">${whole(inv, H)}</div></div>
-        <div class="stat"><div class="k">Up or down</div><div class="v ${signCls(val - inv)}">${(val - inv >= 0 ? '+' : '−') + whole(Math.abs(val - inv), H)}</div></div>
-        <div class="stat"><div class="k">Change</div><div class="v ${signCls(ch)}">${pct(ch)}</div></div></div>
-      <div class="sub" style="margin-top:8px">Net rent and costs: ${whole(perM, H)} a month · ${whole(inc, H)} so far</div>
-      ${miss ? '<div class="sub warn-t">One property is not counted: an exchange rate is missing.</div>' : ''}</div>`;
+    const y = +today().slice(0, 4), mo = +today().slice(5, 7); let rentM = 0, costM = 0, rented = 0, perRows = [];
+    for (const p of ps) { const st = propertyStats(p), k = st.share, c = p.currency || H, f = monthFlow(p, st.periods, st.items, y, mo);
+      const now = st.periods.find(r => r.start_date <= today() && (!r.end_date || r.end_date >= today())); if (now) rented++;
+      rentM += conv((f.rent + f.income) * k, c, H) || 0; costM += conv(f.costs * k, c, H) || 0;
+      const v = conv(st.value * k, c, H), i0 = conv(st.invested * k, c, H); if (v != null) perRows.push([esc(p.name), whole(v, H), '', `${i0 ? `<span class="${signCls(v - i0)}">${pct(v / i0 - 1)}</span> · ` : ''}${now ? 'rented ' + money(now.monthly_rent * k, c, { dec: 0 }) + ' a month' : 'not rented'}`, `data-prop="${p.id}"`]); }
+    const netM = rentM - costM;
+    h += secSummary({ label: `Real estate (${H}${ps.some(p => shareOf(p) < 1) ? ', your share' : ''})`, big: whole(val, H),
+      sub: [`${ps.length} propert${ps.length === 1 ? 'y' : 'ies'} · ${rented} rented, ${ps.length - rented} not rented`],
+      stats: [['Initial investment', whole(inv, H)], ['Up or down', sgnW(val - inv, H), signCls(val - inv)], ['Change', pct(ch), signCls(ch)]],
+      rowsTitle: 'This month', rows: [['Rent and other income', whole(rentM, H), 'up'], ['Costs', costM ? '−' + whole(costM, H) : whole(0, H), costM ? 'down' : ''], ['<b>Net</b>', '<b>' + sgnW(netM, H) + '</b>', signCls(netM), val ? `${pct(netM * 12 / val)} a year on the value` : '']].concat(ps.length > 1 ? perRows : []),
+      foot: [`Net rent and costs since you bought: ${sgnW(inc, H)}`, miss ? '<span class="warn-t">One property is not counted: an exchange rate is missing.</span>' : ''] });
+
   }
   h += `<h2 class="sect">Your properties</h2>`;
   if (!ps.length) h += `<div class="card empty">No properties yet.</div>`;
@@ -1446,6 +1467,25 @@ function renderAccounts() {
   h += `<h2 class="sect">Total</h2><div class="card hero"><div class="label">Cash & bank (${H})</div><div class="big">${whole(total, H)}</div>
     ${owed > 0.005 ? `<div class="sub">${whole(total + owed, H)} in accounts and cash, less ${whole(owed, H)} owed on credit cards</div>` : ''}
     ${yearly ? `<div class="sub">About ${whole(yearly, H)} interest a year</div>` : ''}</div>`;
+  { /* 1.30: summary */
+    const open = as.filter(acctOpen), nB = open.filter(a => a.type !== 'credit' && a.type !== 'cash').length, nC = open.filter(a => a.type === 'credit').length, nK = open.filter(a => a.type === 'cash').length;
+    let limit = 0, used = 0; for (const a of open.filter(x => x.type === 'credit' && x.credit_limit > 0)) { const b = acctBalance(a.id); limit += conv(a.credit_limit, a.currency || H, H) || 0; used += Math.max(0, -(conv(b ? b.balance : 0, a.currency || H, H) || 0)); }
+    const [ma, mb] = cfPeriod(1), S = spendBy(ma, mb), [qa] = cfPeriod(3), S3 = spendBy(qa, mb);
+    const off = open.filter(a => reconPeriods(a).some(p => p.diff)), waits = open.reduce((n, a) => { const pf = pendFrom(a.id); return n + (pf ? q('SELECT * FROM transactions WHERE (account_id=? OR to_account_id=?) AND date>=?', [a.id, a.id, pf]).filter(t => isWaiting(t, a.id)).length : 0); }, 0);
+    const exp = typeof expiringCards === 'function' ? expiringCards() : [];
+    h = h.replace(/<h2 class="sect">Total<\/h2><div class="card hero">[\s\S]*$/, '') + secSummary({
+      label: `Cash & bank (${H})`, big: whole(total, H),
+      sub: [`${open.length} account${open.length === 1 ? '' : 's'}: ${[nB && nB + ' bank', nC && nC + ' credit card' + (nC > 1 ? 's' : ''), nK && nK + ' cash'].filter(Boolean).join(', ')}`],
+      stats: [['In accounts and cash', whole(total + owed, H)], ['Owed on cards', owed > 0.5 ? '−' + whole(owed, H) : whole(0, H), owed > 0.5 ? 'down' : ''], limit ? ['Credit left', whole(Math.max(0, limit - used), H) + ` <small>(${Math.round(used / limit * 100)}% used)</small>`, used / limit > 0.7 ? 'down' : ''] : ['Interest a year', yearly ? '≈ ' + whole(yearly, H) : '—']],
+      rowsTitle: 'Money in and out',
+      rows: [['This month', sgnW(S.moneyIn - S.moneyOut, H), signCls(S.moneyIn - S.moneyOut), `in ${whole(S.moneyIn, H)} · out ${whole(S.moneyOut, H)}`, 'data-go="money"'],
+             ['Last 3 months, a month on average', sgnW((S3.moneyIn - S3.moneyOut) / 3, H), signCls(S3.moneyIn - S3.moneyOut), `in ${whole(S3.moneyIn / 3, H)} · out ${whole(S3.moneyOut / 3, H)}`, 'data-go="money"']],
+      foot: [limit && yearly ? `About ${whole(yearly, H)} interest a year on savings` : '',
+             off.length ? `<span class="tap warn-t" data-act="recon" data-id="">⚠ ${off.length} account${off.length > 1 ? 's do' : ' does'} not match the bank: Reconcile ›</span>` : (open.length ? '<span class="up">✓ Every account matches the bank</span>' : ''),
+             waits ? `${waits} entr${waits === 1 ? 'y' : 'ies'} not in a bank file yet` : '',
+             exp.length ? `<span class="warn-t">${exp.map(([a, e]) => esc(a.name) + (e.gone ? ' expired' : ' expires ' + e.label)).join(' · ')}</span>` : '']
+    });
+  }
   h += `<h2 class="sect">Your accounts</h2>`;
   if (seenOff) { const off = body; body = offBody; offBody = off; }   /* body = the open ones; offBody = hidden and closed */
   h += as.length ? (body || '<div class="card empty">Every account is hidden or closed.</div>') : `<div class="card empty">No accounts yet. Add your chequing and savings accounts, credit cards, and cash on hand.</div>`;
@@ -1722,7 +1762,7 @@ function renderMore() {
     <p class="sub">Everything is kept in one SQLite database file on this device. Export it to back it up or to move it to another phone or computer; import it there.</p>
     <div class="btns"><button class="btn" data-act="export">Export database</button><button class="btn light" data-act="import">Import database</button></div>
     <h3 class="ieh">From MMEX (Money Manager Ex)</h3><p class="sub">Brings your accounts, categories, payees, every transaction (cash too), scheduled bills and assets from an MMEX database (.mmb). Import the same file again later and only what is new is added.</p>
-    <div class="btns"><button class="btn" data-act="mmex-import">Import MMEX file</button><button class="btn light" data-act="mmex-repair">Repair from my MMEX file</button></div>
+    <div class="btns"><button class="btn" data-act="mmex-import">Import MMEX file</button></div>
     <h3 class="ieh">From your bank</h3><p class="sub">In your online banking, download your account's history (OFX, QFX, QIF or CSV), then import it here. Your bank password is never needed and the file is read only on this device. Transactions already here are skipped.</p>
     <div class="btns"><button class="btn" data-act="bank-import">Import bank file</button></div>
     ${importsHtml()}
@@ -2102,7 +2142,6 @@ view().addEventListener('click', e => {
     case 'p-clear': state.psel = new Set(); render(); break;
     case 'cat-clean': removeUnusedCats(); break;
     case 'mmex-import': mmexImport(); break;
-    case 'mmex-repair': mmexRepair(); break;
     case 'undo-import': undoImport(+d.id); break;
     case 'start-fresh': startFresh(); break;
     case 'sync-setup': syncSetup(); break;
@@ -3063,7 +3102,16 @@ function renderLoans() {
     return `<div class="txn${l.closed ? ' off' : s.overdue ? ' cost' : ' inc'}" data-loan="${l.id}"><div class="txn-top"><span class="txn-date${s.overdue ? ' warn-t' : ''}">${l.written_off ? 'written off ' + fmtDate(l.written_off) : l.closed ? 'repaid' : l.due_date ? (s.overdue ? 'overdue since ' : 'due ') + fmtDate(l.due_date) : 'lent ' + fmtDate(l.date)}</span><span class="txn-desc">${esc(l.person)}</span></div>
       <div class="txn-body"><div class="sub">lent ${money(l.amount, c, { dec: 0 })}${l.rate ? ' · ' + l.rate + '% a year' : ''}${s.repaid ? ' · repaid ' + money(s.repaid, c, { dec: 0 }) : ''}</div>
       <div class="r">${s.off ? `<div class="strongv down">−${money(s.lost, c)}</div><div class="sub">written off</div>` : `<div class="strongv">${money(s.owed, c)}</div><div class="sub">still owed</div>`}</div></div>${limitBar(s.paidPct).replace('limitbar', 'limitbar paid')}</div>`; });
-  h += `<h2 class="sect">Total</h2><div class="card hero"><div class="label">Owed to you (${H})</div><div class="big">${whole(open, H)}</div><div class="sub">${n} open loan${n === 1 ? '' : 's'}</div></div>`;
+  { /* 1.30: summary */
+    let lent = 0, repaid = 0, interest = 0, lost = 0, over = 0, overN = 0, soon = 0, soonN = 0; const in30 = dstr(dnum(today()) + 30);
+    for (const l of ls) { const s2 = loanStats(l), c = l.currency || H, cv = v => conv(v, c, H) || 0;
+      lent += cv(l.amount); repaid += cv(s2.repaid); interest += cv(s2.interest || 0); if (s2.off) lost += cv(s2.lost);
+      if (!l.closed && s2.overdue) { over += cv(s2.owed); overN++; } else if (!l.closed && l.due_date && l.due_date <= in30) { soon += cv(s2.owed); soonN++; } }
+    h += ls.length ? secSummary({ label: `Owed to you (${H})`, big: whole(open, H), sub: [`${n} open loan${n === 1 ? '' : 's'} · ${ls.length - n} closed`],
+      stats: [['Lent in all', whole(lent, H)], ['Repaid so far', whole(repaid, H), 'up'], ['Interest received', whole(interest, H), interest ? 'up' : '']],
+      rows: [overN ? [`<span class="warn-t">Overdue</span>`, whole(over, H), 'down', `${overN} loan${overN > 1 ? 's' : ''}`] : null, soonN ? ['Due in the next 30 days', whole(soon, H), '', `${soonN} loan${soonN > 1 ? 's' : ''}`] : null, lost ? ['Written off', '−' + whole(lost, H), 'down', 'lent and not coming back'] : null].filter(Boolean),
+      foot: [lent ? `${Math.round(repaid / lent * 100)}% of all you lent has come back` : ''] }) : '';
+  }
   h += `<h2 class="sect">Your loans <span class="sub">money you lent</span></h2>` + (ls.length ? `<div class="card"><div class="txns" style="margin-top:0">${rows.join('')}</div></div>` : `<div class="card empty">No loans yet. Add money you lent to someone: the app keeps track of what is repaid and what is still owed.</div>`);
   h += `<button class="btn wide" data-act="add-loan">+ Add a loan</button>`;
   view().innerHTML = h;
@@ -3744,73 +3792,6 @@ function matchPurchases() {
         run('UPDATE transactions SET link=?, category_id=? WHERE id=?', [tg.link, keepCat ? t.category_id : (sub ? sub.id : t.category_id), t.id]); n++; }
       save(); closeSheet(); toast(n ? n + ' purchase' + (n > 1 ? 's' : '') + ' linked' : 'Nothing linked'); render(); };
   });
-}
-/* ---------------- 1.27: repair an MMEX import ----------------
-   Your balances from the bank stay exactly as they are. What changes is the history behind them:
-   1. MMEX "Asset" accounts (a house, gold…) were made into bank accounts and counted as money, while the same
-      things were also counted as property or assets: their payments become purchases, linked, and the account goes.
-   2. Transfers between currencies get the amount that actually arrived (MMEX keeps it).
-   3. What is still off in any account's history is recorded as a balance correction (not spending or income). */
-async function mmexRepair() {
-  const r = await native('importDb', { title: 'Choose the MMEX database (.mmb) you imported', filter: 'mmex' });
-  if (!r.b64) { if (r.error) toast('Could not open the file: ' + r.error); return; }
-  let m; try { m = new SQL.Database(b64ToBytes(r.b64)); qd(m, 'SELECT 1 FROM ACCOUNTLIST_V1 LIMIT 1'); } catch (e) { return toast('This is not an MMEX database (.mmb).'); }
-  const info = mmexRead(m), H = home(), plan = { assets: [], fx: [] };
-  for (const a of info.accts.filter(x => MMEX_ASSET(x.mtype))) {
-    const x = q('SELECT * FROM accounts WHERE lower(name)=lower(?)', [a.name])[0]; if (!x) continue;
-    const ins = q("SELECT * FROM transactions WHERE to_account_id=? AND kind='transfer'", [x.id]), outs = q("SELECT * FROM transactions WHERE account_id=? AND kind='transfer'", [x.id]);
-    const own = q("SELECT COUNT(*) n FROM transactions WHERE account_id=? AND kind<>'transfer'", [x.id])[0].n, b = acctBalance(x.id);
-    plan.assets.push({ name: a.name, x, ins, outs, own, bal: b ? b.balance : 0 });
-  }
-  const curOf = Object.fromEntries(q('SELECT id, currency FROM accounts').map(a => [a.id, a.currency || H]));
-  for (const t of qd(m, `SELECT TRANSID, TRANSAMOUNT, TOTRANSAMOUNT FROM CHECKINGACCOUNT_V1 WHERE TRANSCODE='Transfer' AND ${info.live} AND TOTRANSAMOUNT>0`)) {
-    const at = q("SELECT * FROM transactions WHERE import_id=? AND kind='transfer'", ['mmex:' + t.TRANSID])[0];
-    if (!at || (Math.abs(t.TOTRANSAMOUNT - t.TRANSAMOUNT) <= 0.004 && curOf[at.account_id] === curOf[at.to_account_id])) continue;   /* same currency, same amount: nothing to keep */
-    if (at && (at.to_amount == null || Math.abs(at.to_amount - t.TOTRANSAMOUNT) > 0.004)) plan.fx.push({ at, to: +t.TOTRANSAMOUNT });
-  }
-  m.close();
-  /* try it, measure, undo: the preview shows exactly what the repair does */
-  const snap = () => Object.fromEntries(q('SELECT * FROM accounts').map(a => { const b = acctBalance(a.id); return [a.id, { name: a.name, cur: a.currency || H, bal: b ? b.balance : null, off: reconPeriods(a).reduce((x, p) => x + Math.abs(p.diff), 0) }]; }));
-  const before = snap(), t0 = totals().total; let after, t1, nCorr = 0;
-  db.exec('BEGIN'); try { mmexRepairApply(plan); BALC = {}; nCorr = correctionsAll(); BALC = {}; after = snap(); t1 = totals().total; } finally { db.exec('ROLLBACK'); BALC = {}; clearCats(); }
-  if (!plan.assets.length && !plan.fx.length && !nCorr) return toast('Nothing to repair: your accounts already agree with MMEX and the bank ✓');
-  const A = Object.fromEntries(q('SELECT id, name, currency FROM accounts').map(a => [a.id, a]));
-  const rows = Object.entries(before).map(([id, b]) => { const a = after[id]; return { id, name: b.name, cur: b.cur, b0: b.bal, b1: a ? a.bal : null, gone: !a, off0: b.off, off1: a ? a.off : 0 }; })
-    .filter(r => r.gone || Math.abs((r.b0 || 0) - (r.b1 || 0)) > 0.004 || r.off0 > 0.004);
-  openSheet(`<h2>Repair from MMEX</h2>
-    <div class="ie3"><div class="stat"><div class="k">Net worth now</div><div class="v">${whole(t0, H)}</div></div><div class="stat"><div class="k">After the repair</div><div class="v">${whole(t1, H)}</div></div><div class="stat"><div class="k">Difference</div><div class="v ${signCls(t1 - t0)}">${whole(t1 - t0, H)}</div></div></div>
-    ${plan.assets.length ? `<h3 class="ieh">Counted twice: MMEX asset accounts</h3><p class="sub">Each was a bank account here and also a property or asset. Its payments become purchases (Savings & investments, linked to it); the account goes.</p>
-      <div class="alloc">${plan.assets.map(x => `<div class="arow ie"><span class="al">${esc(x.name)}<span class="sub"><br>${x.ins.length} payment${x.ins.length === 1 ? '' : 's'} become purchases${x.own ? ` · ${x.own} other entr${x.own === 1 ? 'y stays' : 'ies stay'}: account kept, hidden` : ''}</span></span><span class="av down">−${whole(Math.abs(x.bal), x.x.currency || H)}</span><span class="ap"></span></div>`).join('')}</div>` : ''}
-    ${plan.fx.length ? `<h3 class="ieh">Currency exchanges: the amount that arrived</h3><div class="alloc">${plan.fx.map(f => `<div class="arow ie"><span class="al">${fmtDate(f.at.date)} · ${esc((A[f.at.account_id] || {}).name || '')} → ${esc((A[f.at.to_account_id] || {}).name || '')}<span class="sub"><br>${money(f.at.amount, (A[f.at.account_id] || {}).currency || H)} sent</span></span><span class="av">${money(f.to, (A[f.at.to_account_id] || {}).currency || H)} arrived</span><span class="ap"></span></div>`).join('')}</div>` : ''}
-    <h3 class="ieh">Accounts</h3><div class="dpwrap"><table class="dptab"><thead><tr><th>Account</th><th class="n">Balance now</th><th class="n">After</th><th class="n">Old differences</th></tr></thead><tbody>
-      ${rows.map(r => `<tr><td>${esc(r.name)}</td><td class="n">${r.b0 == null ? '—' : money(r.b0, r.cur)}</td><td class="n">${r.gone ? '<i>removed</i>' : r.b1 == null ? '—' : money(r.b1, r.cur)}</td><td class="n">${r.off0 > 0.004 ? money(r.off0, r.cur) + (r.gone ? '' : ' → ✓') : '✓'}</td></tr>`).join('')}</tbody></table></div>
-    <p class="hint">Balances from your bank do not change. Cash accounts follow MMEX's amounts. ${nCorr ? nCorr + ' balance correction' + (nCorr > 1 ? 's' : '') + ' (not spending or income) make the history of every account add up to its bank balances; you see and can delete them under Reconcile.' : ''} Nothing is deleted except the asset accounts themselves.</p>
-    <label class="switch"><span>Also record old differences as balance corrections</span><input type="checkbox" name="corr" checked></label>
-    <div class="btns"><button class="btn light" data-f="backup">Export a backup first</button></div>
-    <div class="btns"><button class="btn" data-f="go">Repair</button><button class="btn light" data-f="cancel">Cancel</button></div>`, box => {
-    box.onclick = async e => { const f = e.target.dataset.f; if (!f) return; if (f === 'cancel') return closeSheet(); if (f === 'backup') return exportDb();
-      if (f !== 'go') return;
-      db.exec('BEGIN');
-      try { mmexRepairApply(plan); BALC = {}; const n = box.querySelector('[name=corr]').checked ? correctionsAll() : 0; db.exec('COMMIT'); BALC = {}; clearCats(); save(); closeSheet();
-        toast(`Repaired: ${plan.assets.length} asset account${plan.assets.length === 1 ? '' : 's'}, ${plan.fx.length} exchange${plan.fx.length === 1 ? '' : 's'}, ${n} correction${n === 1 ? '' : 's'}`); render(); }
-      catch (er) { db.exec('ROLLBACK'); BALC = {}; bad('Repair failed, nothing changed: ' + er.message); } };
-  });
-}
-function mmexRepairApply(plan) {
-  for (const x of plan.assets) {
-    for (const t of x.ins) run("UPDATE transactions SET kind='out', to_account_id=NULL, to_amount=NULL, payee=COALESCE(NULLIF(payee,''), ?) WHERE id=?", [x.name, t.id]);
-    for (const t of x.outs) run("UPDATE transactions SET kind='in', account_id=to_account_id, to_account_id=NULL, amount=COALESCE(to_amount, amount), to_amount=NULL, payee=COALESCE(NULLIF(payee,''), ?) WHERE id=?", [x.name, t.id]);
-    linkPurchase(x.ins.map(t => t.id).concat(x.outs.map(t => t.id)), x.name);
-    if (x.own) run("UPDATE accounts SET status='hidden', notes=TRIM(COALESCE(notes,'') || ' (MMEX asset account)') WHERE id=?", [x.x.id]);
-    else { run('DELETE FROM account_balances WHERE account_id=?', [x.x.id]); run('DELETE FROM recurring WHERE account_id=? OR to_account_id=?', [x.x.id, x.x.id]); run('DELETE FROM accounts WHERE id=?', [x.x.id]); }
-  }
-  for (const f of plan.fx) run('UPDATE transactions SET to_amount=? WHERE id=?', [f.to, f.at.id]);
-}
-function correctionsAll() {   /* every period that does not match the bank gets a correction; returns how many */
-  const H = home(); let n = 0;
-  for (const a of q('SELECT * FROM accounts')) for (const p of reconPeriods(a).filter(p => p.diff)) {
-    addCorrection(a.id, p.check.date, p.diff, `Repair: the ${a.type === 'cash' ? 'count' : 'bank'} showed ${money(Math.abs(p.bank), a.currency || H)} on ${fmtDate(p.check.date)}`, (p.check.created || 0) - 1); n++; BALC = {}; }
-  return n;
 }
 /* ---------------- 1.18: reconcile with the bank ----------------
    Each balance check (from a bank file, a statement or a cash count) is compared with the check before it plus the
