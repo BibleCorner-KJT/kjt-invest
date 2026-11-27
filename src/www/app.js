@@ -1,9 +1,9 @@
-/* KJT Finance 1.27 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
+/* KJT Finance 1.28 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
    All data stays in one SQLite file on the device. The only network calls are the
    price updates (metal prices from gold-api.com, exchange rates from the European Central Bank). */
 'use strict';
 
-const APP_VERSION = '1.27';
+const APP_VERSION = '1.28';
 const SCHEMA = 11;
 const OZT_G = 31.1034768;
 const METALS = [
@@ -4099,11 +4099,28 @@ function pickTx(row, id) {
 }
 function selBar() {
   const b = document.getElementById('selbar'); if (!b) return;
+  document.body.classList.toggle('selecting', !!state.sel);
   if (!state.sel) { b.hidden = true; return; }
   const n = state.sel.size, all = Array.from(view().querySelectorAll('[data-tx]')).length;
-  b.innerHTML = `<span class="sn"><b>${n}</b> selected</span><button data-sel="all">${n && n === all ? 'None' : 'All'}</button><button data-sel="edit"${n ? '' : ' disabled'}>Edit</button><button data-sel="del" class="dz"${n ? '' : ' disabled'}>Delete</button><button data-sel="done" aria-label="Done">✕</button>`;
-  b.hidden = false;
+  b.innerHTML = `<span class="grip" title="Drag to move this bar" aria-label="Move the bar">⠿</span><span class="sn"><b>${n}</b> selected</span><button data-sel="all">${n && n === all ? 'None' : 'All'}</button><button data-sel="edit"${n ? '' : ' disabled'}>Edit</button><button data-sel="del" class="dz"${n ? '' : ' disabled'}>Delete</button><button data-sel="done" aria-label="Done">✕</button>`;
+  b.hidden = false; placeSelBar();
 }
+/* 1.28: the bar can be dragged anywhere (it remembers where), so it never hides what you want to see */
+let SELPOS = null; try { SELPOS = JSON.parse(localStorage.getItem('kjt_selbar') || 'null'); } catch (e) { SELPOS = null; }
+function placeSelBar() {
+  const b = document.getElementById('selbar'); if (!b || b.hidden) return;
+  if (!SELPOS) { b.style.top = b.style.left = b.style.width = ''; b.style.bottom = b.style.right = ''; return; }
+  const w = Math.min(b.offsetWidth || 360, window.innerWidth - 8), h = b.offsetHeight || 52;
+  const x = Math.max(4, Math.min(window.innerWidth - w - 4, SELPOS.x)), y = Math.max(4, Math.min(window.innerHeight - h - 4, SELPOS.y));
+  Object.assign(b.style, { top: y + 'px', left: x + 'px', bottom: 'auto', right: 'auto', width: w + 'px' });
+}
+(() => { const b = document.getElementById('selbar'); if (!b) return; let drag = null;
+  b.addEventListener('pointerdown', e => { if (!e.target.closest('.grip')) return; e.preventDefault(); const r = b.getBoundingClientRect(); drag = { dx: e.clientX - r.left, dy: e.clientY - r.top, w: r.width }; b.setPointerCapture(e.pointerId); b.classList.add('moving'); });
+  b.addEventListener('pointermove', e => { if (!drag) return; SELPOS = { x: e.clientX - drag.dx, y: e.clientY - drag.dy }; b.style.width = drag.w + 'px'; placeSelBar(); });
+  const end = () => { if (!drag) return; drag = null; b.classList.remove('moving'); try { localStorage.setItem('kjt_selbar', JSON.stringify(SELPOS)); } catch (e) { /* fine */ } };
+  b.addEventListener('pointerup', end); b.addEventListener('pointercancel', end);
+  b.addEventListener('dblclick', e => { if (!e.target.closest('.grip')) return; SELPOS = null; try { localStorage.removeItem('kjt_selbar'); } catch (er) { /* fine */ } placeSelBar(); });
+  window.addEventListener('resize', placeSelBar); })();
 function endSel() { state.sel = null; selBar(); render(); }
 document.getElementById('selbar').addEventListener('click', e => {
   const k = e.target.dataset.sel; if (!k || !state.sel) return;

@@ -25,6 +25,7 @@
   <branding><color type="primary" scheme_preference="light">#f3e2b8</color><color type="primary" scheme_preference="dark">#3e093f</color></branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.28" date="2026-11-27"><description><p>The bar that appears when selecting several transactions can be dragged anywhere (it remembers where); the list makes room for it.</p></description></release>
     <release version="1.27" date="2026-11-27"><description><p>Fixed the MMEX import: asset accounts (a house, gold…) are no longer counted as money as well as property; their payments become linked purchases. Transfers between currencies keep the amount that arrived. New: Repair from my MMEX file, with a full preview; your bank balances stay as they are and old differences become balance corrections. Transfers between currencies have a Received field.</p></description></release>
     <release version="1.26" date="2026-11-27"><description><p>Overview shows each property and each metal under its line. Favourite currencies can be moved up and down.</p></description></release>
     <release version="1.25" date="2026-11-27"><description><p>New Overview summary: net worth from today’s values only, its breakdown, and cash flow for the last 1, 3, 6, 9 or 12 months (the same figures as Reports). Properties page totals: initial investment, current value and change. Reconcile: correct every account at once.</p></description></release>
