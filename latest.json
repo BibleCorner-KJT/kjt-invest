@@ -1,14 +1,14 @@
 {
  "android": {
-  "version": "1.23",
+  "version": "1.24",
   "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-android.apk",
-  "sha256": "343d5b3d3c2cc9a78239b93e1c42c51b740b59ca5b09f3c7e200aac749883d16",
-  "notes": "Reports include rent and property income, and show money in and out. Search boxes in long lists."
+  "sha256": "2fd6fad21881fec3600e668cc61003a534c4a1c0b768c450fb4ef36714a27f65",
+  "notes": "Fixed the 30-day change (bank balance updates shown apart, tap for every part). This month explained. New Breakdown report: deposits and payments by category, payee, account or month, as table, bars or pie."
  },
  "linux": {
-  "version": "1.23",
+  "version": "1.24",
   "page": "https://github.com/BibleCorner-KJT/kjt-invest/tree/releases",
-  "notes": "Reports include rent and property income, and show money in and out. Search boxes in long lists.",
+  "notes": "Fixed the 30-day change (bank balance updates shown apart, tap for every part). This month explained. New Breakdown report: deposits and payments by category, payee, account or month, as table, bars or pie.",
   "x86_64": {
    "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.flatpak",
    "sha256": "ec47c31a31cb00ff7aacbb1461c90bbd41489b5b68be64bb3583e2deae1d9c4a"
@@ -19,7 +19,7 @@
   },
   "zip": {
    "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.zip",
-   "sha256": "f46f3e5359de8bcfd34aa64df83c01a6d6fe1985d217c19f5716ca9b208523a0"
+   "sha256": "df9d090625b9a750b8a31f54173b919a2f4574bde6c4609ac596fee3fdf8748c"
   }
  }
 }
