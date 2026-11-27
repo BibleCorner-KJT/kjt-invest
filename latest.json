@@ -1,14 +1,14 @@
 {
  "android": {
-  "version": "1.22",
+  "version": "1.23",
   "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-android.apk",
-  "sha256": "f90f3d6d167bc58223868c120cd4ed91f67125585c8c090d6cd5321d16615985",
-  "notes": "Fixed the 30-day change and other-asset values. Back no longer goes on endlessly. Colours for every kind of asset."
+  "sha256": "343d5b3d3c2cc9a78239b93e1c42c51b740b59ca5b09f3c7e200aac749883d16",
+  "notes": "Reports include rent and property income, and show money in and out. Search boxes in long lists."
  },
  "linux": {
-  "version": "1.22",
+  "version": "1.23",
   "page": "https://github.com/BibleCorner-KJT/kjt-invest/tree/releases",
-  "notes": "Fixed the 30-day change and other-asset values. Back no longer goes on endlessly. Colours for every kind of asset.",
+  "notes": "Reports include rent and property income, and show money in and out. Search boxes in long lists.",
   "x86_64": {
    "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.flatpak",
    "sha256": "ec47c31a31cb00ff7aacbb1461c90bbd41489b5b68be64bb3583e2deae1d9c4a"
@@ -19,7 +19,7 @@
   },
   "zip": {
    "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.zip",
-   "sha256": "582ee3fd2ab283cb90c073f9e08d14659768ac20fd5045166975bdbf39c658ae"
+   "sha256": "f46f3e5359de8bcfd34aa64df83c01a6d6fe1985d217c19f5716ca9b208523a0"
   }
  }
 }
