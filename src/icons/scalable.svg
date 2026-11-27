@@ -1,16 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#14603d"/><stop offset="1" stop-color="#0a3b24"/></linearGradient>
-    <linearGradient id="au" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f4dc8f"/><stop offset=".55" stop-color="#d6a93c"/><stop offset="1" stop-color="#b98a2a"/></linearGradient>
+    <radialGradient id="bg" cx="0.5" cy="0.28" r="0.85"><stop offset="0" stop-color="#1f9a5e"/><stop offset=".45" stop-color="#0f6b3f"/><stop offset="1" stop-color="#053821"/></radialGradient>
+    <linearGradient id="au" x1="0" y1="0" x2="0.25" y2="1"><stop offset="0" stop-color="#fff4c2"/><stop offset=".28" stop-color="#ffd34d"/><stop offset=".62" stop-color="#e9a514"/><stop offset="1" stop-color="#b87308"/></linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffe58a"/><stop offset=".5" stop-color="#d89a17"/><stop offset="1" stop-color="#ffd650"/></linearGradient>
+    <filter id="sh" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="5" stdDeviation="5" flood-color="#021a0e" flood-opacity=".55"/></filter>
   </defs>
   <rect width="512" height="512" rx="112" fill="url(#bg)"/>
-  <rect x="26" y="26" width="460" height="460" rx="92" fill="none" stroke="url(#au)" stroke-width="5"/>
-  <g id="mark">
-    <path d="M100 200 L256 86 L412 200" fill="none" stroke="url(#au)" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
-    <text x="256" y="300" text-anchor="middle" font-family="DejaVu Serif, Georgia, serif" font-weight="700" font-size="126" fill="url(#au)">KJT</text>
-    <rect x="153" y="368" width="54" height="44" rx="7" fill="url(#au)"/>
-    <rect x="229" y="342" width="54" height="70" rx="7" fill="url(#au)"/>
-    <rect x="305" y="316" width="54" height="96" rx="7" fill="url(#au)"/>
-    <rect x="134" y="420" width="244" height="7" rx="3.5" fill="url(#au)"/>
+  <rect x="24" y="24" width="464" height="464" rx="94" fill="none" stroke="url(#rim)" stroke-width="8"/>
+  <g filter="url(#sh)">
+    <path d="M96 204 L256 84 L416 204" fill="none" stroke="url(#au)" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M122.4833984375 300.0V292.201171875H134.7939453125V211.5703125H122.4833984375V203.771484375H171.9833984375V211.5703125H159.6083984375V246.697265625L200.4072265625 211.5703125H190.0947265625V203.771484375H225.9951171875V211.5703125H213.1689453125L178.6220703125 241.283203125L225.6083984375 292.201171875H235.0830078125V300.0H202.4697265625L159.6083984375 253.271484375V292.201171875H171.9833984375V300.0Z M223.3544921875 323.07421875V307.927734375H231.7333984375Q232.1201171875 313.986328125 234.6015625 316.822265625Q237.0830078125 319.658203125 241.9814453125 319.658203125Q248.2333984375 319.658203125 250.71484375 314.8564453125Q253.1962890625 310.0546875 253.1962890625 296.841796875V211.5703125H239.2099609375V203.771484375H290.4501953125V211.5703125H278.1396484375V297.357421875Q278.1396484375 313.01953125 270.244140625 320.23828125Q262.3486328125 327.45703125 245.1396484375 327.45703125Q239.7900390625 327.45703125 234.3759765625 326.361328125Q228.9619140625 325.265625 223.3544921875 323.07421875Z M321.3896484375 300.0V292.201171875H334.1513671875V212.6015625H307.7900390625V227.8125H298.9599609375V203.771484375H394.3505859375V227.8125H385.6494140625V212.6015625H359.0947265625V292.201171875H371.9208984375V300.0Z" fill="url(#au)"/>
+    <rect x="151" y="366" width="56" height="46" rx="8" fill="url(#au)"/>
+    <rect x="228" y="338" width="56" height="74" rx="8" fill="url(#au)"/>
+    <rect x="305" y="308" width="56" height="104" rx="8" fill="url(#au)"/>
+    <rect x="132" y="422" width="248" height="9" rx="4.5" fill="url(#au)"/>
   </g>
 </svg>
