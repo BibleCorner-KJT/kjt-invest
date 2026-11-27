@@ -1,9 +1,9 @@
-/* KJT Finance 1.31 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
+/* KJT Finance 1.32 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
    All data stays in one SQLite file on the device. The only network calls are the
    price updates (metal prices from gold-api.com, exchange rates from the European Central Bank). */
 'use strict';
 
-const APP_VERSION = '1.31';
+const APP_VERSION = '1.32';
 const SCHEMA = 11;
 const OZT_G = 31.1034768;
 const METALS = [
@@ -5085,6 +5085,13 @@ function renderStewardship() {
     SV('1 Timothy 6:10', 'Luke 16:10-11', 'Matthew 25:21', 'Ecclesiastes 5:10', 'Proverbs 16:8'));
   h += sec('The words of Christ', 'What our Lord taught about treasure, masters and the heart.',
     SV('Matthew 6:19-21', 'Matthew 6:24', 'Matthew 6:33', 'Luke 12:15', 'Luke 12:20-21', 'Mark 12:43-44', 'Matthew 22:21', 'Matthew 16:26', 'Acts 20:35'));
+  const father = (txt, who, src) => `<figure class="verse father nomask"><blockquote>${esc(txt)}</blockquote><figcaption>${esc(who)}<span class="fsrc">, ${esc(src)}</span></figcaption></figure>`;
+  h += sec('From the Church Fathers', 'The holy Fathers taught the same: wealth is a tool to be used rightly, and what we have beyond our needs is entrusted to us for others.',
+    father('If you use it skilfully, it is skilful; if you are deficient in skill, it is affected by your want of skill, being itself destitute of blame. Such an instrument is wealth. Are you able to make a right use of it? It is subservient to righteousness. Does one make a wrong use of it? It is, on the other hand, a minister of wrong. For its nature is to be subservient, not to rule.', 'St. Clement of Alexandria', 'Who Is the Rich Man That Shall Be Saved? 14') +
+    father('Tell me, what is yours? Where did you get it, that you brought it into this life?', 'St. Basil the Great', 'Homily “I will pull down my barns”') +
+    father('The bread you hold back belongs to the hungry; the cloak you keep in your chests belongs to the naked; the shoes rotting in your house belong to the barefoot; the silver you have buried belongs to the one in need.', 'St. Basil the Great', 'Homily “I will pull down my barns”') +
+    father('This also is robbery: not to impart our good things to others.', 'St. John Chrysostom', 'On the Rich Man and Lazarus, Discourse 2') +
+    father('Not to share our own riches with the poor is a robbery of the poor.', 'St. John Chrysostom', 'On the Rich Man and Lazarus, Discourse 2'));
   const stage = (n, t, txt, refs) => `<div class="stage"><div class="stn">${n}</div><div class="stb"><h3>${t}</h3><p>${txt}</p>${SV(...refs)}</div></div>`;
   h += sec('Stages in life', 'Some sound advice, for each season.',
     stage(1, 'Learn and grow', 'Invest first in yourself: learn a trade or a skill well, seek good counsel, and gain wisdom before wealth.', ['Proverbs 1:5', 'Proverbs 4:7']) +
@@ -5094,6 +5101,6 @@ function renderStewardship() {
     `<div class="stage"><div class="stn">·</div><div class="stb"><h3>About debt</h3><p>Borrow little and repay what you owe; debt makes us servants.</p>${SV('Proverbs 22:7', 'Romans 13:8')}</div></div>`);
   h += sec('In remembrance of God in everything', 'All of it fairly, and in constant remembrance of God in everything you do.',
     SV('1 Corinthians 10:31', 'Colossians 3:17', 'Proverbs 3:6'));
-  h += `<p class="sub stwfoot">Scripture quotations from the King James Version (public domain). <span class="xc">☩</span> marks the words of Christ.</p>`;
+  h += `<p class="sub stwfoot">Scripture quotations from the King James Version (public domain). <span class="xc">☩</span> marks the words of Christ. Church Fathers: St. Clement from the Ante-Nicene Fathers translation, St. John Chrysostom from the 1869 translation of his discourses (both public domain); St. Basil translated from the Greek for this app.</p>`;
   view().innerHTML = h;
 }
