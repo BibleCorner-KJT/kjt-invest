@@ -1,9 +1,9 @@
-/* KJT Finance 1.24 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
+/* KJT Finance 1.25 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
    All data stays in one SQLite file on the device. The only network calls are the
    price updates (metal prices from gold-api.com, exchange rates from the European Central Bank). */
 'use strict';
 
-const APP_VERSION = '1.24';
+const APP_VERSION = '1.25';
 const SCHEMA = 11;
 const OZT_G = 31.1034768;
 const METALS = [
@@ -760,7 +760,7 @@ function renderOverview() {
   setTitle('KJT Finance');
   const t = totals(), H = home();
   const nAll = ['metal_holdings', 'properties', 'accounts', 'other_assets', 'loans'].reduce((n, tb) => n + q(`SELECT COUNT(*) n FROM ${tb}`)[0].n, 0);
-  let h = missingWarn() + `<h2 class="sect" data-ftot="${esc(whole(t.total, H))}">Summary <span class="sub">swipe the box for more</span></h2>` + heroHtml(t);
+  let h = missingWarn() + `<h2 class="sect" data-ftot="${esc(whole(t.total, H))}">Summary</h2>` + summaryHtml(t);
   if (!nAll) {
     h += `<div class="card"><h2>Welcome</h2><p class="sub">Add what you own. Everything stays on this device, in one file you can export at any time.</p>
       <div class="btns"><button class="btn" data-act="add-metal">Add precious metal</button><button class="btn" data-act="add-property">Add property</button><button class="btn" data-act="add-account">Add bank account</button><button class="btn" data-act="add-asset">Add other asset</button></div>
@@ -795,7 +795,7 @@ function renderOverview() {
   h += `<h2 class="sect" data-ftot="${esc((ie12.net >= 0 ? '+' : '') + whole(ie12.net, H))} net, 12 months">Income & expenses</h2>` + ieCard();
   h += `<h2 class="sect">Current prices <span class="sub">${mcur()} per ${pname()}</span></h2><div class="card tap" data-go="markets">${priceStrip()}</div>`;
   if (nAll) h += `<button class="btn wide light" data-act="print-report">Print the report or save it as a PDF</button>`;
-  view().innerHTML = h; bindHero(); bindChart();
+  view().innerHTML = h; bindChart();
 }
 /* ---------------- 1.3: metal pictures, other assets, overview pages ---------------- */
 const METAL_COL = { XAU: ['#f7dc85', '#c9971f', '#7a5a06'], XAG: ['#f3f5f7', '#a9b2ba', '#59626b'], XPT: ['#e6edf3', '#93a6b8', '#4a5b6c'], XPD: ['#f1ebe3', '#b6a998', '#675d50'] };
@@ -961,7 +961,8 @@ function changeAudit(d1) {
   for (const a of q('SELECT * FROM accounts')) {
     const c = a.currency || H, k = shareOf(a), bf = balanceFn(a), b1 = bf(d1), b0 = bf(d0); if (b1 == null && b0 == null) continue;
     const txs = q('SELECT * FROM transactions WHERE (account_id=? OR to_account_id=?) AND date>? AND date<=?', [a.id, a.id, d1, d0]);
-    let f = 0; for (const t of txs) f += txEffect(t, a.id, c);
+    const cc = (cats().rows.find(x => !x.parent_id && x.name === 'Balance corrections') || {}).id;
+    let f = 0; for (const t of txs) if (!(cc && t.category_id === cc)) f += txEffect(t, a.id, c);   /* corrections are balance updates, not money */
     const j = ((b0 || 0) - (b1 || 0)) - f;
     const v1 = c === H ? (b1 || 0) * k : convOn((b1 || 0) * k, c, H, d1) || 0, v0 = c === H ? (b0 || 0) * k : conv((b0 || 0) * k, c, H) || 0;
     const fH = c === H ? f * k : conv(f * k, c, H) || 0, jH = c === H ? j * k : conv(j * k, c, H) || 0, xH = v0 - v1 - fH - jH;
@@ -1103,6 +1104,34 @@ function heroPages(t) {
       <p class="sub" style="margin:8px 0 0">Real estate counts its net rent too. Cash is not a gain.</p>`,
   ];
 }
+/* 1.25: the summary. Net worth and its parts are today's values only (no history, so nothing can drift);
+   cash flow is the money in and out in the chosen months, the same figures as Cash flow › Reports. */
+const CF_TABS = [[1, '1 month'], [3, '3'], [6, '6'], [9, '9'], [12, '12']];
+function cfPeriod(n) { const t = today(), y = +t.slice(0, 4), m = +t.slice(5, 7) - (n - 1), yy = y + Math.floor((m - 1) / 12), mm = ((m - 1) % 12 + 12) % 12 + 1; return [`${yy}-${String(mm).padStart(2, '0')}-01`, t]; }
+function summaryHtml(t) {
+  const H = home(), gross = t.cash + t.debt;
+  const parts = [['accounts', 'Cash & bank accounts', gross, 'cat-c'], ['property', 'Property', t.re, 'cat-p'], ['metals', 'Precious metals', t.metals, 'cat-m'], ['loans', 'Loans you made', t.loans || 0, 'cat-l'], ['assets', 'Other assets', t.other, 'cat-o']].filter(x => Math.abs(x[2]) >= 0.5);
+  const own = parts.reduce((a, x) => a + Math.max(0, x[2]), 0) || 1;
+  const n = state.cfN || 1, [a, b] = cfPeriod(n), S = spendBy(a, b);
+  const mlist = []; for (let k = n - 1; k >= 0; k--) { const [ma] = cfPeriod(k + 1); const y = +ma.slice(0, 4), m = +ma.slice(5, 7), end = dstr(dnum(m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, '0')}-01`) - 1); const x = spendBy(ma, end > today() ? today() : end); mlist.push({ ym: ma.slice(0, 7), inn: x.moneyIn, out: x.moneyOut }); }
+  const mx = Math.max(1, ...mlist.map(x => Math.max(x.inn, x.out))), net = S.moneyIn - S.moneyOut, gain = (t.metals - t.metalsCost) + (t.re - t.reInvested) + (t.other - t.otherCost), paid = t.metalsCost + t.reInvested + t.otherCost;
+  return `<div class="card hero sumc">
+    <div class="label">Net worth (${H})</div><div class="big">${whole(t.total, H)}</div>
+    ${t.debt > 0.5 ? `<div class="sub">You own ${whole(t.total + t.debt, H)} · you owe ${whole(t.debt, H)} on credit cards</div>` : ''}
+    ${paid ? `<div class="sub">Gain on what you bought: <span class="${signCls(gain)}">${whole(gain, H)} (${pct(gain / paid)})</span></div>` : ''}
+    ${t.missing ? '<div class="sub warn-t">Some items are not counted: an exchange rate or price is missing.</div>' : ''}
+    <div class="stack" style="margin-top:12px">${parts.filter(x => x[2] > 0).map(x => `<i class="${x[3]}" style="width:${(x[2] / own * 100).toFixed(2)}%"></i>`).join('')}</div>
+    <div class="alloc">${parts.map(x => `<div class="arow tap" data-go="${x[0]}"><span class="sw ${x[3]}"></span><span class="al">${x[1]}</span><span class="ap">${x[2] > 0 ? (x[2] / own * 100).toFixed(1) + '%' : ''}</span><span class="av">${whole(x[2], H)}</span><span class="go">›</span></div>`).join('')}
+      ${t.debt > 0.5 ? `<div class="arow tap" data-go="accounts"><span class="sw" style="background:var(--down)"></span><span class="al">Owed on credit cards</span><span class="ap"></span><span class="av down">−${whole(t.debt, H)}</span><span class="go">›</span></div>` : ''}
+      <div class="arow tot"><span class="sw"></span><span class="al"><b>Net worth</b></span><span class="ap"></span><span class="av"><b>${whole(t.total, H)}</b></span><span class="go"></span></div></div>
+    <div class="sumcf"><div class="row" style="padding:0"><b>Cash flow, last ${n === 1 ? 'month (this month so far)' : n + ' months'}</b><span class="sub">${fmtDate(a)} – ${fmtDate(b)}</span></div>
+      <div class="segs" style="margin:8px 0">${CF_TABS.map(([k]) => `<button class="seg${n === k ? ' on' : ''}" data-act="cf-n" data-v="${k}">${k} mo</button>`).join('')}</div>
+      <div class="ie3"><div class="stat"><div class="k">Money in</div><div class="v up">${whole(S.moneyIn, H)}</div></div><div class="stat"><div class="k">Money out</div><div class="v down">${whole(S.moneyOut, H)}</div></div><div class="stat"><div class="k">Net</div><div class="v ${signCls(net)}">${(net >= 0 ? '+' : '−') + whole(Math.abs(net), H)}</div></div></div>
+      ${n > 1 ? `<div class="sub" style="margin-top:6px">${whole(S.moneyIn / n, H)} in and ${whole(S.moneyOut / n, H)} out a month on average</div>
+        <div class="iebars" style="grid-template-columns:repeat(${n},1fr)">${mlist.map(x => `<div class="ieb" title="${x.ym}: in ${whole(x.inn, H)}, out ${whole(x.out, H)}"><div class="iebp"><i class="in" style="height:${(x.inn / mx * 100).toFixed(1)}%"></i><i class="out" style="height:${(x.out / mx * 100).toFixed(1)}%"></i></div><span>${MONTHS[+x.ym.slice(5, 7) - 1][0]}</span></div>`).join('')}</div>
+        <div class="legend"><span><i class="lin"></i>Money in</span><span><i class="lout"></i>Money out</span></div>` : ''}
+      <p class="sub" style="margin:6px 0 0">Every deposit and payment in your accounts, plus rent and costs set on your properties; moves between your own accounts left out. The same as Cash flow › Reports. <span class="tap" data-go="money" style="text-decoration:underline">Open Cash flow ›</span></p></div></div>`;
+}
 function heroHtml(t) {
   const pages = heroPages(t);
   return `<div class="card hero heroc"><div class="hero-scroll" id="heroS">${pages.map(p => `<section class="hpage">${p}</section>`).join('')}</div>
@@ -1212,7 +1241,21 @@ function renderMetals() {
 function renderProperties() {
   setTitle('Real estate');
   const ps = q('SELECT * FROM properties ORDER BY name');
-  let h = missingWarn() + `<h2 class="sect">Your properties</h2>`;
+  let h = missingWarn();
+  if (ps.length) {   /* 1.25: totals, in your home currency, your share */
+    const H = home(); let val = 0, inv = 0, perM = 0, inc = 0, miss = false;
+    for (const p of ps) { const s = propertyStats(p), k = s.share, c = p.currency || H, cv = v => conv(v * k, c, H);
+      const v = cv(s.value), i = cv(s.invested); if (v == null || i == null) { miss = true; continue; } val += v; inv += i; perM += cv(s.perMonth || 0) || 0; inc += cv(s.sumNet || 0) || 0; }
+    const ch = inv ? val / inv - 1 : null;
+    h += `<h2 class="sect" data-ftot="${esc(whole(val, H))}">Total</h2><div class="card hero"><div class="label">Real estate (${H}${ps.some(p => shareOf(p) < 1) ? ', your share' : ''})</div><div class="big">${whole(val, H)}</div>
+      <div class="sub">current value of ${ps.length} propert${ps.length === 1 ? 'y' : 'ies'}</div>
+      <div class="ie3" style="margin-top:10px"><div class="stat"><div class="k">Initial investment</div><div class="v">${whole(inv, H)}</div></div>
+        <div class="stat"><div class="k">Up or down</div><div class="v ${signCls(val - inv)}">${(val - inv >= 0 ? '+' : '−') + whole(Math.abs(val - inv), H)}</div></div>
+        <div class="stat"><div class="k">Change</div><div class="v ${signCls(ch)}">${pct(ch)}</div></div></div>
+      <div class="sub" style="margin-top:8px">Net rent and costs: ${whole(perM, H)} a month · ${whole(inc, H)} so far</div>
+      ${miss ? '<div class="sub warn-t">One property is not counted: an exchange rate is missing.</div>' : ''}</div>`;
+  }
+  h += `<h2 class="sect">Your properties</h2>`;
   if (!ps.length) h += `<div class="card empty">No properties yet.</div>`;
   for (const p of ps) {
     const s = propertyStats(p), c = p.currency || home(), k = s.share;
@@ -2017,6 +2060,8 @@ view().addEventListener('click', e => {
     case 'find-xfer': offerTransfers(false); break;
     case 'stmt-bal': stmtBalances(+d.id); break;
     case 'why-change': changeSheet(); break;
+    case 'cf-n': { state.cfN = +d.v; const st = view().scrollTop; render(); view().scrollTop = st; break; }
+    case 'fix-all-accts': correctEveryAccount(); break;
     case 'bd-view': { state.bdView = d.v; const st = view().scrollTop; render(); view().scrollTop = st; break; }
     case 'bd-measure': { state.bdMeasure = d.v; const st = view().scrollTop; render(); view().scrollTop = st; break; }
     case 'why-month': monthSheet(); break;
@@ -2793,7 +2838,7 @@ function spendBy(a, b) {   /* household spending by top category (in home curren
     for (const [kk, v] of Object.entries(x.byKind)) { if (v <= 0.005) continue;
       const name = kk === 'cat:Loans written off' ? 'Loans written off' : kk.startsWith('cat:') ? null : pmeta(kk)[0] + ' (property)';
       if (name) { out[name] = (out[name] || 0) + v; total += v; count++; } } }
-  const sum = o => Object.values(o).reduce((x, y) => x + y, 0), moneyIn = totalIn + sum(flowIn), moneyOut = total + sum(flowOut);
+  const sum = o => Object.values(o).reduce((x, y) => x + y, 0), moneyIn = totalIn - (inc['Interest (estimated)'] || 0) + sum(flowIn), moneyOut = total + sum(flowOut);
   return { out, inc, total, totalIn, count, payees, big: big.sort((x, y) => y[0] - x[0]), flowIn, flowOut, moneyIn, moneyOut };
 }
 function reportsHtml() {
@@ -3853,6 +3898,17 @@ function errorForm(id) {
       save(); closeSheet(); toast('Error recorded as a balance correction'); render(); };
   });
 }
+/* 1.25: every account at once: a correction in each period that does not match the bank, so all history agrees with the bank */
+async function correctEveryAccount() {
+  const H = home(), todo = q('SELECT * FROM accounts').map(a => [a, reconPeriods(a).filter(p => p.diff)]).filter(([, ps]) => ps.length);
+  if (!todo.length) return toast('Every account already agrees with the bank ✓');
+  const n = todo.reduce((x, [, ps]) => x + ps.length, 0);
+  if (!await ask(`Add ${n} correction${n > 1 ? 's' : ''} in ${todo.length} account${todo.length > 1 ? 's' : ''} (${todo.map(([a, ps]) => a.name + ' ' + money(ps.reduce((x, p) => x + p.diff, 0), a.currency || H, { dec: 0 })).join(', ')})? Each period that does not match the bank gets one, under "Balance corrections" (not spending or income). Your balances do not change; the history then adds up. You can delete any of them later.`, 'Correct them')) return;
+  db.exec('BEGIN');
+  try { for (const [a, ps] of todo) for (const p of ps) addCorrection(a.id, p.check.date, p.diff, `Reconcile: the ${a.type === 'cash' ? 'count' : 'bank'} showed ${money(Math.abs(p.bank), a.currency || H)} on ${fmtDate(p.check.date)}`, (p.check.created || 0) - 1); db.exec('COMMIT'); }
+  catch (e) { db.exec('ROLLBACK'); return bad('Could not add: ' + e.message); }
+  save(); toast(n + ' correction' + (n > 1 ? 's' : '') + ' added'); render();
+}
 async function correctAll(id) {
   const a = q('SELECT * FROM accounts WHERE id=?', [id])[0]; if (!a) return; const c = a.currency || home();
   const ps = reconPeriods(a).filter(p => p.diff), tot = ps.reduce((s2, p) => s2 + p.diff, 0); if (!ps.length) return;
@@ -3869,7 +3925,7 @@ function renderRecon(id) {
     setTitle('Reconcile', true);
     const as = q("SELECT * FROM accounts ORDER BY CASE type WHEN 'cash' THEN 2 WHEN 'credit' THEN 1 ELSE 0 END, name");
     let h = `<div class="card"><p class="sub" style="margin:0">Each balance from your bank (or each cash count) is compared with your transactions since the one before. A difference means something is missing, doubled or wrong in that period. Tap an account to see it month by month.</p>
-      <div class="btns"><button class="btn light" data-act="find-xfer">Find transfers between accounts</button></div></div><h2 class="sect">Accounts</h2><div class="card">`;
+      <div class="btns"><button class="btn light" data-act="find-xfer">Find transfers between accounts</button><button class="btn light" data-act="fix-all-accts">Correct every account…</button></div></div><h2 class="sect">Accounts</h2><div class="card">`;
     h += as.map(a => { const ps = reconPeriods(a), off = ps.filter(p => p.diff), tot = off.reduce((s, p) => s + p.diff, 0), c = a.currency || home(), last = ps[ps.length - 1];
       const pf = pendFrom(a.id), waits = pf ? q('SELECT * FROM transactions WHERE (account_id=? OR to_account_id=?) AND date>=?', [a.id, a.id, pf]).filter(t => isWaiting(t, a.id)).length : 0;
       const st = !ps.length ? '<span class="sub">needs two balances to compare</span>' : off.length ? `<span class="down">${off.length} period${off.length > 1 ? 's' : ''} off · ${tot > 0 ? '+' : tot < 0 ? '−' : ''}${money(Math.abs(tot), c)} in all</span>` : '<span class="up">✓ all agree</span>';

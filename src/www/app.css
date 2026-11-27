@@ -660,3 +660,11 @@ input.selsearch, .sheet-box input.selsearch, label.f input.selsearch { width: 10
 .plr i { width: 12px; height: 12px; border-radius: 3px; }
 .plr .pv, .plr .pp { text-align: right; } .plr .pp { color: var(--muted); font-size: .82rem; }
 .plr.tot { border-top: 1px solid var(--line); padding-top: 6px; }
+
+/* 1.25: summary */
+.sumc .alloc { margin-top: 8px; }
+.sumc .arow.tot { border-top: 2px solid var(--line); margin-top: 4px; padding-top: 6px; }
+.sumcf { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line); text-align: left; }
+.sumcf .row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.sw.cat-c { background: var(--cat-c); } .sw.cat-p { background: var(--cat-p); } .sw.cat-m { background: var(--cat-m); } .sw.cat-l { background: var(--cat-l); } .sw.cat-o { background: var(--cat-o); }
+.stack i.cat-c { background: var(--cat-c); } .stack i.cat-p { background: var(--cat-p); } .stack i.cat-m { background: var(--cat-m); } .stack i.cat-l { background: var(--cat-l); } .stack i.cat-o { background: var(--cat-o); }
