@@ -1,14 +1,14 @@
 {
  "android": {
-  "version": "1.24",
+  "version": "1.26",
   "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-android.apk",
-  "sha256": "2fd6fad21881fec3600e668cc61003a534c4a1c0b768c450fb4ef36714a27f65",
-  "notes": "Fixed the 30-day change (bank balance updates shown apart, tap for every part). This month explained. New Breakdown report: deposits and payments by category, payee, account or month, as table, bars or pie."
+  "sha256": "5356a0aedb152e5957443aba10ea44b80ac4b29c242466766801d96774e432e3",
+  "notes": "New Overview summary: net worth, breakdown (each property and metal), cash flow for 1-12 months. Property totals. Correct every account at once. Reorder favourite currencies."
  },
  "linux": {
-  "version": "1.24",
+  "version": "1.26",
   "page": "https://github.com/BibleCorner-KJT/kjt-invest/tree/releases",
-  "notes": "Fixed the 30-day change (bank balance updates shown apart, tap for every part). This month explained. New Breakdown report: deposits and payments by category, payee, account or month, as table, bars or pie.",
+  "notes": "New Overview summary: net worth, breakdown (each property and metal), cash flow for 1-12 months. Property totals. Correct every account at once. Reorder favourite currencies.",
   "x86_64": {
    "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.flatpak",
    "sha256": "ec47c31a31cb00ff7aacbb1461c90bbd41489b5b68be64bb3583e2deae1d9c4a"
@@ -19,7 +19,7 @@
   },
   "zip": {
    "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.zip",
-   "sha256": "df9d090625b9a750b8a31f54173b919a2f4574bde6c4609ac596fee3fdf8748c"
+   "sha256": "9087511010112dd92e8fe39fd9943729ca031de191c34ede74adfc07eb6a32b7"
   }
  }
 }
