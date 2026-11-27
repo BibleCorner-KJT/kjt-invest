@@ -600,3 +600,25 @@ ol.steps { margin: 8px 0; padding-left: 20px; display: grid; gap: 6px; font-size
 :root[data-mode="dark"] .acard .gbadge .gico { stroke: #111; }
 .simg { border: 1px solid var(--line); border-radius: 12px; padding: 10px; margin: 10px 0; }
 .simname { width: 100%; margin-top: 6px; }
+
+/* 1.22: colour for every kind of asset, everywhere (accounts teal, property purple, metals gold, loans rose, other blue) */
+#view[data-page="accounts"] { --tc: var(--cat-c); } #view[data-page="property"] { --tc: var(--cat-p); } #view[data-page="metals"] { --tc: var(--cat-m); }
+#view[data-page="loans"] { --tc: var(--cat-l); } #view[data-page="assets"] { --tc: var(--cat-o); }
+#view:is([data-page="accounts"], [data-page="property"], [data-page="metals"], [data-page="loans"], [data-page="assets"]) > h2.sect::before { background: var(--tc); }
+#view:is([data-page="accounts"], [data-page="property"], [data-page="metals"], [data-page="loans"], [data-page="assets"]) .card.hero { border-top: 4px solid var(--tc); background: linear-gradient(180deg, color-mix(in srgb, var(--tc) 12%, var(--card)), var(--card) 75%); }
+#view:is([data-page="property"], [data-page="metals"], [data-page="loans"], [data-page="assets"]) .card:not(.hero):not(.empty):not(.acard) { border-left: 4px solid var(--tc); }
+#view:is([data-page="property"], [data-page="loans"], [data-page="assets"]) .pbadge { background: var(--tc); color: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.15); }
+#view:is([data-page="property"], [data-page="loans"], [data-page="assets"]) .pbadge svg { stroke: #fff; color: #fff; }
+#view[data-page="metals"] .pbadge { background: color-mix(in srgb, var(--tc) 20%, var(--card)); border: 1px solid color-mix(in srgb, var(--tc) 45%, var(--card)); }
+:root[data-mode="dark"] #view:is([data-page="property"], [data-page="loans"], [data-page="assets"]) .pbadge svg { stroke: #141014; color: #141014; }
+#view:is([data-page="property"], [data-page="metals"], [data-page="loans"], [data-page="assets"]) .txn { border-left-color: var(--tc); }
+/* the Assets sub-menu: each choice in its colour */
+.subnav [data-asec="accounts"] { --sc: var(--cat-c); } .subnav [data-asec="property"] { --sc: var(--cat-p); } .subnav [data-asec="metals"] { --sc: var(--cat-m); }
+.subnav [data-asec="loans"] { --sc: var(--cat-l); } .subnav [data-asec="assets"] { --sc: var(--cat-o); }
+.subnav [data-asec] svg { color: var(--sc); stroke: var(--sc); }
+.subnav [data-asec].on { box-shadow: inset 0 -3px 0 var(--sc); }
+/* Overview: the "What you own" cards */
+.ocard { border-left: 4px solid var(--oc, var(--line)); }
+.ocard[data-go="accounts"] { --oc: var(--cat-c); } .ocard[data-go="property"] { --oc: var(--cat-p); } .ocard[data-go="metals"] { --oc: var(--cat-m); }
+.ocard[data-go="loans"] { --oc: var(--cat-l); } .ocard[data-go="assets"] { --oc: var(--cat-o); }
+.ocard .pbadge, .ocard .oico { color: var(--oc); }

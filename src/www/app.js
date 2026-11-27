@@ -1,9 +1,9 @@
-/* KJT Finance 1.21 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
+/* KJT Finance 1.22 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
    All data stays in one SQLite file on the device. The only network calls are the
    price updates (metal prices from gold-api.com, exchange rates from the European Central Bank). */
 'use strict';
 
-const APP_VERSION = '1.21';
+const APP_VERSION = '1.22';
 const SCHEMA = 11;
 const OZT_G = 31.1034768;
 const METALS = [
@@ -453,9 +453,9 @@ function totals() {
   const lt = loansTotal();
   let other = 0, otherCost = 0;
   for (const a of q('SELECT * FROM other_assets')) {
-    const v = assetValue(a.id); if (!v) continue; const k = shareOf(a);
-    const hv = conv(v.value * k, a.currency || H, H); if (hv == null) { missing = true; continue; }
-    other += hv; otherCost += conv((a.purchase_price != null ? a.purchase_price : v.value) * k, a.currency || H, H) || 0;
+    const v = assetValue(a.id), val = v ? v.value : a.purchase_price; if (val == null) continue; const k = shareOf(a);   /* 1.22: no value entered yet = what you paid */
+    const hv = conv(val * k, a.currency || H, H); if (hv == null) { missing = true; continue; }
+    other += hv; otherCost += conv((a.purchase_price != null ? a.purchase_price : val) * k, a.currency || H, H) || 0;
   }
   return { other, otherCost, cash, metals, metalsCost, metalsM, metalsCostM, re, reInvested, reIncome, reLastNet, reLastYear, debt, loans: lt.total, total: metals + re + cash + other + lt.total, missing: missing || lt.missing };
 }
@@ -706,6 +706,7 @@ function render() {
     setTitle('Assets');
     view().insertAdjacentHTML('afterbegin', `<div class="subnav">${ASECS.map(([k, l]) => subBtn(k, l, k === state.tab, 'data-asec')).join('')}</div>`);
   }
+  view().dataset.page = state.tab;   /* 1.22: each section of Assets has its own colour */
   enhanceView();
   settingsNav();
   markAmounts();
@@ -821,7 +822,11 @@ const ASSET_TYPES = {
   other: ['Other', '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 12h6M12 9v6"/>'],
 };
 const assetIcon = (t, size) => `<svg class="picon" viewBox="0 0 24 24" width="${size || 26}" height="${size || 26}" aria-hidden="true">${(ASSET_TYPES[t] || ASSET_TYPES.other)[1]}</svg>`;
-function assetValue(id) { const r = q('SELECT * FROM asset_values WHERE asset_id=? ORDER BY date DESC, id DESC LIMIT 1', [id]); return r[0] || null; }
+function assetValue(id) {   /* its latest value; 1.22: with none entered yet, what you paid for it (everywhere the same) */
+  const r = q('SELECT * FROM asset_values WHERE asset_id=? ORDER BY date DESC, id DESC LIMIT 1', [id]); if (r[0]) return r[0];
+  const a = q('SELECT purchase_price, purchase_date FROM other_assets WHERE id=?', [id])[0];
+  return a && a.purchase_price != null ? { value: a.purchase_price, date: a.purchase_date, note: 'price paid', paid: true } : null;
+}
 
 function renderAssets() {
   setTitle('Other assets');
@@ -920,10 +925,12 @@ function interp(anchors, d) {   /* anchors: [[date, value]] sorted; straight lin
   }
   return 0;
 }
-function worthModel() {
+function worthModel() { return BALC.__wm || (BALC.__wm = worthModel0()); }   /* 1.22: built once until something changes */
+function worthModel0() {
   const H = home(), now = today(), items = [];
   for (const h of q('SELECT * FROM metal_holdings')) { const s = holdingStats(h);
     items.push({ kind: 'm', from: h.purchase_date || '0000', at: d => { const p = d >= now ? spotIn(h.metal, H) : priceOn(h.metal, d, H); return p == null ? null : s.oz * p; },
+      fallback: () => { const p = spotIn(h.metal, H); return p == null ? null : s.oz * p; },
       paid: d => convOn(s.cost || 0, h.currency || H, H, h.purchase_date || d) }); }
   for (const p of q('SELECT * FROM properties')) { const st = propertyStats(p), k = st.share, c = p.currency || H;
     const an = st.anchors;
@@ -940,6 +947,12 @@ function worthModel() {
     if (!an.length) continue;
     items.push({ kind: 'o', from: an[0][0], at: d => convOn(interp(an, d) * k, c, H, d), paid: d => convOn((a.purchase_price != null ? a.purchase_price : an[0][1]) * k, c, H, an[0][0]) }); }
   return items;
+}
+/* 1.22: what everything was worth on one day, by kind, valued the same way as today (a missing old price uses today's) */
+function worthAt(d, items) {
+  const by = { c: 0, m: 0, p: 0, l: 0, o: 0 };
+  for (const it of items || worthModel()) { if (it.from > d) continue; let x = it.at(d); if (x == null && it.fallback) x = it.fallback(); if (x != null && !Number.isNaN(x)) by[it.kind] += x; }
+  return by;
 }
 function worthSeries(range) {
   const items = worthModel(); if (!items.length) return [];
@@ -1013,11 +1026,14 @@ function heroPages(t) {
   else { const f = pts[0][1], l = pts[pts.length - 1][1];
     perf = `<div class="chart-head"><div class="sub">Value of everything (${H})</div><div class="r ${signCls(l - f)}">${pct(f ? l / f - 1 : null)}</div></div>` + lineChart('worth', pts, true, H, false, ['Value', 'Paid in']); }
   const prs = ['1Y', '5Y', 'All'].map(k => `<button class="seg${state.prange === k ? ' on' : ''}" data-prange="${k}">${k}</button>`).join('');
-  const m30 = pts.length > 1 ? pts.filter(p => p[0] <= dstr(dnum(today()) - 30)).pop() : null;
-  const ch30 = m30 ? t.total - m30[1] : null;
+  /* 1.22: the change over exactly 30 days, both days valued the same way, and where it came from */
+  const items = worthModel(), d30 = dstr(dnum(today()) - 30), w0 = worthAt(today(), items), w1 = worthAt(d30, items);
+  const KN = { c: 'accounts', m: 'metals', p: 'property', l: 'loans', o: 'other' }, parts30 = Object.keys(KN).map(k => [k, w0[k] - w1[k]]).filter(([, v]) => Math.abs(v) >= 1);
+  const ch30 = items.some(it => it.from <= d30) ? Object.values(w0).reduce((a, b) => a + b, 0) - Object.values(w1).reduce((a, b) => a + b, 0) : null;
   return [
     `<div class="label">Total value (${H})</div><div class="big">${whole(t.total, H)}</div>
-      ${ch30 != null ? `<div class="sub"><span class="${signCls(ch30)}">${ch30 >= 0 ? '+' : ''}${whole(ch30, H)}</span> in the last month</div>` : ''}
+      ${ch30 != null ? `<div class="sub"><span class="${signCls(ch30)}">${ch30 >= 0 ? '+' : ''}${whole(ch30, H)}</span> since ${fmtDate(d30)}</div>
+        ${parts30.length > 1 || (parts30.length === 1 && parts30[0][0] !== 'c') ? `<div class="sub small">${parts30.map(([k, v]) => `${KN[k]} <span class="${signCls(v)}">${v >= 0 ? '+' : ''}${whole(v, H)}</span>`).join(' · ')}</div>` : ''}` : ''}
       ${totalPaid ? `<div class="sub">Gain on what you bought: <span class="${signCls(totalGain)}">${whole(totalGain, H)} (${pct(totalGain / totalPaid)})</span></div>` : ''}
       ${t.missing ? '<div class="sub">Some items are not counted yet: an exchange rate or price is missing.</div>' : ''}
       <div class="sub swipehint">Swipe for more ›</div>`,
@@ -1844,13 +1860,13 @@ document.getElementById('tabs').onclick = e => { const b = e.target.closest('but
   let t = b.dataset.tab;
   if (t === 'assetsgroup') t = isAsset(state.tab) ? state.tab : (state.lastAsec || 'accounts');
   if (state.tab === t || b.dataset.tab === 'assetsgroup') { state.propertyId = null; state.accountId = null; state.assetId = null; state.loanId = null; }
-  state.tab = t; render(); view().scrollTop = 0; };
+  navRoot(); state.tab = t; render(); view().scrollTop = 0; };
 document.getElementById('refresh').onclick = () => updatePrices(false);
 document.getElementById('eye').onclick = () => { PREFS.hideAmt = !PREFS.hideAmt; applyLook(); savePrefs(); toast(PREFS.hideAmt ? 'Amounts hidden' : 'Amounts shown'); };
-document.getElementById('search').onclick = () => { Object.assign(state, { tab: 'money', msec: 'tx', txPer: 'all', txCat: '', propertyId: null, accountId: null, assetId: null, loanId: null }); render();
+document.getElementById('search').onclick = () => { navRoot(); Object.assign(state, { tab: 'money', msec: 'tx', txPer: 'all', txCat: '', propertyId: null, accountId: null, assetId: null, loanId: null }); render();
   const s = document.getElementById('tx-search'); if (s) { s.focus(); s.scrollIntoView({ block: 'center' }); } };
 document.getElementById('fab').onclick = () => txForm(null, null, state.txAcct ? { account_id: +state.txAcct } : null);
-document.getElementById('settings').onclick = () => { state.tab = 'more'; render(); view().scrollTop = 0; };
+document.getElementById('settings').onclick = () => { navRoot(); state.tab = 'more'; render(); view().scrollTop = 0; };
 document.getElementById('back').onclick = () => goBack();
 function goBack() {
   const dl = document.getElementById('dlg'); if (!dl.hidden) { dl.querySelector('[data-n]').click(); return true; }
@@ -1861,7 +1877,7 @@ function goBack() {
   if (state.tab === 'accounts' && state.accountId) { state.accountId = null; render(); return true; }
   if (state.tab === 'assets' && state.assetId) { state.assetId = null; render(); return true; }
   if (state.tab === 'loans' && state.loanId) { state.loanId = null; render(); return true; }
-  if (state.tab !== 'overview') { state.tab = 'overview'; render(); return true; }
+  if (state.tab !== 'overview') { navRoot(); state.tab = 'overview'; render(); return true; }
   return false;
 }
 window.__onBack = () => goBack();
@@ -3819,11 +3835,14 @@ function navSnap() { const s = {}; for (const k of NAVKEYS) s[k] = state[k] == n
 function navBefore() {   /* called at the start of every render */
   const cur = navSnap();
   if (navLast && navKey(cur) !== navKey(navLast)) {
-    if (!navRestoring) { navLast.scroll = view().scrollTop; NAVH.push(navLast); if (NAVH.length > 60) NAVH.shift(); }
+    if (!navRestoring) {   /* 1.22: going to a page already in the history goes back to it (no endless loops); at most 20 steps */
+      const i = NAVH.findIndex(x => navKey(x) === navKey(cur));
+      if (i >= 0) NAVH.length = i; else { navLast.scroll = view().scrollTop; NAVH.push(navLast); if (NAVH.length > 20) NAVH.shift(); } }
     if (state.sel) { state.sel = null; selBar(); }
   }
 }
 function navAfter() { navLast = navSnap(); navRestoring = false; document.getElementById('back').hidden = !NAVH.length && document.getElementById('back').hidden; }
+function navRoot() { NAVH.length = 0; navLast = null; }   /* 1.22: the bottom bar, Settings and Search start fresh: Back then goes to Overview */
 function navBack() {
   while (NAVH.length) { const s = NAVH.pop(); if (navKey(s) === navKey(navSnap())) continue;
     navRestoring = true; for (const k of NAVKEYS) state[k] = s[k]; render(); view().scrollTop = s.scroll || 0; return true; }
