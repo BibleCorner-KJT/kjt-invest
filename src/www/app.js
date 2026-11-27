@@ -1,9 +1,9 @@
-/* KJT Finance 1.25 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
+/* KJT Finance 1.26 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
    All data stays in one SQLite file on the device. The only network calls are the
    price updates (metal prices from gold-api.com, exchange rates from the European Central Bank). */
 'use strict';
 
-const APP_VERSION = '1.25';
+const APP_VERSION = '1.26';
 const SCHEMA = 11;
 const OZT_G = 31.1034768;
 const METALS = [
@@ -1112,6 +1112,15 @@ function summaryHtml(t) {
   const H = home(), gross = t.cash + t.debt;
   const parts = [['accounts', 'Cash & bank accounts', gross, 'cat-c'], ['property', 'Property', t.re, 'cat-p'], ['metals', 'Precious metals', t.metals, 'cat-m'], ['loans', 'Loans you made', t.loans || 0, 'cat-l'], ['assets', 'Other assets', t.other, 'cat-o']].filter(x => Math.abs(x[2]) >= 0.5);
   const own = parts.reduce((a, x) => a + Math.max(0, x[2]), 0) || 1;
+  /* 1.26: each property, and each metal, under its line */
+  const subRows = { property: [], metals: [] };
+  const props = q('SELECT * FROM properties ORDER BY name');
+  if (props.length > 1) for (const p of props) { const st = propertyStats(p), v = conv(st.value * st.share, p.currency || H, H); if (v == null) continue;
+    const inv = conv(st.invested * st.share, p.currency || H, H), ch = inv ? v / inv - 1 : null;
+    subRows.property.push({ name: p.name, v, attr: `data-prop="${p.id}"`, note: ch != null ? `<span class="${signCls(ch)}">${pct(ch)}</span>` : '' }); }
+  const byMetal = {}; for (const h of q('SELECT * FROM metal_holdings')) { const st = holdingStats(h); if (st.valueHome == null) continue; const m = byMetal[h.metal] = byMetal[h.metal] || { v: 0, cost: 0, oz: 0 }; m.v += st.valueHome; m.cost += st.costHome || 0; m.oz += st.oz; }
+  const mk = Object.keys(byMetal); if (mk.length > 1 || (mk.length === 1 && props.length)) for (const k of mk.sort((x, y) => byMetal[y].v - byMetal[x].v)) { const m = byMetal[k], ch = m.cost ? m.v / m.cost - 1 : null;
+    subRows.metals.push({ name: (METAL[k] || { name: k }).name, v: m.v, attr: 'data-go="metals"', note: `${m.oz.toFixed(m.oz < 10 ? 3 : 1)} oz${ch != null ? ` · <span class="${signCls(ch)}">${pct(ch)}</span>` : ''}` }); }
   const n = state.cfN || 1, [a, b] = cfPeriod(n), S = spendBy(a, b);
   const mlist = []; for (let k = n - 1; k >= 0; k--) { const [ma] = cfPeriod(k + 1); const y = +ma.slice(0, 4), m = +ma.slice(5, 7), end = dstr(dnum(m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, '0')}-01`) - 1); const x = spendBy(ma, end > today() ? today() : end); mlist.push({ ym: ma.slice(0, 7), inn: x.moneyIn, out: x.moneyOut }); }
   const mx = Math.max(1, ...mlist.map(x => Math.max(x.inn, x.out))), net = S.moneyIn - S.moneyOut, gain = (t.metals - t.metalsCost) + (t.re - t.reInvested) + (t.other - t.otherCost), paid = t.metalsCost + t.reInvested + t.otherCost;
@@ -1121,7 +1130,7 @@ function summaryHtml(t) {
     ${paid ? `<div class="sub">Gain on what you bought: <span class="${signCls(gain)}">${whole(gain, H)} (${pct(gain / paid)})</span></div>` : ''}
     ${t.missing ? '<div class="sub warn-t">Some items are not counted: an exchange rate or price is missing.</div>' : ''}
     <div class="stack" style="margin-top:12px">${parts.filter(x => x[2] > 0).map(x => `<i class="${x[3]}" style="width:${(x[2] / own * 100).toFixed(2)}%"></i>`).join('')}</div>
-    <div class="alloc">${parts.map(x => `<div class="arow tap" data-go="${x[0]}"><span class="sw ${x[3]}"></span><span class="al">${x[1]}</span><span class="ap">${x[2] > 0 ? (x[2] / own * 100).toFixed(1) + '%' : ''}</span><span class="av">${whole(x[2], H)}</span><span class="go">›</span></div>`).join('')}
+    <div class="alloc">${parts.map(x => `<div class="arow tap" data-go="${x[0]}"><span class="sw ${x[3]}"></span><span class="al">${x[1]}</span><span class="ap">${x[2] > 0 ? (x[2] / own * 100).toFixed(1) + '%' : ''}</span><span class="av">${whole(x[2], H)}</span><span class="go">›</span></div>` + (subRows[x[0]] || []).map(r => `<div class="arow subrow tap" ${r.attr}><span class="sw"></span><span class="al">${esc(r.name)}${r.note ? ` <small class="sub">${r.note}</small>` : ''}</span><span class="ap">${r.v > 0 ? (r.v / own * 100).toFixed(1) + '%' : ''}</span><span class="av">${whole(r.v, H)}</span><span class="go">›</span></div>`).join('')).join('')}
       ${t.debt > 0.5 ? `<div class="arow tap" data-go="accounts"><span class="sw" style="background:var(--down)"></span><span class="al">Owed on credit cards</span><span class="ap"></span><span class="av down">−${whole(t.debt, H)}</span><span class="go">›</span></div>` : ''}
       <div class="arow tot"><span class="sw"></span><span class="al"><b>Net worth</b></span><span class="ap"></span><span class="av"><b>${whole(t.total, H)}</b></span><span class="go"></span></div></div>
     <div class="sumcf"><div class="row" style="padding:0"><b>Cash flow, last ${n === 1 ? 'month (this month so far)' : n + ' months'}</b><span class="sub">${fmtDate(a)} – ${fmtDate(b)}</span></div>
@@ -1641,6 +1650,7 @@ function renderCurrency(prefix) {
     (f.length ? f.map(c => { const v = conv(1, H, c), inv = conv(1, c, H), v0 = convOn(1, H, c, dstr(dnum(today()) - 1)), ch = v != null && v0 ? v / v0 - 1 : null;
       return `<div class="item nolink fav">${curBadge(c)}<span class="fn"><b>${c}</b> <span class="sub">${esc(curName(c))}</span></span>
       <span class="r">${v == null ? '—' : fmtNum(v, 4)}${ch != null && Math.abs(ch) > 0.00005 ? ` <small class="pc ${signCls(ch)}">${ch > 0 ? '▲' : '▼'}${Math.abs(ch * 100).toFixed(2)}%</small>` : ''}<small class="sub">1 ${c} = ${inv == null ? '—' : money(inv, H, { dec: 4 })}</small></span>
+      <span class="favmv"><button class="mv" data-favmv="${c}|-1" aria-label="Move ${c} up"${f.indexOf(c) === 0 ? ' disabled' : ''}>▲</button><button class="mv" data-favmv="${c}|1" aria-label="Move ${c} down"${f.indexOf(c) === f.length - 1 ? ' disabled' : ''}>▼</button></span>
       <button class="iconbtn star on" data-unfav="${c}" aria-label="Remove ${c} from favourites">★</button></div>`; }).join('') : '<p class="sub">No favourites yet.</p>') +
     `</div><div class="addfav"><select id="fav-add"><option value="">+ Add a favourite currency…</option>${allCurrencies().filter(c => !f.includes(c) && c !== H).map(c => `<option value="${c}">${c} · ${esc(curName(c))}</option>`).join('')}</select></div></div>`;
   h += (prefix || '');
@@ -2003,13 +2013,13 @@ function goBack() {
 window.__onBack = () => goBack();
 window.addEventListener('resize', () => { for (const [id, k] of [['heroS', 'hpage'], ['cfS', 'cfPage']]) { const el = document.getElementById(id); if (el) fitSwipe(el, state[k] || 0); } });
 view().addEventListener('click', e => {
-  const el = e.target.closest('[data-act],[data-go],[data-metal],[data-prop],[data-item],[data-pval],[data-cfy],[data-cfp],[data-rent],[data-price],[data-fx],[data-chart],[data-range],[data-acct],[data-iecat],[data-bal],[data-asset],[data-aval],[data-hpage],[data-prange],[data-unfav],[data-ie],[data-asec],[data-msec],[data-txm],[data-tx],[data-rec],[data-cat],[data-addsub],[data-addcat],[data-rp],[data-remdo],[data-remskip],[data-loan],[data-lpay],[data-txper],[data-rule],[data-cfold],[data-payee],[data-ptick],[data-punit]'); if (!el) return;
+  const el = e.target.closest('[data-act],[data-go],[data-metal],[data-prop],[data-item],[data-pval],[data-cfy],[data-cfp],[data-rent],[data-price],[data-fx],[data-chart],[data-range],[data-acct],[data-iecat],[data-bal],[data-asset],[data-aval],[data-hpage],[data-prange],[data-unfav],[data-favmv],[data-ie],[data-asec],[data-msec],[data-txm],[data-tx],[data-rec],[data-cat],[data-addsub],[data-addcat],[data-rp],[data-remdo],[data-remskip],[data-loan],[data-lpay],[data-txper],[data-rule],[data-cfold],[data-payee],[data-ptick],[data-punit]'); if (!el) return;
   const d = el.dataset;
   if (d.chart) { state.chart = d.chart; const st = view().scrollTop; render(); view().scrollTop = st; }
   else if (d.range) { state.range = d.range; const st = view().scrollTop; render(); view().scrollTop = st; }
   else if (d.go) { e.preventDefault(); state.tab = d.go; state.propertyId = null; state.accountId = null; state.assetId = null; state.loanId = d.loanid ? +d.loanid : null; render(); view().scrollTop = 0; }
   else if (d.metal) metalForm(+d.metal);
-  else if (d.prop) { state.propertyId = +d.prop; render(); view().scrollTop = 0; }
+  else if (d.prop) { state.tab = 'property'; state.propertyId = +d.prop; render(); view().scrollTop = 0; }
   else if (d.item) itemForm(state.propertyId, +d.item);
   else if (d.pval) propertyValueForm(state.propertyId, +d.pval);
   else if (d.cfy) { state.cfYear = +d.cfy; if (el.classList.contains('yrow')) state.cfPage = 0; const st = view().scrollTop; render(); view().scrollTop = st; }
@@ -2036,6 +2046,7 @@ view().addEventListener('click', e => {
   else if (d.remskip) { const r = q('SELECT * FROM recurring WHERE id=?', [+d.remskip])[0]; if (r) { advance(r); save(); toast('Skipped this time'); render(); } }
   else if (d.ie) { state.ieRange = d.ie; const st = view().scrollTop; render(); view().scrollTop = st; }
   else if (d.unfav) { setFavs(favs().filter(c => c !== d.unfav)); render(); }
+  else if (d.favmv) { const [c, dir] = d.favmv.split('|'), f = favs(), i = f.indexOf(c), j = i + +dir; if (i >= 0 && j >= 0 && j < f.length) { [f[i], f[j]] = [f[j], f[i]]; setFavs(f); const st = view().scrollTop; render(); view().scrollTop = st; } }
   else if (d.hpage) { const sc = document.getElementById('heroS'); if (sc) sc.scrollTo({ left: +d.hpage * sc.clientWidth, behavior: 'smooth' }); }
   else if (d.prange) { state.prange = d.prange; const st = view().scrollTop; render(); view().scrollTop = st; }
   else if (d.asset) { state.assetId = +d.asset; render(); view().scrollTop = 0; }

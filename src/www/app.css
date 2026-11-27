@@ -668,3 +668,12 @@ input.selsearch, .sheet-box input.selsearch, label.f input.selsearch { width: 10
 .sumcf .row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .sw.cat-c { background: var(--cat-c); } .sw.cat-p { background: var(--cat-p); } .sw.cat-m { background: var(--cat-m); } .sw.cat-l { background: var(--cat-l); } .sw.cat-o { background: var(--cat-o); }
 .stack i.cat-c { background: var(--cat-c); } .stack i.cat-p { background: var(--cat-p); } .stack i.cat-m { background: var(--cat-m); } .stack i.cat-l { background: var(--cat-l); } .stack i.cat-o { background: var(--cat-o); }
+
+/* 1.26 */
+.sumc .arow.subrow { padding-left: 18px; font-size: .9rem; }
+.sumc .arow.subrow .al { color: var(--muted); }
+.sumc .arow.subrow .av { font-weight: 600; }
+.favmv { display: inline-flex; flex-direction: column; gap: 2px; }
+.favmv .mv { border: 1px solid var(--line); background: var(--soft); color: var(--ink); border-radius: 6px; width: 30px; height: 20px; font-size: .62rem; line-height: 1; cursor: pointer; padding: 0; }
+.favmv .mv:disabled { opacity: .3; cursor: default; }
+.item.fav { grid-template-columns: auto 1fr auto auto auto; }
