@@ -1,14 +1,14 @@
 {
  "android": {
-  "version": "1.29",
+  "version": "1.30",
   "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-android.apk",
-  "sha256": "125175f12eebef2e73e505158bc20c57e5ef89df4461cb1c3e552349eebdb70a",
-  "notes": "Nothing goes past the edge of the screen any more, even with large text."
+  "sha256": "4febec4705f706cfb0d716f7f01245cde4588e0dd3df7217abe39c8acbe97be2",
+  "notes": "A summary at the top of every Assets page: accounts, property, metals, loans and other assets."
  },
  "linux": {
-  "version": "1.29",
+  "version": "1.30",
   "page": "https://github.com/BibleCorner-KJT/kjt-invest/tree/releases",
-  "notes": "Nothing goes past the edge of the screen any more, even with large text.",
+  "notes": "A summary at the top of every Assets page: accounts, property, metals, loans and other assets.",
   "x86_64": {
    "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.flatpak",
    "sha256": "ec47c31a31cb00ff7aacbb1461c90bbd41489b5b68be64bb3583e2deae1d9c4a"
@@ -19,7 +19,7 @@
   },
   "zip": {
    "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.zip",
-   "sha256": "99274953f29225040f3f0c3cbb9744bd0985bca54999de12dd1d99980fa9d13c"
+   "sha256": "d3eecf3ac024ab901850b68f50c51b71f8b238cb0dd7defb56faaac76aa9aba9"
   }
  }
 }
