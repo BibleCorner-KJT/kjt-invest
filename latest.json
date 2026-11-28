@@ -1,25 +1,25 @@
 {
  "android": {
-  "version": "1.32",
+  "version": "1.33",
   "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-android.apk",
-  "sha256": "90d44c96a84bfb40b8b7f7c3f24ff688ad1ad7866630e7ccbcc28dcc00dffa98",
-  "notes": "Sayings of the Church Fathers on the Stewards page."
+  "sha256": "4fe7d61d42888f5645980057ac969aee31d47762a02aa4fc1685b62e778e21c3",
+  "notes": "Folded sections show their total on every page."
  },
  "linux": {
-  "version": "1.32",
+  "version": "1.33",
   "page": "https://github.com/BibleCorner-KJT/kjt-invest/tree/releases",
-  "notes": "Sayings of the Church Fathers on the Stewards page.",
+  "notes": "Folded sections show their total on every page.",
   "x86_64": {
    "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.flatpak",
-   "sha256": "d42b8cfe421510eaf305ed9f374bac89b7d4311049c5ffccdb58cc4e895d089c"
+   "sha256": "2ca29af94a755817e3aa8a878ad1dc47df8c131728c87c1c580ae78ba9473bf4"
   },
   "aarch64": {
    "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux-arm.flatpak",
-   "sha256": "55f940647ab1d5841ce1dce7ac42c9f7dd3777b35a86845247bc3d92515556f2"
+   "sha256": "8ec5b5ff75e42ca353151411f785896b1abb2d324c2fde731ec578a98d4e7289"
   },
   "zip": {
    "url": "https://raw.githubusercontent.com/BibleCorner-KJT/kjt-invest/releases/kjt-invest-linux.zip",
-   "sha256": "50eafdd33c89b2b51980115318e1e40a8499da2ad28a6a172a82698ccc5c3ad4"
+   "sha256": "b39af6d93cb99f45198ff8403f21af786e1ae4bde24756c2c021eb3d88d60d4e"
   }
  }
 }
