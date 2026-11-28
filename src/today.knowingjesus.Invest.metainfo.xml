@@ -25,6 +25,7 @@
   <branding><color type="primary" scheme_preference="light">#f3e2b8</color><color type="primary" scheme_preference="dark">#3e093f</color></branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.33" date="2026-11-28"><description><p>A folded section now shows its total on every page: Accounts, Property, Metals, Loans, Other assets, Transactions, Recurring and Reports.</p></description></release>
     <release version="1.32" date="2026-11-27"><description><p>Sayings of the Church Fathers on the Stewards page: St. Clement of Alexandria, St. Basil the Great and St. John Chrysostom on the right use of wealth.</p></description></release>
     <release version="1.31" date="2026-11-27"><description><p>A new Stewards page, with its own button (an Orthodox cross) on the bottom bar: Bible verses (King James Version) on diligence, fair pay, stewardship, the love of money, the words of Christ and the stages of life. A verse of the day on Overview and a quiet verse on some pages; Settings can turn them off.</p></description></release>
     <release version="1.30" date="2026-11-27"><description><p>A summary at the top of every Assets page: Accounts (money in and out, credit left, bank checks), Property (rent, costs, net, yield, each property), Metals (each metal, average cost against today, move since yesterday), Loans (repaid, overdue, due soon) and Other assets (by kind). The MMEX repair is removed: the import itself is fixed.</p></description></release>

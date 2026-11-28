@@ -1,9 +1,9 @@
-/* KJT Finance 1.32 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
+/* KJT Finance 1.33 (Knowing Jesus Today) - one screen code for the Android and Linux apps.
    All data stays in one SQLite file on the device. The only network calls are the
    price updates (metal prices from gold-api.com, exchange rates from the European Central Bank). */
 'use strict';
 
-const APP_VERSION = '1.32';
+const APP_VERSION = '1.33';
 const SCHEMA = 11;
 const OZT_G = 31.1034768;
 const METALS = [
@@ -856,7 +856,7 @@ function renderAssets() {
     stats: [['Paid', whole(paid, H)], ['Up or down', sgnW(total - paid, H), signCls(total - paid)], ['Change', paid ? pct(total / paid - 1) : '—', signCls(total - paid)]],
     rows: Object.entries(byT).sort((a, b) => b[1].v - a[1].v).map(([t, x]) => [`${(ASSET_TYPES[t] || ASSET_TYPES.other)[0]} <small class="sub">${x.n}</small>`, whole(x.v, H), '', x.c ? `paid ${whole(x.c, H)} · <span class="${signCls(x.v - x.c)}">${pct(x.v / x.c - 1)}</span>` : '']),
     foot: ['Values you have not updated count at what you paid. Open an asset to add today\'s value.'] }) : '';
-  h += `<h2 class="sect">Your assets</h2>`;
+  h += `<h2 class="sect"${as.length ? ` data-ftot="${esc(whole(total, H))}"` : ''}>Your assets</h2>`;
   h += as.length ? `<div class="card"><div class="txns" style="margin-top:0">${body}</div></div>` : `<div class="card empty">No other assets yet: cars, boats, trailers, jewellery, art, collections, equipment…</div>`;
   h += `<button class="btn wide" data-act="add-asset">+ Add asset</button><button class="btn wide light" data-act="match-buys">Find these purchases in your accounts</button>`;
   view().innerHTML = h;
@@ -1152,7 +1152,7 @@ function summaryHtml(t) {
 /* ---------------- 1.30: a summary at the top of every Assets page ----------------
    o = { label, big, sub[], stats:[[k, v, cls]], rows:[[name, value, cls, note, attr]], rowsTitle, foot[] } */
 function secSummary(o) {
-  return `<h2 class="sect">Summary</h2><div class="card hero sumc">
+  return `<h2 class="sect" data-ftot="${esc(o.ftot || o.big || '')}">Summary</h2><div class="card hero sumc">
     <div class="label">${o.label}</div><div class="big">${o.big}</div>${(o.sub || []).filter(Boolean).map(x => `<div class="sub">${x}</div>`).join('')}
     ${o.stats && o.stats.length ? `<div class="ie3" style="margin-top:10px">${o.stats.map(([k, v, c]) => `<div class="stat"><div class="k">${k}</div><div class="v ${c || ''}">${v}</div></div>`).join('')}</div>` : ''}
     ${o.rows && o.rows.length ? `${o.rowsTitle ? `<div class="sumh">${o.rowsTitle}</div>` : ''}<div class="alloc">${o.rows.map(([n, v, c, note, attr]) => `<div class="arow ie${attr ? ' tap' : ''}"${attr ? ' ' + attr : ''}><span class="al">${n}${note ? `<span class="sub"><br>${note}</span>` : ''}</span><span class="av ${c || ''}">${v}</span><span class="ap"></span></div>`).join('')}</div>` : ''}
@@ -1251,7 +1251,7 @@ function renderMetals() {
   let h = missingWarn() + (hs.length ? secSummary({ label: `Precious metals (${H})`, big: whole(tv, H), sub: [`${hs.length} holding${hs.length === 1 ? '' : 's'}`, day ? `<span class="${signCls(day)}">${sgnW(day, H)}</span> since yesterday's prices` : ''],
       stats: [['Paid (fees included)', whole(tc, H)], ['Up or down', sgnW(tv - tc, H), signCls(tv - tc)], ['Change', tc ? pct(tv / tc - 1) : '—', signCls(tv - tc)]], rows: mrows,
       foot: ['<a href="#" data-go="markets">Prices, sources and the price chart are under Prices ›</a>'] }) : `<h2 class="sect">Summary</h2><div class="card empty">No metals yet.</div>`)
-    + `<h2 class="sect">Your holdings</h2>`;
+    + `<h2 class="sect"${hs.length ? ` data-ftot="${esc(whole(tv, H))}"` : ''}>Your holdings</h2>`;
   if (!hs.length) h += `<div class="card empty">No metals yet.</div>`;
   for (const m of METALS) {
     const mine = hs.filter(x => x.metal === m.sym); if (!mine.length) continue;
@@ -1273,7 +1273,7 @@ function renderMetals() {
 function renderProperties() {
   setTitle('Real estate');
   const ps = q('SELECT * FROM properties ORDER BY name');
-  let h = missingWarn();
+  let h = missingWarn(), propTot = '';
   if (ps.length) {   /* 1.25: totals, in your home currency, your share */
     const H = home(); let val = 0, inv = 0, perM = 0, inc = 0, miss = false;
     for (const p of ps) { const s = propertyStats(p), k = s.share, c = p.currency || H, cv = v => conv(v * k, c, H);
@@ -1284,7 +1284,7 @@ function renderProperties() {
       const now = st.periods.find(r => r.start_date <= today() && (!r.end_date || r.end_date >= today())); if (now) rented++;
       rentM += conv((f.rent + f.income) * k, c, H) || 0; costM += conv(f.costs * k, c, H) || 0;
       const v = conv(st.value * k, c, H), i0 = conv(st.invested * k, c, H); if (v != null) perRows.push([esc(p.name), whole(v, H), '', `${i0 ? `<span class="${signCls(v - i0)}">${pct(v / i0 - 1)}</span> · ` : ''}${now ? 'rented ' + money(now.monthly_rent * k, c, { dec: 0 }) + ' a month' : 'not rented'}`, `data-prop="${p.id}"`]); }
-    const netM = rentM - costM;
+    const netM = rentM - costM; propTot = whole(val, H);
     h += secSummary({ label: `Real estate (${H}${ps.some(p => shareOf(p) < 1) ? ', your share' : ''})`, big: whole(val, H),
       sub: [`${ps.length} propert${ps.length === 1 ? 'y' : 'ies'} · ${rented} rented, ${ps.length - rented} not rented`],
       stats: [['Initial investment', whole(inv, H)], ['Up or down', sgnW(val - inv, H), signCls(val - inv)], ['Change', pct(ch), signCls(ch)]],
@@ -1292,7 +1292,7 @@ function renderProperties() {
       foot: [`Net rent and costs since you bought: ${sgnW(inc, H)}`, miss ? '<span class="warn-t">One property is not counted: an exchange rate is missing.</span>' : ''] });
 
   }
-  h += `<h2 class="sect">Your properties</h2>`;
+  h += `<h2 class="sect"${propTot ? ` data-ftot="${esc(propTot)}"` : ''}>Your properties</h2>`;
   if (!ps.length) h += `<div class="card empty">No properties yet.</div>`;
   for (const p of ps) {
     const s = propertyStats(p), c = p.currency || home(), k = s.share;
@@ -1324,7 +1324,7 @@ function renderProperty(id) {
     ${s.annual != null ? `<div class="row"><span class="k">Per year, on average</span><span class="v ${signCls(s.annual)}">${pct(s.annual)}</span></div>` : ''}
     ${p.purchase_date ? `<div class="sub" style="margin-top:6px">Bought ${fmtDate(p.purchase_date)}${c !== home() ? ' · amounts in ' + c : ''}</div>` : ''}
     <div class="btns"><button class="btn light" data-act="edit-property" data-id="${p.id}">Edit</button><button class="btn light" data-act="dup-property" data-id="${p.id}">Duplicate</button></div></div>`;
-  h = `<h2 class="sect">Summary</h2>` + h + `<h2 class="sect">Cashflow <span class="sub">swipe for Monthly · Yearly · Costs</span></h2>` + cashflowCard(p, s, c, k).replace('<h2>Cashflow</h2>', '') + `<h2 class="sect">Money in and out</h2>`;
+  h = `<h2 class="sect" data-ftot="${esc(sh(s.value))}">Summary</h2>` + h + `<h2 class="sect">Cashflow <span class="sub">swipe for Monthly · Yearly · Costs</span></h2>` + cashflowCard(p, s, c, k).replace('<h2>Cashflow</h2>', '') + `<h2 class="sect">Money in and out</h2>`;
   /* rent periods */
   h += `<div class="card"><h2>Rent</h2>`;
   if (!s.periods.length) h += `<p class="sub">Add each rental: from when, to when (leave the end empty while it is still rented) and the rent per month. Months without rent show as empty.</p>`;
@@ -1488,10 +1488,11 @@ function renderAccounts() {
              exp.length ? `<span class="warn-t">${exp.map(([a, e]) => esc(a.name) + (e.gone ? ' expired' : ' expires ' + e.label)).join(' · ')}</span>` : '']
     });
   }
-  h += `<h2 class="sect">Your accounts</h2>`;
+  let offSum = 0; for (const a of groups._off || []) { const b = acctBalance(a.id), hv = b ? conv(b.balance * shareOf(a), a.currency || H, H) : null; if (hv != null) offSum += hv; }
+  h += `<h2 class="sect"${as.length ? ` data-ftot="${esc(whole(total - offSum, H))}"` : ''}>Your accounts</h2>`;
   if (seenOff) { const off = body; body = offBody; offBody = off; }   /* body = the open ones; offBody = hidden and closed */
   h += as.length ? (body || '<div class="card empty">Every account is hidden or closed.</div>') : `<div class="card empty">No accounts yet. Add your chequing and savings accounts, credit cards, and cash on hand.</div>`;
-  if (offBody) h += `<h2 class="sect" data-fdef="1">Hidden and closed <span class="sub">${(groups._off || []).length} · still counted if they hold money</span></h2>` + offBody;
+  if (offBody) h += `<h2 class="sect" data-fdef="1" data-ftot="${esc(whole(offSum, H))}">Hidden and closed <span class="sub">${(groups._off || []).length} · still counted if they hold money</span></h2>` + offBody;
   h += `<button class="btn wide" data-act="add-account">+ Add account</button>`;
   if (as.length) h += `<button class="btn wide light" data-act="recon" data-id="">Reconcile with the bank</button>`;
   view().innerHTML = h;
@@ -2652,7 +2653,7 @@ function txListHtml() {
   for (const t of txs) { if (t.kind === 'transfer') continue; if (t.kind === 'in') inn += hv(t); else out += hv(t); }
   const unsorted = q(`SELECT COUNT(*) n FROM transactions WHERE category_id IS NULL AND kind<>'transfer' AND date>=? AND date<=?${state.txAcct ? ' AND account_id=' + (+state.txAcct) : ''}`, [from, to])[0].n;
   const tops = C.rows.filter(c => !c.parent_id);
-  let h = `<h2 class="sect">Transactions</h2><div class="card">
+  let h = `<h2 class="sect" data-ftot="${esc(sgnW(inn - out, home()))}">Transactions</h2><div class="card">
     <div class="segs">${[['m', 'Month'], ['y', 'Year'], ['all', 'All']].map(([k, l]) => `<button class="seg${per === k ? ' on' : ''}" data-txper="${k}">${l}</button>`).join('')}</div>
     <div class="ysel">${prev ? `<button data-txm="${prev}" aria-label="Before">‹</button>` : '<span></span>'}<b>${label}</b>${next ? `<button data-txm="${next}" aria-label="After">›</button>` : '<span></span>'}</div>
     <div class="f2"><label class="f"><span>Account</span><select id="tx-acct"><option value="">All accounts</option>${accts.map(a => `<option value="${a.id}"${String(a.id) === String(state.txAcct || '') ? ' selected' : ''}>${esc(a.name)}</option>`).join('')}</select></label>
@@ -2778,7 +2779,7 @@ function recurringHtml() {
   let monthlyOut = 0, monthlyIn = 0;
   const perMonth = r => r.amount * (({ weekly: 52 / 12, biweekly: 26 / 12 }[r.freq] || 1 / (FREQ_MONTHS[r.freq] || 1)));
   for (const r of rs) if (r.active && r.kind !== 'transfer') { const v = conv(perMonth(r), (A[r.account_id] || {}).currency || H, H) || 0; if (r.kind === 'in') monthlyIn += v; else monthlyOut += v; }
-  let h = `<h2 class="sect">Recurring <span class="sub">bills, salary, subscriptions…</span></h2>`;
+  let h = `<h2 class="sect"${rs.length ? ` data-ftot="${esc(sgnW(monthlyIn - monthlyOut, H))} a month"` : ''}>Recurring <span class="sub">bills, salary, subscriptions…</span></h2>`;
   if (rs.length) h += `<div class="card"><div class="ie3"><div class="stat"><div class="k">In a month</div><div class="v up">${whole(monthlyIn, H)}</div></div><div class="stat"><div class="k">Out a month</div><div class="v down">${whole(monthlyOut, H)}</div></div><div class="stat"><div class="k">Net</div><div class="v ${signCls(monthlyIn - monthlyOut)}">${whole(monthlyIn - monthlyOut, H)}</div></div></div></div>`;
   h += `<div class="card">` + (rs.length ? `<div class="txns" style="margin-top:0">` + rs.map(r => { const a = A[r.account_id] || {};
     return `<div class="txn ${r.kind === 'in' ? 'inc' : 'cost'}${r.active ? '' : ' off'}" data-rec="${r.id}"><div class="txn-top"><span class="txn-date">${r.active ? 'next ' + fmtDate(r.next_date) : 'ended'}</span><span class="txn-desc">${esc(r.kind === 'transfer' ? 'Transfer' : (r.payee || cats().label(r.category_id)))}</span></div>
@@ -2934,18 +2935,18 @@ function reportsHtml() {
   for (const l of q('SELECT * FROM loans WHERE closed=0 AND due_date<?', [today()])) { const s = loanStats(l); if (s.owed > 0.005) notes.push(`<span class="down">${esc(l.person)} is late repaying ${money(s.owed, l.currency || H)} (due ${fmtDate(l.due_date)}).</span>`); }
   for (const c of q("SELECT * FROM accounts WHERE type='credit' AND credit_limit>0")) { const bl = acctBalance(c.id); if (bl && -bl.balance / c.credit_limit > 0.7) notes.push(`<span class="down">${esc(c.name)} is at ${Math.round(-bl.balance / c.credit_limit * 100)}% of its limit.</span>`); }
   const max = sorted.length ? sorted[0][1] : 1;
-  let h = `<h2 class="sect">Reports</h2><div class="card"><div class="segs">${segs}</div>
+  let h = `<h2 class="sect" data-ftot="${esc(sgnW(cur.totalIn - cur.total, H))} left">Reports</h2><div class="card"><div class="segs">${segs}</div>
     <div class="ie3"><div class="stat"><div class="k">Income</div><div class="v up">${whole(cur.totalIn, H)}</div></div><div class="stat"><div class="k">Spending</div><div class="v down">${whole(cur.total, H)}</div></div><div class="stat"><div class="k">Left over</div><div class="v ${signCls(cur.totalIn - cur.total)}">${whole(cur.totalIn - cur.total, H)}</div></div></div>
     <div class="flowbox"><div class="flowh">Money in and out <small class="sub">every deposit and payment, except moves between your own accounts</small></div>
       <div class="ie3"><div class="stat"><div class="k">Money in</div><div class="v up">${whole(cur.moneyIn, H)}</div></div><div class="stat"><div class="k">Money out</div><div class="v down">${whole(cur.moneyOut, H)}</div></div><div class="stat"><div class="k">Net</div><div class="v ${signCls(cur.moneyIn - cur.moneyOut)}">${whole(cur.moneyIn - cur.moneyOut, H)}</div></div></div>
       ${Object.keys(cur.flowIn).length || Object.keys(cur.flowOut).length ? `<div class="alloc">${Object.entries(cur.flowIn).sort((x, y) => y[1] - x[1]).map(([k, v]) => `<div class="arow ie"><span class="al">In: ${esc(k)}</span><span class="av up">${whole(v, H)}</span><span class="ap"></span></div>`).join('')}${Object.entries(cur.flowOut).sort((x, y) => y[1] - x[1]).map(([k, v]) => `<div class="arow ie"><span class="al">Out: ${esc(k)}</span><span class="av down">${whole(v, H)}</span><span class="ap"></span></div>`).join('')}</div><p class="sub" style="margin:6px 0 0">These lines are money in and out, but not income or spending: savings, loans repaid or lent, and moves to accounts not in the app.</p>` : ''}</div>
     ${notes.length ? `<ul class="notes">${notes.map(n => `<li>${n}</li>`).join('')}</ul>` : '<p class="sub">Add transactions to see your reports.</p>'}</div>`;
   h += breakdownHtml(a, b);
-  if (sorted.length) h += `<h2 class="sect">Where the money goes</h2><div class="card"><div class="catbars">${sorted.map(([k, v]) => { const pv = prev.out[k] || 0, ch = pv ? v / pv - 1 : null;
+  if (sorted.length) h += `<h2 class="sect" data-ftot="${esc(whole(cur.total, H))}">Where the money goes</h2><div class="card"><div class="catbars">${sorted.map(([k, v]) => { const pv = prev.out[k] || 0, ch = pv ? v / pv - 1 : null;
     return `<div class="cb"><div class="cbt"><span>${esc(k)}</span><span><b>${whole(v, H)}</b> <small class="sub">${Math.round(v / (cur.total || 1) * 100)}%${ch != null ? ` · <span class="${ch > 0 ? 'down' : 'up'}">${ch > 0 ? '+' : ''}${Math.round(ch * 100)}%</span>` : ''}</small></span></div><div class="cbb"><i style="width:${(v / max * 100).toFixed(1)}%"></i></div></div>`; }).join('')}</div>
     <p class="sub" style="margin:8px 0 0">The % after each one compares with the period before.</p></div>`;
   const inc = Object.entries(cur.inc).sort((x, y) => y[1] - x[1]);
-  if (inc.length) h += `<h2 class="sect">Where the money comes from</h2><div class="card"><div class="alloc">${inc.map(([k, v]) => `<div class="arow ie"><span class="al">${esc(k)}</span><span class="av">${whole(v, H)}</span><span class="ap">${Math.round(v / (cur.totalIn || 1) * 100)}%</span></div>`).join('')}</div></div>`;
+  if (inc.length) h += `<h2 class="sect" data-ftot="${esc(whole(inc.reduce((t, x) => t + x[1], 0), H))}">Where the money comes from</h2><div class="card"><div class="alloc">${inc.map(([k, v]) => `<div class="arow ie"><span class="al">${esc(k)}</span><span class="av">${whole(v, H)}</span><span class="ap">${Math.round(v / (cur.totalIn || 1) * 100)}%</span></div>`).join('')}</div></div>`;
   const pay = Object.entries(cur.payees).sort((x, y) => y[1] - x[1]).slice(0, 6);
   if (pay.length) h += `<h2 class="sect">Paid to most</h2><div class="card"><div class="alloc">${pay.map(([k, v]) => `<div class="arow ie"><span class="al">${esc(k)}</span><span class="av">${whole(v, H)}</span><span class="ap"></span></div>`).join('')}</div></div>`;
   h += `<button class="btn wide light" data-act="print-report">Print the full report or save it as a PDF</button>`;
@@ -3120,7 +3121,7 @@ function renderLoans() {
       rows: [overN ? [`<span class="warn-t">Overdue</span>`, whole(over, H), 'down', `${overN} loan${overN > 1 ? 's' : ''}`] : null, soonN ? ['Due in the next 30 days', whole(soon, H), '', `${soonN} loan${soonN > 1 ? 's' : ''}`] : null, lost ? ['Written off', '−' + whole(lost, H), 'down', 'lent and not coming back'] : null].filter(Boolean),
       foot: [lent ? `${Math.round(repaid / lent * 100)}% of all you lent has come back` : ''] }) : '';
   }
-  h += `<h2 class="sect">Your loans <span class="sub">money you lent</span></h2>` + (ls.length ? `<div class="card"><div class="txns" style="margin-top:0">${rows.join('')}</div></div>` : `<div class="card empty">No loans yet. Add money you lent to someone: the app keeps track of what is repaid and what is still owed.</div>`);
+  h += `<h2 class="sect"${ls.length ? ` data-ftot="${esc(whole(open, H))} owed"` : ''}>Your loans <span class="sub">money you lent</span></h2>` + (ls.length ? `<div class="card"><div class="txns" style="margin-top:0">${rows.join('')}</div></div>` : `<div class="card empty">No loans yet. Add money you lent to someone: the app keeps track of what is repaid and what is still owed.</div>`);
   h += `<button class="btn wide" data-act="add-loan">+ Add a loan</button>`;
   view().innerHTML = h;
 }
@@ -3136,7 +3137,7 @@ function renderLoan(id) {
     ${l.rate ? `<p class="sub" style="margin:8px 0 0">${l.rate}% a year: about ${money(s.owed * l.rate / 100 / 12, c)} interest a month on what is owed now.</p>` : ''}
     ${l.notes ? `<div class="note" style="margin-top:10px;text-align:left">${esc(l.notes)}</div>` : ''}
     <div class="btns">${l.closed ? '' : `<button class="btn" data-act="add-loanpay" data-id="${l.id}">+ Repayment</button>`}<button class="btn light" data-act="edit-loan" data-id="${l.id}">Edit</button></div></div>`;
-  h += `<h2 class="sect">Repayments</h2><div class="card">` + (s.pays.length ? `<div class="txns" style="margin-top:0">` + s.pays.map(p => `<div class="txn inc" data-lpay="${p.id}"><div class="txn-top"><span class="txn-date">${fmtDate(p.date)}</span><span class="txn-desc">${esc(p.note || 'Repayment')}</span></div>
+  h += `<h2 class="sect"${s.pays.length ? ` data-ftot="${esc(money(s.repaid, c))}"` : ''}>Repayments</h2><div class="card">` + (s.pays.length ? `<div class="txns" style="margin-top:0">` + s.pays.map(p => `<div class="txn inc" data-lpay="${p.id}"><div class="txn-top"><span class="txn-date">${fmtDate(p.date)}</span><span class="txn-desc">${esc(p.note || 'Repayment')}</span></div>
       <div class="txn-body"><div class="sub">${p.interest ? 'interest ' + money(p.interest, c) : ''}${p.account_id ? (p.interest ? ' · ' : '') + 'into ' + esc((q('SELECT name FROM accounts WHERE id=?', [p.account_id])[0] || {}).name || '') : ''}</div><div class="r"><div class="strongv">${money((p.principal || 0) + (p.interest || 0), c)}</div></div></div></div>`).join('') + `</div>` : '<p class="sub">No repayments yet.</p>') + `</div>`;
   view().innerHTML = h;
 }
@@ -3619,7 +3620,7 @@ function breakdownHtml(a, b) {
   state.bdBy = state.bdBy || 'cat'; state.bdView = state.bdView || 'table'; state.bdMeasure = state.bdMeasure || 'pay';
   const D = breakdownData(a, b), c = D.cur, accts = q('SELECT id, name FROM accounts ORDER BY name');
   const sel = (key, opts, val) => `<select data-bd="${key}">${opts.map(([k, l]) => `<option value="${k}"${String(val) === String(k) ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
-  let h = `<h2 class="sect">Breakdown <span class="sub">deposits and payments</span></h2><div class="card">
+  let h = `<h2 class="sect" data-ftot="${esc((D.dep - D.pay >= 0 ? '+' : '−') + money(Math.abs(D.dep - D.pay), c))}">Breakdown <span class="sub">deposits and payments</span></h2><div class="card">
     <div class="f2"><label class="f"><span>Group by</span>${sel('bdBy', BD_BY, state.bdBy)}</label><label class="f"><span>Account</span>${sel('bdAcct', [['', 'All accounts']].concat(accts.map(x => [x.id, x.name])), state.bdAcct || '')}</label></div>
     <div class="f2"><label class="f"><span>Include</span>${sel('bdWhat', [['all', 'Everything'], ['ie', 'Income and spending only']], state.bdWhat || 'all')}</label>
       <div class="f"><span>Show as</span><div class="segs" style="margin-top:4px">${BD_VIEW.map(([k, l]) => `<button class="seg${state.bdView === k ? ' on' : ''}" data-act="bd-view" data-v="${k}">${l}</button>`).join('')}</div></div></div>`;
